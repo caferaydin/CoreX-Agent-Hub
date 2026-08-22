@@ -197,7 +197,15 @@ assembly referansları üzerinden zorlanır.
 ## Çalıştırma ilkelleri (Faz 2)
 
 `ProcessRunner` üretim kodunda **işletim sistemi alt süreci oluşturan tek yerdir**
-(ADR-0006). Kabuk kullanmaz: çalıştırılabilir dosya + argüman vektörü. Her alt süreç bir
+(ADR-0006). Kabuk kullanmaz: çalıştırılabilir dosya + argüman vektörü.
+
+Kabuk yasağı iki katmanda zorlanır. **Kaynak katmanı:** üretim kodunda hiçbir kabuk
+başlatma yapısı bulunmaz (mimari testler). **Çalışma zamanı katmanı:** çağıran
+çalıştırılabiliri seçtiği için `ShellExecutablePolicy`, `cmd`/`powershell`/`pwsh`/`bash`/`sh`
+yorumlayıcılarını ve `.cmd`/`.bat`/`.ps1`/`.psm1`/`.sh`/`.vbs`/`.js` script girdilerini
+**süreç oluşturulmadan önce** reddeder. Karşılaştırma Windows semantiğine uygun olarak
+büyük/küçük harf duyarsızdır ve dosya sistemine dokunmaz, dolayısıyla kurulu olmayan bir
+yorumlayıcı da doğru sınıflandırılır. Her alt süreç bir
 Windows Job Object'e (`JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`) atanır, böylece çalıştırma
 sonlandığında **tüm süreç ağacı** ölür. stdout ve stderr baştan itibaren eşzamanlı
 tahliye edilir; yakalama tavanı belleği sınırlar ama boru hattı tüketimi asla durmaz.

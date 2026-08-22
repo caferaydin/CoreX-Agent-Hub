@@ -13,6 +13,7 @@ public sealed class ForbiddenConstructTests
 {
     private const string ProcessRunnerFileName = "ProcessRunner.cs";
     private const string FileSystemGuardFileName = "FileSystemGuard.cs";
+    private const string ShellPolicyFileName = "ShellExecutablePolicy.cs";
 
     /// <summary>
     /// Modules on the managed execution filesystem trust boundary. Later execution
@@ -48,13 +49,51 @@ public sealed class ForbiddenConstructTests
     [Fact]
     public void No_shell_is_ever_used()
     {
-        // E.1 #3: every execution is an executable plus an argument vector.
+        // E.1 #3, source half: every execution is an executable plus an argument vector.
+        // The single exempt file is the policy that DEFINES the forbidden interpreters, so
+        // naming a shell is allowed exactly where a shell is forbidden. The runtime half
+        // lives in ProcessRunner and is asserted separately below.
         AssertNoMatch(
             new Regex(
                 @"UseShellExecute\s*=\s*true|""cmd.exe""|""/bin/sh""|""bash""|""powershell""|""pwsh""",
                 RegexOptions.CultureInvariant),
-            allowedFileName: null,
+            allowedFileName: ShellPolicyFileName,
             because: "E.1 #3: no shell, ever.");
+    }
+
+    [Fact]
+    public void The_shell_policy_exemption_is_not_vacuous()
+    {
+        var policy = RepoLayout.ProductionSourceFiles
+            .SingleOrDefault(f => string.Equals(Path.GetFileName(f), ShellPolicyFileName, StringComparison.Ordinal));
+
+        Assert.NotNull(policy);
+
+        var text = File.ReadAllText(policy);
+        Assert.Contains("ForbiddenExecutableBaseNames", text, StringComparison.Ordinal);
+        Assert.Contains("ForbiddenExtensions", text, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void The_runtime_no_shell_guard_is_wired_into_the_process_runner()
+    {
+        // E.1 #3, runtime half. A clean source tree is not enough: the caller supplies the
+        // executable, so the request boundary must classify and refuse a shell before any
+        // process is created. This asserts the single launch point actually consults the
+        // policy rather than merely being free of shell literals itself.
+        var runner = RepoLayout.ProductionSourceFiles
+            .SingleOrDefault(f => string.Equals(Path.GetFileName(f), ProcessRunnerFileName, StringComparison.Ordinal));
+
+        Assert.NotNull(runner);
+
+        var text = File.ReadAllText(runner);
+        Assert.Contains("ShellExecutablePolicy.IsShellOrScript", text, StringComparison.Ordinal);
+
+        var guardIndex = text.IndexOf("ShellExecutablePolicy.IsShellOrScript", StringComparison.Ordinal);
+        var launchIndex = text.IndexOf("process.Start()", StringComparison.Ordinal);
+
+        Assert.True(launchIndex > 0, "the launch point should still be in ProcessRunner");
+        Assert.True(guardIndex < launchIndex, "the shell classification must precede process creation");
     }
 
     [Fact]

@@ -17,7 +17,9 @@ namespace CoreX.Hub.Execution.Processes;
 /// or git.
 ///
 /// Guarantees:
-///   * no shell: an executable plus an argument vector, never a command line;
+///   * no shell: an executable plus an argument vector, never a command line, and the
+///     request boundary refuses a shell interpreter or script shim outright
+///     (see <see cref="ShellExecutablePolicy"/>);
 ///   * the child starts from an empty environment (ADR-0007);
 ///   * every descendant belongs to a Windows Job Object, so ending the run ends the tree;
 ///   * stdout and stderr are drained concurrently from the moment the process starts;
@@ -56,10 +58,6 @@ public sealed class ProcessRunner
             ["CI"] = "1",
             ["GIT_ASKPASS"] = Path.Combine(AppContext.BaseDirectory, DisabledAskPassFileName),
         };
-
-    /// <summary>Executable kinds refused because they cannot run without a shell.</summary>
-    public static IReadOnlyList<string> RefusedExecutableExtensions { get; } =
-        [".cmd", ".bat", ".ps1", ".psm1", ".sh", ".vbs", ".js"];
 
     public FileSystemGuard Guard => _guard;
 
@@ -102,12 +100,12 @@ public sealed class ProcessRunner
         executable = null;
         failure = null;
 
-        var extension = Path.GetExtension(candidate);
-        if (RefusedExecutableExtensions.Any(e => string.Equals(e, extension, StringComparison.OrdinalIgnoreCase)))
+        // E.1 #3 runtime boundary. Classification happens first and is purely lexical, so
+        // a shell is refused before Process.Start and regardless of whether it is even
+        // installed on this machine.
+        if (ShellExecutablePolicy.IsShellOrScript(candidate, out var shellReason))
         {
-            failure =
-                $"'{candidate}' is a script or shim ('{extension}') that cannot be launched without a shell. "
-                + "Resolve it to a real executable instead (ADR-0006).";
+            failure = shellReason;
             return false;
         }
 

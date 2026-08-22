@@ -24,6 +24,7 @@ return mode switch
 {
     "exit" => Exit(args),
     "stdout" => WriteStdout(args),
+    "echo-args" => EchoArgs(args),
     "stderr" => WriteStderr(args),
     "both" => WriteBoth(args),
     "flood" => await FloodAsync(args),
@@ -42,7 +43,7 @@ return mode switch
 static int Help()
 {
     Console.Error.WriteLine(
-        "modes: exit|stdout|stderr|both|flood|silent|chatty|spawn-tree|spawn-child|spawn-leaf|print-env|utf8|ansi|stdin-wait");
+        "modes: exit|stdout|echo-args|stderr|both|flood|silent|chatty|spawn-tree|spawn-child|spawn-leaf|print-env|utf8|ansi|stdin-wait");
     return 64;
 }
 
@@ -56,6 +57,20 @@ static int Exit(string[] args) => Arg(args, 1, 0);
 static int WriteStdout(string[] args)
 {
     Console.Out.Write(args.Length > 1 ? args[1] : "stdout");
+    Console.Out.Flush();
+    return 0;
+}
+
+/// Prints every argument exactly as the process received it, one per line.
+/// Used to prove that argv entries never acquire shell semantics.
+static int EchoArgs(string[] args)
+{
+    for (var i = 1; i < args.Length; i++)
+    {
+        Console.Out.WriteLine(string.Create(CultureInfo.InvariantCulture, $"ARG[{i - 1}]={args[i]}"));
+    }
+
+    Console.Out.WriteLine("ARGS-END");
     Console.Out.Flush();
     return 0;
 }
