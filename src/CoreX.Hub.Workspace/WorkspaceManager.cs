@@ -23,6 +23,11 @@ namespace CoreX.Hub.Workspace;
 /// </summary>
 public sealed class WorkspaceManager
 {
+    /// <summary>Never let a repository choose the program that renders evidence.</summary>
+    private const string NoExternalDiff = "--no-ext-diff";
+
+    private const string NoTextConv = "--no-textconv";
+
     private static readonly ConcurrentDictionary<string, SemaphoreSlim> RepositoryLocks =
         new(StringComparer.OrdinalIgnoreCase);
 
@@ -107,15 +112,10 @@ public sealed class WorkspaceManager
                 "repositories with submodules are rejected in the MVP"));
         }
 
-        var usesLfs = await UsesGitLfsAsync(repository, cancellationToken);
-        if (usesLfs)
-        {
-            issues.Add(new RepositoryIssue(
-                RepositoryIssueCode.GitLfsUnsupported,
-                "Git LFS repositories are rejected in the MVP"));
-        }
-
         await EnsureWorktreeConfigCompatibleAsync(repository, issues, cancellationToken);
+
+        var unsafeConfiguration = await InspectRepositoryConfigurationAsync(repository, cancellationToken);
+        issues.AddRange(unsafeConfiguration);
 
         var branchExists = await GitAsync(
             repository,
@@ -143,6 +143,14 @@ public sealed class WorkspaceManager
                     $"branch '{defaultBranch}' does not resolve to a commit"));
                 baseCommit = null;
             }
+        }
+
+        var usesLfs = false;
+        if (baseCommit is not null)
+        {
+            var attributes = await InspectTrackedAttributesAsync(repository, baseCommit, cancellationToken);
+            usesLfs = attributes.UsesLfs;
+            issues.AddRange(attributes.Issues);
         }
 
         return new RepositoryPreflightResult
@@ -317,6 +325,19 @@ public sealed class WorkspaceManager
 
         var head = await ReadValueAsync(workspace.WorkspacePath, ["rev-parse", "HEAD"], cancellationToken);
 
+        // Configuration inspected when the workspace was created may since have changed,
+        // and collecting evidence touches the working tree, so revalidate first. Reading
+        // HEAD above is safe: it never consults the working tree.
+        if (await RevalidateSafetyAsync(workspace, cancellationToken) is { } rejection)
+        {
+            return new CaptureChangesResult
+            {
+                BaseCommitSha = workspace.BaseCommitSha,
+                CurrentHeadSha = head ?? string.Empty,
+                SafetyRejection = rejection,
+            };
+        }
+
         var status = await GitAsync(
             workspace.WorkspacePath,
             ["status", "--porcelain=v2", "--untracked-files=all", "--branch"],
@@ -337,14 +358,17 @@ public sealed class WorkspaceManager
         // so a gitignored secret never reaches the evidence.
         await GitAsync(workspace.WorkspacePath, ["add", "-N", "."], cancellationToken);
 
+        // --no-ext-diff and --no-textconv are not optional: without them a repository
+        // configured diff.external or diff.<driver>.textconv would run a program of the
+        // repository's choosing while the Hub collects evidence.
         var diff = await GitAsync(
             workspace.WorkspacePath,
-            ["diff", workspace.BaseCommitSha],
+            ["diff", NoExternalDiff, NoTextConv, workspace.BaseCommitSha],
             cancellationToken);
 
         var nameStatus = await GitAsync(
             workspace.WorkspacePath,
-            ["diff", "--name-status", workspace.BaseCommitSha],
+            ["diff", NoExternalDiff, NoTextConv, "--name-status", workspace.BaseCommitSha],
             cancellationToken);
 
         var changed = ParseNameStatus(nameStatus.Stdout);
@@ -375,6 +399,17 @@ public sealed class WorkspaceManager
         ArgumentNullException.ThrowIfNull(workspace);
         ArgumentException.ThrowIfNullOrWhiteSpace(taskKey);
 
+        // git add can invoke a clean or process filter, so the repository is revalidated
+        // before anything is staged rather than trusting an earlier inspection.
+        if (await RevalidateSafetyAsync(workspace, cancellationToken) is { } rejection)
+        {
+            return new ResultCommitOutcome
+            {
+                State = ResultCommitState.RepositoryUnsafe,
+                Detail = rejection,
+            };
+        }
+
         var stage = await GitAsync(workspace.WorkspacePath, ["add", "-A"], cancellationToken);
         if (!stage.Succeeded)
         {
@@ -383,7 +418,7 @@ public sealed class WorkspaceManager
 
         var staged = await GitAsync(
             workspace.WorkspacePath,
-            ["diff", "--cached", "--name-only"],
+            ["diff", NoExternalDiff, NoTextConv, "--cached", "--name-only"],
             cancellationToken);
 
         if (!staged.Succeeded)
@@ -419,7 +454,7 @@ public sealed class WorkspaceManager
 
         var diff = await GitAsync(
             workspace.WorkspacePath,
-            ["diff", workspace.BaseCommitSha + ".." + (sha ?? "HEAD")],
+            ["diff", NoExternalDiff, NoTextConv, workspace.BaseCommitSha + ".." + (sha ?? "HEAD")],
             cancellationToken);
 
         return new ResultCommitOutcome
@@ -596,24 +631,170 @@ public sealed class WorkspaceManager
             && listed.Stdout.Split('\n').Any(l => l.StartsWith("160000 ", StringComparison.Ordinal));
     }
 
-    private async Task<bool> UsesGitLfsAsync(string repository, CancellationToken cancellationToken)
+    /// <summary>
+    /// Repository-local configuration inspection.
+    ///
+    /// Launching only git.exe is not by itself a secondary process boundary: git can be
+    /// told to run external programs through configuration that is not a hook. Some of
+    /// those surfaces are neutralised per command (core.fsmonitor, signing, diff helpers);
+    /// the ones that cannot be neutralised reliably cause the repository to be rejected.
+    ///
+    /// Includes are read WITHOUT being followed, and are themselves rejected: validating
+    /// the visible keys would be meaningless if ordinary git later imported a filter
+    /// driver from an included file. Fail closed.
+    ///
+    /// Command strings are never interpreted. The presence of an unsupported key is the
+    /// whole decision.
+    /// </summary>
+    private async Task<List<RepositoryIssue>> InspectRepositoryConfigurationAsync(
+        string repository,
+        CancellationToken cancellationToken)
     {
-        var attributesFile = Path.Combine(repository, ".gitattributes");
-        if (File.Exists(attributesFile)
-            && File.ReadAllText(attributesFile).Contains("filter=lfs", StringComparison.OrdinalIgnoreCase))
+        var issues = new List<RepositoryIssue>();
+
+        var listed = await GitAsync(
+            repository,
+            ["config", "--local", "--list", "--no-includes", "--name-only", "-z"],
+            cancellationToken);
+
+        if (!listed.Succeeded)
         {
-            return true;
+            // An empty local config exits non-zero; that is not a failure to report.
+            return issues;
         }
 
-        var tracked = await GitAsync(repository, ["ls-files", "--", ".gitattributes"], cancellationToken);
-        if (!tracked.Succeeded || string.IsNullOrWhiteSpace(tracked.Stdout))
+        foreach (var key in listed.Stdout.Split('\0', StringSplitOptions.RemoveEmptyEntries))
         {
-            return false;
+            var name = key.Trim();
+
+            foreach (var family in UnsupportedConfigurationFamilies)
+            {
+                if (name.StartsWith(family, StringComparison.OrdinalIgnoreCase))
+                {
+                    issues.Add(new RepositoryIssue(
+                        RepositoryIssueCode.UnsafeGitConfiguration,
+                        $"repository-local '{name}' is not supported: {UnsupportedConfigurationReason(family)}"));
+                }
+            }
         }
 
-        var content = await GitAsync(repository, ["show", "HEAD:.gitattributes"], cancellationToken);
-        return content.Succeeded && content.Stdout.Contains("filter=lfs", StringComparison.OrdinalIgnoreCase);
+        return issues;
     }
+
+    /// <summary>Configuration families the MVP refuses outright.</summary>
+    public static IReadOnlyList<string> UnsupportedConfigurationFamilies { get; } =
+        ["include.", "includeif.", "filter."];
+
+    private static string UnsupportedConfigurationReason(string family) => family switch
+    {
+        "filter." => "a filter driver can run clean, smudge or process commands during checkout and staging",
+        _ => "an included configuration file could import unsupported executable configuration",
+    };
+
+    /// <summary>
+    /// Scans every tracked .gitattributes reachable from the pinned commit, including
+    /// nested directories, for filter attributes. Nothing from the working tree is
+    /// executed while doing so.
+    ///
+    /// This is not a gitattributes parser: it looks for explicit filter=&lt;driver&gt;
+    /// tokens, which is what the MVP needs to fail closed.
+    /// </summary>
+    private async Task<AttributeInspection> InspectTrackedAttributesAsync(
+        string repository,
+        string commit,
+        CancellationToken cancellationToken)
+    {
+        var issues = new List<RepositoryIssue>();
+        var usesLfs = false;
+
+        var listed = await GitAsync(
+            repository,
+            ["ls-tree", "-r", "--name-only", "-z", commit],
+            cancellationToken);
+
+        if (!listed.Succeeded)
+        {
+            return new AttributeInspection(false, issues);
+        }
+
+        var attributeFiles = listed.Stdout
+            .Split('\0', StringSplitOptions.RemoveEmptyEntries)
+            .Where(p => p.EndsWith(".gitattributes", StringComparison.OrdinalIgnoreCase))
+            .ToList();
+
+        foreach (var file in attributeFiles)
+        {
+            var content = await GitAsync(repository, ["show", commit + ":" + file], cancellationToken);
+            if (!content.Succeeded)
+            {
+                continue;
+            }
+
+            foreach (var driver in ReadFilterDrivers(content.Stdout))
+            {
+                if (string.Equals(driver, "lfs", StringComparison.OrdinalIgnoreCase))
+                {
+                    usesLfs = true;
+                    issues.Add(new RepositoryIssue(
+                        RepositoryIssueCode.GitLfsUnsupported,
+                        $"'{file}' declares a Git LFS filter; LFS repositories are rejected in the MVP"));
+                }
+                else
+                {
+                    issues.Add(new RepositoryIssue(
+                        RepositoryIssueCode.UnsafeGitConfiguration,
+                        $"'{file}' declares filter='{driver}'; custom filter drivers are not supported"));
+                }
+            }
+        }
+
+        return new AttributeInspection(usesLfs, issues);
+    }
+
+    private static IEnumerable<string> ReadFilterDrivers(string attributes)
+    {
+        foreach (var raw in attributes.Split('\n'))
+        {
+            var line = raw.Trim();
+
+            if (line.Length == 0 || line.StartsWith('#'))
+            {
+                continue;
+            }
+
+            foreach (var token in line.Split([' ', '\t'], StringSplitOptions.RemoveEmptyEntries))
+            {
+                if (token.StartsWith("filter=", StringComparison.OrdinalIgnoreCase))
+                {
+                    var driver = token["filter=".Length..].Trim();
+                    if (driver.Length > 0)
+                    {
+                        yield return driver;
+                    }
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// Re-runs the configuration and attribute inspection immediately before an operation
+    /// that could invoke a repository configured helper. Configuration inspected when the
+    /// workspace was created may since have changed.
+    /// </summary>
+    private async Task<string?> RevalidateSafetyAsync(
+        PreparedWorkspace workspace,
+        CancellationToken cancellationToken)
+    {
+        var issues = await InspectRepositoryConfigurationAsync(workspace.RepositoryPath, cancellationToken);
+        var attributes = await InspectTrackedAttributesAsync(
+            workspace.RepositoryPath, workspace.BaseCommitSha, cancellationToken);
+
+        issues.AddRange(attributes.Issues);
+
+        return issues.Count == 0 ? null : string.Join("; ", issues.Select(i => i.ToString()));
+    }
+
+    private sealed record AttributeInspection(bool UsesLfs, List<RepositoryIssue> Issues);
 
     /// <summary>
     /// Worktree scoped configuration changes how core.bare and core.worktree are read, so

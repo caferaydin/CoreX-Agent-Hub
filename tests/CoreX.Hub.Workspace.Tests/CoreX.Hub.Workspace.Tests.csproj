@@ -14,6 +14,7 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\CoreX.Hub.Workspace\CoreX.Hub.Workspace.csproj" />
     <ProjectReference Include="..\..\src\CoreX.Hub.Cli\CoreX.Hub.Cli.csproj" />
+    <ProjectReference Include="..\CoreX.Hub.ProcessFixture\CoreX.Hub.ProcessFixture.csproj" />
   </ItemGroup>
 
   <ItemGroup>

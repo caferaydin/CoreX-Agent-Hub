@@ -18,6 +18,11 @@ catch (IOException)
     // No console attached; the redirected pipes already use the encoding the parent set.
 }
 
+// Some git helper surfaces (gpg.program) are invoked as a bare executable path with
+// git's own arguments appended, so there is no place to pass a mode. When this variable
+// is present the fixture records the invocation whatever it was asked to do.
+RecordEnvironmentMarker(args);
+
 var mode = args.Length > 0 ? args[0] : "help";
 
 return mode switch
@@ -25,6 +30,7 @@ return mode switch
     "exit" => Exit(args),
     "stdout" => WriteStdout(args),
     "echo-args" => EchoArgs(args),
+    "marker" => Marker(args),
     "stderr" => WriteStderr(args),
     "both" => WriteBoth(args),
     "flood" => await FloodAsync(args),
@@ -40,10 +46,61 @@ return mode switch
     _ => Help(),
 };
 
+static void RecordAdjacentInvocationMarker()
+{
+    try
+    {
+        var directory = Path.GetDirectoryName(Environment.ProcessPath);
+        if (string.IsNullOrEmpty(directory))
+        {
+            return;
+        }
+
+        File.AppendAllText(
+            Path.Combine(directory, "corex-helper-invoked.txt"),
+            string.Create(CultureInfo.InvariantCulture, $"invoked pid={Environment.ProcessId}{Environment.NewLine}"),
+            new UTF8Encoding(false));
+    }
+    catch (IOException)
+    {
+        // Diagnostics only.
+    }
+}
+
+static void RecordEnvironmentMarker(string[] invocation)
+{
+    var markerPath = Environment.GetEnvironmentVariable("COREX_MARKER_PATH");
+    if (string.IsNullOrWhiteSpace(markerPath))
+    {
+        return;
+    }
+
+    for (var attempt = 0; attempt < 50; attempt++)
+    {
+        try
+        {
+            using var stream = new FileStream(markerPath, FileMode.Append, FileAccess.Write, FileShare.ReadWrite);
+            using var writer = new StreamWriter(stream, new UTF8Encoding(false));
+            writer.WriteLine(string.Create(
+                CultureInfo.InvariantCulture,
+                $"env-marker invoked pid={Environment.ProcessId} argv={string.Join(' ', invocation)}"));
+            return;
+        }
+        catch (IOException)
+        {
+            Thread.Sleep(20);
+        }
+    }
+}
+
 static int Help()
 {
+    // Recorded next to the executable so a helper git invokes as a bare path - gpg.program
+    // gets no arguments and no environment of ours - can still be observed by a test.
+    RecordAdjacentInvocationMarker();
+
     Console.Error.WriteLine(
-        "modes: exit|stdout|echo-args|stderr|both|flood|silent|chatty|spawn-tree|spawn-child|spawn-leaf|print-env|utf8|ansi|stdin-wait");
+        "modes: exit|stdout|echo-args|marker|stderr|both|flood|silent|chatty|spawn-tree|spawn-child|spawn-leaf|print-env|utf8|ansi|stdin-wait");
     return 64;
 }
 
@@ -58,6 +115,54 @@ static int WriteStdout(string[] args)
 {
     Console.Out.Write(args.Length > 1 ? args[1] : "stdout");
     Console.Out.Flush();
+    return 0;
+}
+
+/// Records that it was invoked, then behaves well enough for git to keep going.
+///
+/// Used as a marker for the Phase 3 git secondary-execution control tests: a repository
+/// configured filter, textconv, fsmonitor or signing helper points here, and the marker
+/// file is the proof that git executed a repository controlled program. Nothing
+/// destructive happens: the payload is an appended line.
+///
+/// When git passes a file path (textconv) the file is echoed; otherwise stdin is copied
+/// to stdout byte for byte so clean/smudge filters do not corrupt content.
+static int Marker(string[] args)
+{
+    var markerPath = args.Length > 1 ? args[1] : Path.Combine(Path.GetTempPath(), "corex-marker.txt");
+    var extra = args.Length > 2 ? args[2] : null;
+
+    for (var attempt = 0; attempt < 50; attempt++)
+    {
+        try
+        {
+            using var stream = new FileStream(markerPath, FileMode.Append, FileAccess.Write, FileShare.ReadWrite);
+            using var writer = new StreamWriter(stream, new UTF8Encoding(false));
+            writer.WriteLine(string.Create(
+                CultureInfo.InvariantCulture,
+                $"marker invoked pid={Environment.ProcessId} extra={extra ?? "(none)"}"));
+            break;
+        }
+        catch (IOException)
+        {
+            Thread.Sleep(20);
+        }
+    }
+
+    using var output = Console.OpenStandardOutput();
+
+    if (extra is not null && File.Exists(extra))
+    {
+        using var file = File.OpenRead(extra);
+        file.CopyTo(output);
+    }
+    else
+    {
+        using var input = Console.OpenStandardInput();
+        input.CopyTo(output);
+    }
+
+    output.Flush();
     return 0;
 }
 

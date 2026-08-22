@@ -23,6 +23,7 @@ internal sealed class GitFixture : IDisposable
         WorkspaceRoot = Path.Combine(root, "workspaces");
         HubControlRoot = Path.Combine(root, "hub");
         MarkerPath = Path.Combine(root, "HOOK-MARKER");
+        HelperMarkerPath = Path.Combine(root, "HELPER-MARKER");
 
         Directory.CreateDirectory(RepositoryPath);
         Directory.CreateDirectory(WorkspaceRoot);
@@ -52,6 +53,62 @@ internal sealed class GitFixture : IDisposable
 
     public string MarkerPath { get; }
 
+    /// <summary>Written by the fixture executable whenever git runs it as a helper.</summary>
+    public string HelperMarkerPath { get; }
+
+    /// <summary>The deterministic .NET marker helper; never a shell script.</summary>
+    public static string MarkerExecutablePath { get; } =
+        Path.Combine(AppContext.BaseDirectory, "corex-fixture.exe");
+
+    /// <summary>Command string git will run for a configured helper.</summary>
+    public string HelperCommand =>
+        "\"" + ToGitPath(MarkerExecutablePath) + "\" marker \"" + ToGitPath(HelperMarkerPath) + "\"";
+
+    public bool HelperMarkerExists => File.Exists(HelperMarkerPath);
+
+    public string HelperMarkerText => HelperMarkerExists ? File.ReadAllText(HelperMarkerPath) : string.Empty;
+
+    public void ClearHelperMarker()
+    {
+        if (File.Exists(HelperMarkerPath))
+        {
+            File.Delete(HelperMarkerPath);
+        }
+    }
+
+    /// <summary>Repository-local clean/smudge filter driver pointing at the marker helper.</summary>
+    public async Task InstallFilterDriverAsync(string attributePattern = "*.txt", string driver = "marker")
+    {
+        WriteRepositoryFile(".gitattributes", attributePattern + " filter=" + driver);
+        await RequireGitAsync(RepositoryPath, "add", ".gitattributes");
+        await RequireGitAsync(RepositoryPath, "commit", "-q", "-m", "add filter attribute");
+
+        await RequireGitAsync(RepositoryPath, "config", "--local", "filter." + driver + ".smudge", HelperCommand);
+        await RequireGitAsync(RepositoryPath, "config", "--local", "filter." + driver + ".clean", HelperCommand);
+    }
+
+    public async Task InstallTextconvDriverAsync(string driver = "marker")
+    {
+        WriteRepositoryFile(".gitattributes", "*.bin diff=" + driver);
+        WriteRepositoryFile("payload.bin", "original payload");
+        await RequireGitAsync(RepositoryPath, "add", ".gitattributes", "payload.bin");
+        await RequireGitAsync(RepositoryPath, "commit", "-q", "-m", "add diff attribute");
+
+        await RequireGitAsync(RepositoryPath, "config", "--local", "diff." + driver + ".textconv", HelperCommand);
+    }
+
+    public Task InstallExternalDiffAsync() =>
+        RequireGitAsync(RepositoryPath, "config", "--local", "diff.external", HelperCommand);
+
+    public Task InstallFsMonitorAsync() =>
+        RequireGitAsync(RepositoryPath, "config", "--local", "core.fsmonitor", HelperCommand);
+
+    public async Task InstallSigningAsync()
+    {
+        await RequireGitAsync(RepositoryPath, "config", "--local", "commit.gpgSign", "true");
+        await RequireGitAsync(RepositoryPath, "config", "--local", "gpg.program", ToGitPath(MarkerExecutablePath));
+    }
+
     public string GitExecutablePath { get; }
 
     public IGitCommandExecutor Executor { get; }
@@ -78,10 +135,19 @@ internal sealed class GitFixture : IDisposable
     }
 
     /// <summary>Runs git the way a developer would: no Hub hook override.</summary>
-    public async Task<GitCommandResult> RawGitAsync(string workingDirectory, params string[] arguments)
+    public Task<GitCommandResult> RawGitAsync(string workingDirectory, params string[] arguments) =>
+        RawGitAsync(workingDirectory, TimeSpan.FromSeconds(60), arguments);
+
+    public async Task<GitCommandResult> RawGitAsync(
+        string workingDirectory,
+        TimeSpan timeout,
+        params string[] arguments)
     {
         var environment = GitEnvironment.WithHubIdentity(
             GitEnvironment.Base(Path.Combine(HubControlRoot, HubHooks.GlobalConfigFileName)));
+
+        // Lets a helper that git invokes as a bare executable path still record itself.
+        environment["COREX_MARKER_PATH"] = HelperMarkerPath;
 
         return await Executor.ExecuteAsync(
             new GitCommand
@@ -89,7 +155,7 @@ internal sealed class GitFixture : IDisposable
                 WorkingDirectory = workingDirectory,
                 Arguments = arguments,
                 Environment = environment,
-                Timeout = TimeSpan.FromSeconds(60),
+                Timeout = timeout,
             },
             CancellationToken.None);
     }

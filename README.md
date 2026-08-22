@@ -58,7 +58,7 @@ dotnet test CoreX.Hub.slnx -c Release
 | `CoreX.Hub.Domain.Tests` | Saf domain kuralları: organizasyon izolasyon değişmezi, TaskKey, kabul kriterleri, Ready kapısı, kabul override kümesi |
 | `CoreX.Hub.Integration.Tests` | Gerçek SQLite: migration, WAL, kısıtlar, eşzamanlılık, seed determinizmi/idempotansı, organizasyon kapsamlama, CLI uçtan uca |
 | `CoreX.Hub.Execution.Tests` | Gerçek süreçler: exit code, akış tahliyesi, UTF-8/ANSI, ortam izolasyonu, soft/idle/hard timeout, iptal, süreç ağacı ölümü, yol güven sınırı (gerçek NTFS junction ile) |
-| `CoreX.Hub.Workspace.Tests` | Gerçek git: repo ön kontrolü, commit sabitleme, kirli kaynak izolasyonu, repo hook'unun etkisizleştirilmesi, iki katmanlı push engeli, kanıt toplama, beklenmeyen commit tespiti, release/orphan/reconcile |
+| `CoreX.Hub.Workspace.Tests` | Gerçek git: repo ön kontrolü, commit sabitleme, kirli kaynak izolasyonu, repo hook'unun etkisizleştirilmesi, iki katmanlı push engeli, kanıt toplama, beklenmeyen commit tespiti, release/orphan/reconcile, ikincil süreç yürütme (filtre/textconv/fsmonitor/imzalama) kontrol ve sertleştirme testleri |
 | `CoreX.Hub.ArchitectureTests` | Katman bağımlılık yönü, yasaklı kod yapıları (E.1 değişmezleri), domain sözlüğü |
 
 Testler yalnızca geçici dizinlerde ve fixture verisiyle çalışır. Hiçbir test gerçek bir
@@ -265,3 +265,36 @@ rebase, amend, `branch -f` ve `update-ref` kod tabanında yoktur.
 
 Sonuç commit'i olmayan bir workspace otomatik olarak bırakılamaz; kaldırma başarısız
 olursa workspace `Orphaned` olarak **raporlanır**, zorla silinmez.
+
+### Git'in ikincil süreç yürütmesi
+
+`ProcessRunner` yalnızca `git.exe` başlatır, ama git'in kendisi repo tarafından
+yapılandırılan başka programları çalıştırabilir. Hook'lar bunun tek yüzeyi değildir:
+temizleme/bulaştırma (clean/smudge) ve `process` filtreleri, `diff.external`,
+`diff.<sürücü>.textconv`, `core.fsmonitor` ve commit imzalama da program çağırır.
+Bunların her biri gerçek git üzerinde önce **kontrol testleriyle kanıtlandı**
+(`GitHelperExposureControlTests`), sonra kapatıldı.
+
+İki farklı savunma vardır, çünkü bu yüzeylerin hepsi aynı şekilde etkisizleştirilemez:
+
+- **Reddedilenler.** Repo yerel yapılandırmasında `filter.*`, `include.*` veya
+  `includeIf.*` varsa repository kullanılamaz sayılır (`UnsafeGitConfiguration`).
+  Filtre sürücüleri komut kapsamında güvenilir biçimde kapatılamaz, `include`
+  yönlendirmeleri ise incelenen yapılandırmanın dışına çıkabilir. Yapılandırma
+  `--no-includes` ile okunur, böylece dahil edilen dosyalar taramayı atlatamaz.
+  İzlenen `.gitattributes` dosyaları da (yalnızca kök değil, **tüm alt dizinler**)
+  `filter=lfs` ve özel filtre bildirimleri için taranır.
+- **Etkisizleştirilenler.** `core.fsmonitor=false` ve `commit.gpgSign=false`
+  yönetilen çalışma zamanı yapılandırmasının parçasıdır; kanıt toplayan her `diff`
+  çağrısı `--no-ext-diff --no-textconv` ile yapılır.
+
+Yapılandırma iki adım arasında değişebileceği için güvenlik kontrolü, yardımcı
+program çalıştırabilecek her işlemden **hemen önce** tekrarlanır: kanıt toplamadan
+ve `git add -A`'dan önce. Güvensiz bir repo bulunduğunda hiçbir şey onarılmaz —
+yapılandırma silinmez, üzerine yazılmaz; durum raporlanır ve işlem durur.
+
+**Garantinin sınırı:** bu, "git yapılandırması hiçbir zaman hiçbir şey çalıştıramaz"
+demek değildir. Kanıtlanan şey dardır: yukarıda sayılan yüzeyler ya reddedilir ya da
+yönetilen komutlarda etkisizdir ve bu, kaynak taramasıyla değil, gerçek git üzerinde
+çalışan **davranışsal işaret (marker) testleriyle** doğrulanır. Yeni bir git sürümü
+yeni bir yürütme yüzeyi eklerse aynı yöntem tekrar uygulanmalıdır.

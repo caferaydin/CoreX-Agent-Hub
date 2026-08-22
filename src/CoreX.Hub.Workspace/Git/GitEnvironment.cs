@@ -21,6 +21,12 @@ namespace CoreX.Hub.Workspace.Git;
 /// GIT_CONFIG_VALUE_n) has the same precedence as -c and is applied before the command
 /// runs, which is exactly what is needed. It is used instead of "-c core.hooksPath"
 /// because E.1 #8 forbids that command line construct as a bypass mechanism.
+///
+/// Hooks are not git's only execution surface. A repository can also name external
+/// programs through core.fsmonitor, through a signing program, through diff helpers and
+/// through clean/smudge filter drivers. The first three are neutralised here and by the
+/// diff flags; filter drivers cannot be neutralised reliably, so a repository that
+/// configures one is rejected by the safety preflight instead.
 /// </summary>
 public static class GitEnvironment
 {
@@ -61,6 +67,15 @@ public static class GitEnvironment
             (GitConfigKeys.LongPaths, "true"),
             (GitConfigKeys.GcAuto, "0"),
             (GitConfigKeys.QuotePath, "false"),
+
+            // A repository-local core.fsmonitor names an external helper that git
+            // consults during status and index refresh. Managed commands never use one.
+            (GitConfigKeys.FsMonitor, "false"),
+
+            // Hub result commits never inherit repository or user signing policy, which
+            // would otherwise invoke a configured signing program.
+            (GitConfigKeys.CommitGpgSign, "false"),
+            (GitConfigKeys.TagGpgSign, "false"),
         };
 
         environment["GIT_CONFIG_COUNT"] = overrides.Length.ToString(System.Globalization.CultureInfo.InvariantCulture);
@@ -93,6 +108,9 @@ public static class GitConfigKeys
     public const string LongPaths = "core.longpaths";
     public const string GcAuto = "gc.auto";
     public const string QuotePath = "core.quotePath";
+    public const string FsMonitor = "core.fsmonitor";
+    public const string CommitGpgSign = "commit.gpgSign";
+    public const string TagGpgSign = "tag.gpgSign";
     public const string PushUrl = "remote.origin.pushurl";
     public const string CredentialHelper = "credential.helper";
     public const string WorktreeConfigExtension = "extensions.worktreeConfig";

@@ -11,6 +11,9 @@ public enum RepositoryIssueCode
     DefaultBranchUnresolvable,
     SubmodulesUnsupported,
     GitLfsUnsupported,
+
+    /// <summary>Repository-local configuration names an external program the MVP cannot run safely.</summary>
+    UnsafeGitConfiguration,
     IncompatibleWorktreeConfiguration,
     GitCommandFailed,
 }
@@ -159,12 +162,25 @@ public sealed record CaptureChangesResult
 
     public IReadOnlyList<string> ChangedPaths { get; init; } = [];
 
+    /// <summary>
+    /// Set when the safety preflight refused the repository. Every evidence field is then
+    /// empty, because collecting it would have touched the working tree and could have
+    /// invoked a repository configured filter.
+    /// </summary>
+    public string? SafetyRejection { get; init; }
+
     public bool HasChanges => ChangedPaths.Count > 0;
 }
 
 public enum ResultCommitState
 {
     Created,
+
+    /// <summary>
+    /// The safety preflight refused the repository before anything was staged, so no
+    /// repository configured helper could run.
+    /// </summary>
+    RepositoryUnsafe,
 
     /// <summary>Nothing to commit. An empty commit is never manufactured.</summary>
     NoChanges,
