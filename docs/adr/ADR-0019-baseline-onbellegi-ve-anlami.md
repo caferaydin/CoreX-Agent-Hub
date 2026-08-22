@@ -2,7 +2,8 @@
 
 - **Durum:** Accepted
 - **Tarih:** 2026-08-23
-- **Kaynak:** mimari doküman § I.4; Faz 4 uygulama kapsamı
+- **Kaynak:** mimari doküman § I.1, § I.2 ve § I.4 (`(RepositoryId, BaseCommitSha,
+  ProfileHash)` önbelleği); Faz 4 uygulama kapsamı § 21-§ 25
 
 ## Bağlam
 

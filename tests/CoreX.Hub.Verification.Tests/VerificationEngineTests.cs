@@ -151,4 +151,62 @@ public sealed class VerificationEngineTests
         Assert.Equal(VerificationStepStatus.Skipped, run.Steps[1].Status);
         Assert.Equal(VerificationOutcome.Failed, run.RequiredOutcome);
     }
+
+    /// <summary>
+    /// The exact two step shape the MACHINE acceptance criteria depend on: an optional
+    /// failure first, a required success after it. The optional failure must survive as a
+    /// failure - with its evidence - while the required result still passes.
+    /// </summary>
+    [Fact]
+    public async Task An_optional_failure_followed_by_a_required_success_passes_without_hiding_the_failure()
+    {
+        using var fixture = VerificationFixture.Create();
+
+        var profile = ProfileBuilder.Profile(
+            ".",
+            ProfileBuilder.Step(
+                "step-a-optional",
+                ["both", "lint findings", "lint failed", "3"],
+                required: false),
+            ProfileBuilder.Step("step-b-required", ["stdout", "packaged"]));
+
+        var run = await fixture.CreateEngine().RunAsync(profile, fixture.Request(), CancellationToken.None);
+
+        var stepA = run.Steps.Single(s => s.StepName == "step-a-optional");
+        var stepB = run.Steps.Single(s => s.StepName == "step-b-required");
+
+        // Step A ran, failed, and stayed failed.
+        Assert.False(stepA.Required);
+        Assert.Equal(VerificationStepStatus.Failed, stepA.Status);
+        Assert.NotEqual(VerificationStepStatus.Passed, stepA.Status);
+        Assert.NotEqual(VerificationStepStatus.Skipped, stepA.Status);
+        Assert.Equal(3, stepA.ExitCode);
+        Assert.False(stepA.Succeeded);
+
+        // Step B ran after it and passed.
+        Assert.True(stepB.Required);
+        Assert.Equal(VerificationStepStatus.Passed, stepB.Status);
+        Assert.Equal(0, stepB.ExitCode);
+        Assert.NotNull(stepB.StartedAtUtc);
+        Assert.True(stepB.StartedAtUtc >= stepA.EndedAtUtc, "step B must run after step A");
+
+        // The required result is Passed, and the optional failure is still visible on it.
+        Assert.Equal(VerificationOutcome.Passed, run.RequiredOutcome);
+        Assert.True(run.HasOptionalFailures);
+        Assert.Contains(run.Steps, s => !s.Required && s.Status == VerificationStepStatus.Failed);
+
+        // Step A's evidence is preserved rather than discarded with its failure.
+        Assert.NotNull(stepA.StdoutEvidence);
+        Assert.NotNull(stepA.StderrEvidence);
+        Assert.True(fixture.EvidenceStore.Exists(stepA.StdoutEvidence!.Sha256));
+        Assert.True(fixture.EvidenceStore.Exists(stepA.StderrEvidence!.Sha256));
+
+        var stdout = await fixture.EvidenceStore.ReadTextAsync(
+            stepA.StdoutEvidence.Sha256, CancellationToken.None);
+        var stderr = await fixture.EvidenceStore.ReadTextAsync(
+            stepA.StderrEvidence.Sha256, CancellationToken.None);
+
+        Assert.Contains("lint findings", stdout, StringComparison.Ordinal);
+        Assert.Contains("lint failed", stderr, StringComparison.Ordinal);
+    }
 }

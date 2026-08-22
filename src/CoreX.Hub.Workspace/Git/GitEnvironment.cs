@@ -36,7 +36,7 @@ public static class GitEnvironment
          "ProgramFiles(x86)", "LOCALAPPDATA", "NUMBER_OF_PROCESSORS", "COMSPEC"];
 
     public const string HubCommitterName = "CoreX Agent Hub";
-    public const string HubCommitterEmail = "agent@corex.local";
+    public const string HubCommitterEmail = "info@corexlogic.com";
 
     /// <summary>
     /// Base configuration for every managed git command: no system config, an empty

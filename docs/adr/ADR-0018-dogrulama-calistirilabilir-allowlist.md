@@ -2,7 +2,8 @@
 
 - **Durum:** Accepted
 - **Tarih:** 2026-08-23
-- **Kaynak:** mimari doküman § I.1, I.4; Faz 4 uygulama kapsamı
+- **Kaynak:** mimari doküman § I.3 ("`executable` allowlist'ten gelir, mutlak yola
+  çözülür. `args` dizidir; kabuk yok."); Faz 4 uygulama kapsamı § 6 ve § 8
 
 ## Bağlam
 

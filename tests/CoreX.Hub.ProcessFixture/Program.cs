@@ -195,7 +195,10 @@ static int WriteBoth(string[] args)
     Console.Error.Write(args.Length > 2 ? args[2] : "err");
     Console.Out.Flush();
     Console.Error.Flush();
-    return 0;
+
+    // Optional fourth argument: exit with a specific code after writing both streams, so a
+    // test can observe a failing step that still produced evidence.
+    return Arg(args, 3, 0);
 }
 
 /// Writes a large payload to both streams concurrently, then a sentinel on each.
