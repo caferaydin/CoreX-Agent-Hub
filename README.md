@@ -13,7 +13,7 @@ Kabul edilmiş kararlar: [`docs/adr/`](docs/adr/) (ADR-0001 … ADR-0017).
 |---|---|---|
 | Faz 0 | Mimari kaydı, ADR'ler, format kararları | **TAMAM** |
 | Faz 1 | Foundation + Domain + Persistence + CLI | **TAMAM** |
-| Faz 2 | ProcessRunner (Job Object), FileSystemGuard | uygulanmadı |
+| Faz 2 | ProcessRunner (Job Object), FileSystemGuard | **TAMAM** |
 | Faz 3 | Workspace / git / worktree | uygulanmadı |
 | Faz 4 | Doğrulama motoru + kanıt deposu | uygulanmadı |
 | Faz 5 | Orchestrator + Context Pack + ScriptedAgentRuntime (Loop Zero) | uygulanmadı |
@@ -23,9 +23,11 @@ Kabul edilmiş kararlar: [`docs/adr/`](docs/adr/) (ADR-0001 … ADR-0017).
 | Faz 9 | Minimal API + React UI | uygulanmadı |
 | Faz 10 | Sertleştirme + WSL2 sert izolasyon + Kronos kapısı | uygulanmadı |
 
-Faz 1'de **çalışma zamanı davranışı yoktur**: süreç başlatılmaz, git çağrılmaz, agent
-çalıştırılmaz, dosya sistemi worktree'si açılmaz. Faz 1 kataloğu, görev modelini,
-Ready kapısını, kalıcılığı ve CLI'ı kurar.
+Faz 1 kataloğu, görev modelini, Ready kapısını, kalıcılığı ve CLI'ı kurar.
+
+Faz 2 yalnızca **yerel çalıştırma ilkellerini** ekler: tek süreç başlatma sınırı
+(`ProcessRunner`) ve yönetilen dosya sistemi güven sınırı (`FileSystemGuard`). Hâlâ git
+çağrılmaz, agent çalıştırılmaz, doğrulama komutu yürütülmez, orchestration pipeline yoktur.
 
 ## Gereksinimler
 
@@ -51,6 +53,7 @@ dotnet test CoreX.Hub.slnx -c Release
 |---|---|
 | `CoreX.Hub.Domain.Tests` | Saf domain kuralları: organizasyon izolasyon değişmezi, TaskKey, kabul kriterleri, Ready kapısı, kabul override kümesi |
 | `CoreX.Hub.Integration.Tests` | Gerçek SQLite: migration, WAL, kısıtlar, eşzamanlılık, seed determinizmi/idempotansı, organizasyon kapsamlama, CLI uçtan uca |
+| `CoreX.Hub.Execution.Tests` | Gerçek süreçler: exit code, akış tahliyesi, UTF-8/ANSI, ortam izolasyonu, soft/idle/hard timeout, iptal, süreç ağacı ölümü, yol güven sınırı (gerçek NTFS junction ile) |
 | `CoreX.Hub.ArchitectureTests` | Katman bağımlılık yönü, yasaklı kod yapıları (E.1 değişmezleri), domain sözlüğü |
 
 Testler yalnızca geçici dizinlerde ve fixture verisiyle çalışır. Hiçbir test gerçek bir
@@ -179,11 +182,40 @@ veritabanına bakar, gerçek veri dizinine değil. Bu beklenen davranıştır.
 src/CoreX.Hub.Domain          Saf domain. Hiçbir bağımlılığı yok.
 src/CoreX.Hub.Application     Use case'ler, portlar, yapılandırma sözleşmesi.
 src/CoreX.Hub.Infrastructure  EF Core + SQLite, YAML okuyucu, tek IHubStore uygulaması.
+src/CoreX.Hub.Execution       Faz 2 çalıştırma ilkelleri. Hiçbir CoreX projesine ve
+                              hiçbir paket'e bağımlı değil.
 src/CoreX.Hub.Cli             Faz 1'in tek arayüzü ve composition root'u.
-tests/                        Domain / Integration / Architecture testleri.
+tests/                        Domain / Integration / Execution / Architecture testleri
+                              + corex-fixture (deterministik test yardımcı exe'si).
 docs/architecture             Otoriter mimari doküman + tarihçe.
 docs/adr                      ADR-0001 … ADR-0017.
 ```
 
 Bağımlılık yönü tek yönlüdür ve `CoreX.Hub.ArchitectureTests` tarafından derlenmiş
 assembly referansları üzerinden zorlanır.
+
+## Çalıştırma ilkelleri (Faz 2)
+
+`ProcessRunner` üretim kodunda **işletim sistemi alt süreci oluşturan tek yerdir**
+(ADR-0006). Kabuk kullanmaz: çalıştırılabilir dosya + argüman vektörü. Her alt süreç bir
+Windows Job Object'e (`JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`) atanır, böylece çalıştırma
+sonlandığında **tüm süreç ağacı** ölür. stdout ve stderr baştan itibaren eşzamanlı
+tahliye edilir; yakalama tavanı belleği sınırlar ama boru hattı tüketimi asla durmaz.
+
+Üç açık son tarih vardır: `SoftTimeout` (stdin kapatılır, sınırlı süre tanınır),
+`IdleTimeout` (iki akışta da hareket yok) ve `HardTimeout` (mutlak tavan; çıktı ile
+ertelenemez).
+
+Çocuk ortam değişkenleri **boş bir sözlükten** başlar (ADR-0007); yalnızca adıyla
+listelenenler kopyalanır, ardından Hub'ın zorunlu değerleri (`GIT_TERMINAL_PROMPT=0`,
+`NO_COLOR=1`, `CI=1`, etkisiz `GIT_ASKPASS`) yazılır ve bunlar çağıran tarafından
+ezilemez.
+
+`FileSystemGuard` yönetilen çalıştırma yollarının güven sınırıdır: kanonikleştirme,
+segment duyarlı kök içinde kalma denetimi ve gerçek reparse-point (symlink/junction)
+kaçış tespiti. Sanal dosya sistemi ya da `File.*` sarmalayıcısı değildir.
+
+**Kabul edilen artık risk:** `Process.Start` ile `AssignProcessToJobObject` arasında
+küçük bir yarış penceresi vardır. Bu pencerede oluşturulan bir torun süreç job'dan
+kaçabilir. Dondurulmuş mimari bunu Faz 2 için kabul eder; Faz 10 askıya alınmış süreç
+oluşturmayla kapatır.

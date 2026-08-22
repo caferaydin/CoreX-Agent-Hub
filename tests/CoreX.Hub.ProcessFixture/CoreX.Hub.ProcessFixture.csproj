@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Deterministic test helper executable. Test infrastructure only: it is never
+    referenced by production code and lives under tests/ so the architecture source
+    scanners (which read src/**) do not apply to it.
+  -->
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <AssemblyName>corex-fixture</AssemblyName>
+    <RootNamespace>CoreX.Hub.ProcessFixture</RootNamespace>
+  </PropertyGroup>
+
+</Project>

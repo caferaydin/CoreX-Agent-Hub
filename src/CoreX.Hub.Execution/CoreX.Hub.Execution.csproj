@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    CoreX.Hub.Execution
+
+    The trusted local execution primitives (architecture E, F.5, Phase 2):
+    the single process launch boundary and the managed filesystem trust boundary.
+
+    Like CoreX.Hub.Domain this project references no other CoreX.Hub project and no
+    third-party package. Enforced by CoreX.Hub.ArchitectureTests.
+  -->
+
+  <PropertyGroup>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
+
+</Project>

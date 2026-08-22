@@ -3,6 +3,10 @@ using CoreX.Hub.Domain.Executions;
 using CoreX.Hub.Domain.Tasks;
 using CoreX.Hub.Infrastructure.Persistence;
 
+// The Phase 2 assembly introduces a CoreX.Hub.Execution namespace, so the domain type of
+// the same short name is aliased here to keep the reference unambiguous.
+using DomainExecution = CoreX.Hub.Domain.Executions.Execution;
+
 namespace CoreX.Hub.ArchitectureTests;
 
 /// <summary>
@@ -32,7 +36,7 @@ public sealed class DomainInvariantTests
     public void Execution_outcome_cannot_be_written_from_outside_the_execution_aggregate()
     {
         // E.1 #11: acceptance must never rewrite an execution outcome.
-        var outcomeSetter = typeof(Execution).GetProperty(nameof(Execution.Outcome))!.SetMethod;
+        var outcomeSetter = typeof(DomainExecution).GetProperty(nameof(DomainExecution.Outcome))!.SetMethod;
         Assert.True(outcomeSetter is null || !outcomeSetter.IsPublic);
 
         // The acceptance record does not even model an outcome, so it cannot carry one back.

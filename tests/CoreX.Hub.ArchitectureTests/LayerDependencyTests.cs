@@ -1,6 +1,7 @@
 using System.Reflection;
 using CoreX.Hub.Application.Abstractions;
 using CoreX.Hub.Domain.Catalog;
+using CoreX.Hub.Execution.FileSystem;
 using CoreX.Hub.Infrastructure.Persistence;
 
 namespace CoreX.Hub.ArchitectureTests;
@@ -15,6 +16,7 @@ public sealed class LayerDependencyTests
     private static readonly Assembly Domain = typeof(Organization).Assembly;
     private static readonly Assembly Application = typeof(IHubStore).Assembly;
     private static readonly Assembly Infrastructure = typeof(HubDbContext).Assembly;
+    private static readonly Assembly Execution = typeof(FileSystemGuard).Assembly;
     private static readonly Assembly Cli = typeof(Cli.HubCli).Assembly;
 
     [Fact]
@@ -59,6 +61,30 @@ public sealed class LayerDependencyTests
     }
 
     [Fact]
+    public void Execution_depends_on_nothing_but_the_base_class_library()
+    {
+        // The Phase 2 execution primitives are a leaf, like the domain: no CoreX project
+        // and no third-party package. Later phases consume them, never the other way round.
+        var references = ReferencedNames(Execution);
+
+        Assert.DoesNotContain(references, r => r.StartsWith("CoreX.Hub.", StringComparison.Ordinal));
+        Assert.DoesNotContain(references, r => r.StartsWith("Microsoft.EntityFrameworkCore", StringComparison.Ordinal));
+        Assert.DoesNotContain(references, r => r.StartsWith("YamlDotNet", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Nothing_depends_on_execution_yet()
+    {
+        // Phase 2 introduces the primitives; wiring them into the orchestrator is Phase 5.
+        foreach (var assembly in new[] { Domain, Application, Infrastructure, Cli })
+        {
+            Assert.DoesNotContain(
+                ReferencedNames(assembly),
+                r => r.StartsWith("CoreX.Hub.Execution", StringComparison.Ordinal));
+        }
+    }
+
+    [Fact]
     public void No_forbidden_infrastructure_packages_are_referenced()
     {
         string[] forbidden =
@@ -67,7 +93,7 @@ public sealed class LayerDependencyTests
             "RabbitMQ.Client", "Confluent.Kafka", "Npgsql", "FluentValidation",
         ];
 
-        foreach (var assembly in new[] { Domain, Application, Infrastructure, Cli })
+        foreach (var assembly in new[] { Domain, Application, Infrastructure, Execution, Cli })
         {
             var references = ReferencedNames(assembly);
             foreach (var name in forbidden)

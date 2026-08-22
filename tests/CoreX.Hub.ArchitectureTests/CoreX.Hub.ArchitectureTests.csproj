@@ -8,6 +8,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\CoreX.Hub.Domain\CoreX.Hub.Domain.csproj" />
+    <ProjectReference Include="..\..\src\CoreX.Hub.Execution\CoreX.Hub.Execution.csproj" />
     <ProjectReference Include="..\..\src\CoreX.Hub.Application\CoreX.Hub.Application.csproj" />
     <ProjectReference Include="..\..\src\CoreX.Hub.Infrastructure\CoreX.Hub.Infrastructure.csproj" />
     <ProjectReference Include="..\..\src\CoreX.Hub.Cli\CoreX.Hub.Cli.csproj" />

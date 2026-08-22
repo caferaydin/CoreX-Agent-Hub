@@ -4,23 +4,45 @@ namespace CoreX.Hub.ArchitectureTests;
 
 /// <summary>
 /// Source level guards for the architecture invariants that are about what the code may
-/// NOT contain (architecture E.1 #1, #3, #8, #9).
+/// NOT contain (architecture E.1 #1, #2, #3, #8, #9).
 ///
-/// Several of these guards have no subject yet because their components belong to later
-/// phases. They are armed now so that the first offending line ever written fails the
-/// build rather than being noticed in review. The implementation report classifies each
-/// one as PASS or NOT_APPLICABLE_UNTIL_PHASE_X.
+/// Guards whose subject belongs to a later phase are armed now so the first offending
+/// line ever written fails the build instead of being noticed in review.
 /// </summary>
 public sealed class ForbiddenConstructTests
 {
+    private const string ProcessRunnerFileName = "ProcessRunner.cs";
+    private const string FileSystemGuardFileName = "FileSystemGuard.cs";
+
+    /// <summary>
+    /// Modules on the managed execution filesystem trust boundary. Later execution
+    /// facing projects are added here as their phases land.
+    /// </summary>
+    private static readonly string[] ExecutionFacingModules = ["CoreX.Hub.Execution"];
+
+    private static readonly Regex ProcessLaunchPattern =
+        new(@"\bProcess\s*\.\s*Start\b|\bnew\s+ProcessStartInfo\b", RegexOptions.CultureInvariant);
+
     [Fact]
     public void Only_the_process_runner_may_start_processes()
     {
-        // E.1 #1. ProcessRunner arrives in Phase 2; until then the guard must find nothing.
+        // E.1 #1: process creation belongs to ProcessRunner and nowhere else.
         AssertNoMatch(
-            new Regex(@"\bProcess\s*\.\s*Start\b|\bnew\s+ProcessStartInfo\b", RegexOptions.CultureInvariant),
-            allowedFileName: "ProcessRunner.cs",
+            ProcessLaunchPattern,
+            allowedFileName: ProcessRunnerFileName,
             because: "E.1 #1: process creation belongs to ProcessRunner only.");
+    }
+
+    [Fact]
+    public void The_process_runner_exemption_is_not_vacuous()
+    {
+        // A guard whose single exempt file contains nothing would pass forever without
+        // enforcing anything. Phase 2 makes the exemption real, so assert it is used.
+        var runner = RepoLayout.ProductionSourceFiles
+            .SingleOrDefault(f => string.Equals(Path.GetFileName(f), ProcessRunnerFileName, StringComparison.Ordinal));
+
+        Assert.NotNull(runner);
+        Assert.Matches(ProcessLaunchPattern, File.ReadAllText(runner));
     }
 
     [Fact]
@@ -28,10 +50,38 @@ public sealed class ForbiddenConstructTests
     {
         // E.1 #3: every execution is an executable plus an argument vector.
         AssertNoMatch(
-            new Regex(@"UseShellExecute\s*=\s*true|""cmd\.exe""|""/bin/sh""|""powershell""|""pwsh""",
+            new Regex(
+                @"UseShellExecute\s*=\s*true|""cmd.exe""|""/bin/sh""|""bash""|""powershell""|""pwsh""",
                 RegexOptions.CultureInvariant),
             allowedFileName: null,
             because: "E.1 #3: no shell, ever.");
+    }
+
+    [Fact]
+    public void Only_the_filesystem_guard_makes_managed_path_trust_decisions()
+    {
+        // E.1 #2, scoped as the Phase 2 brief directs: the invariant applies to the
+        // managed execution filesystem trust boundary and every later execution facing
+        // module, NOT to the accepted Phase 1 bootstrap (configuration discovery and the
+        // SQLite data directory). Those are application startup paths, and routing them
+        // through Execution would invert the accepted dependency direction.
+        AssertNoMatch(
+            new Regex(
+                @"Path\s*\.\s*GetFullPath|Path\s*\.\s*GetRelativePath|ResolveLinkTarget|FileAttributes\s*\.\s*ReparsePoint",
+                RegexOptions.CultureInvariant),
+            allowedFileName: FileSystemGuardFileName,
+            because: "E.1 #2: canonicalisation, containment and reparse trust belong to FileSystemGuard only.",
+            scopeDirectories: ExecutionFacingModules);
+    }
+
+    [Fact]
+    public void The_filesystem_guard_exemption_is_not_vacuous()
+    {
+        var guard = RepoLayout.ProductionSourceFiles
+            .SingleOrDefault(f => string.Equals(Path.GetFileName(f), FileSystemGuardFileName, StringComparison.Ordinal));
+
+        Assert.NotNull(guard);
+        Assert.Contains("ResolveLinkTarget", File.ReadAllText(guard), StringComparison.Ordinal);
     }
 
     [Fact]
@@ -39,7 +89,8 @@ public sealed class ForbiddenConstructTests
     {
         // E.1 #8 (ADR-0005). Git code arrives in Phase 3.
         AssertNoMatch(
-            new Regex(@"--no-verify|core\.hooksPath\s*=|--force\b|--force-with-lease",
+            new Regex(
+                @"--no-verify|core\.hooksPath\s*=|--force\b|--force-with-lease",
                 RegexOptions.CultureInvariant),
             allowedFileName: null,
             because: "E.1 #8: the Hub must never bypass its own protection mechanism.");
@@ -50,7 +101,8 @@ public sealed class ForbiddenConstructTests
     {
         // E.1 #9 (errata E1). Evidence first; the worktree is preserved; cleanup is human.
         AssertNoMatch(
-            new Regex(@"""reset""|""rebase""|""update-ref""|""--amend""|branch\s+-f\b",
+            new Regex(
+                @"""reset""|""rebase""|""update-ref""|""--amend""|branch\s+-f\b",
                 RegexOptions.CultureInvariant),
             allowedFileName: null,
             because: "E.1 #9: agent created commits are never repaired or deleted by the Hub.");
@@ -64,11 +116,22 @@ public sealed class ForbiddenConstructTests
         Assert.True(RepoLayout.ProductionSourceFiles.Count > 30);
     }
 
-    private static void AssertNoMatch(Regex pattern, string? allowedFileName, string because)
+    private static void AssertNoMatch(
+        Regex pattern,
+        string? allowedFileName,
+        string because,
+        IReadOnlyList<string>? scopeDirectories = null)
     {
         var offenders = new List<string>();
 
-        foreach (var file in RepoLayout.ProductionSourceFiles)
+        var files = scopeDirectories is null
+            ? RepoLayout.ProductionSourceFiles
+            : [.. RepoLayout.ProductionSourceFiles.Where(f => scopeDirectories.Any(d =>
+                f.Contains(Path.DirectorySeparatorChar + d + Path.DirectorySeparatorChar, StringComparison.Ordinal)))];
+
+        Assert.NotEmpty(files);
+
+        foreach (var file in files)
         {
             if (allowedFileName is not null
                 && string.Equals(Path.GetFileName(file), allowedFileName, StringComparison.Ordinal))
@@ -84,7 +147,6 @@ public sealed class ForbiddenConstructTests
                 // Comments describe the rule; only real code may violate it.
                 var trimmed = line.TrimStart();
                 if (trimmed.StartsWith("//", StringComparison.Ordinal)
-                    || trimmed.StartsWith("///", StringComparison.Ordinal)
                     || trimmed.StartsWith("*", StringComparison.Ordinal))
                 {
                     continue;
@@ -97,6 +159,8 @@ public sealed class ForbiddenConstructTests
             }
         }
 
-        Assert.True(offenders.Count == 0, $"{because}{Environment.NewLine}{string.Join(Environment.NewLine, offenders)}");
+        Assert.True(
+            offenders.Count == 0,
+            $"{because}{Environment.NewLine}{string.Join(Environment.NewLine, offenders)}");
     }
 }
