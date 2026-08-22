@@ -1,0 +1,7 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <ProjectReference Include="..\CoreX.Hub.Domain\CoreX.Hub.Domain.csproj" />
+  </ItemGroup>
+
+</Project>

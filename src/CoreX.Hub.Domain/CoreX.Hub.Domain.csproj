@@ -1,0 +1,11 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    CoreX.Hub.Domain
+
+    Pure domain model. ADR-0001 / architecture E.1 #4:
+    this project MUST NOT reference any infrastructure, persistence, UI or
+    third-party package. Enforced by CoreX.Hub.ArchitectureTests.
+  -->
+
+</Project>
