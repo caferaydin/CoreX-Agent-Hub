@@ -127,6 +127,12 @@ idempotent** bir seed uygular:
 - **hiçbir zaman silmez**; yapılandırmada olmayan kayıtlar uyarı olarak raporlanır,
 - hiçbir değişiklik yoksa audit satırı bile yazmaz.
 
+Ayrıştırma **fail-closed**'dır: bilinmeyen veya yanlış yazılmış bir anahtar sessizce yok
+sayılmaz, yapılandırma yüklemesi hata verir ve CLI sıfırdan farklı bir kodla çıkar.
+`requiresHardIsolaton: true` gibi bir yazım hatası, varsayılan `false` değerine düşüp
+ADR-0017 kapısını sessizce açamaz. Hata mesajı dosyayı, satır/sütunu ve sorunlu anahtarı
+adıyla bildirir; yapılandırma reddedildiğinde **hiçbir katalog satırı değişmez**.
+
 Depodaki `hub.config.yaml` yalnızca **fixture** değerleri içerir: gerçek ürün
 repository'si, gerçek Kronos verisi ve hiçbir sır içermez.
 
