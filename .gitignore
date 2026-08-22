@@ -1,0 +1,18 @@
+# Build
+bin/
+obj/
+artifacts/
+*.user
+*.suo
+.vs/
+.vscode/
+.idea/
+
+# Local runtime data (SQLite + blob store)
+data/
+*.db
+*.db-wal
+*.db-shm
+
+# Local overrides
+hub.config.local.yaml

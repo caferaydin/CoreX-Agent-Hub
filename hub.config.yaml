@@ -1,0 +1,122 @@
+# CoreX Agent Hub — katalog yapılandırması
+#
+# KAPSAM: Faz 1 katalog kavramları (Organization / Project / Repository /
+# VerificationProfile / AgentProfile). Sonraki fazlara ait runtime ayarları burada YOKTUR.
+#
+# Bu dosya YALNIZCA yerel geliştirme ve fixture değerleri içerir.
+#   - Gerçek Core X Logic ürün repository'leri YOK
+#   - Gerçek Kronos verisi YOK  (bkz. ADR-0017)
+#   - Sır / token / kimlik bilgisi YOK
+#
+# Seed politikası (bkz. docs/../README.md "Yapılandırma"):
+#   additive-upsert — doğal anahtara göre ekler/günceller, HİÇBİR ZAMAN silmez.
+
+schemaVersion: 1
+
+workspace:
+  # ADR-0004 / Faz 0 onaylı format kararları
+  root: 'D:\cx'
+  fixtureRoot: 'D:\cx\_fixtures'
+
+organizations:
+
+  # --- Geliştirme / Loop Zero fixture organizasyonu -------------------------
+  - slug: hub-dev
+    name: CoreX Agent Hub Development
+    filesystemRoot: 'D:\cx\_fixtures\hub-dev'
+    isolationLevel: Logical
+    requiresHardIsolation: false
+    environmentAllowlist:
+      - PATH
+      - SystemRoot
+      - TEMP
+      - TMP
+      - USERPROFILE
+
+    agentProfiles:
+      - name: scripted-implementer
+        role: Implementer
+        provider: Scripted
+        runtimeKey: scripted
+        permissionProfile: WorkspaceWrite
+        softTimeoutSeconds: 300
+        idleTimeoutSeconds: 600
+        hardTimeoutSeconds: 1800
+      - name: scripted-reviewer
+        role: Reviewer
+        provider: Scripted
+        runtimeKey: scripted
+        permissionProfile: ReadOnly
+        softTimeoutSeconds: 300
+        idleTimeoutSeconds: 600
+        hardTimeoutSeconds: 1800
+
+    projects:
+      - slug: hub-sample
+        name: Hub Sample Fixture
+        taskKeyPrefix: HUB
+        repositories:
+          - slug: hub-sample-repo
+            name: hub-sample
+            localPath: 'D:\cx\_fixtures\hub-dev\hub-sample'
+            defaultBranch: main
+            protectedBranches:
+              - main
+              - master
+            verificationProfiles:
+              - name: dotnet-default
+                isDefault: true
+                workingDirectory: '.'
+                steps:
+                  - name: restore
+                    executable: dotnet
+                    args: ['restore']
+                    timeoutSeconds: 300
+                    required: true
+                    resultParser: none
+                  - name: build
+                    executable: dotnet
+                    args: ['build', '--no-restore']
+                    timeoutSeconds: 600
+                    required: true
+                    resultParser: none
+                  - name: test
+                    executable: dotnet
+                    args: ['test', '--no-build']
+                    timeoutSeconds: 1800
+                    required: true
+                    resultParser: trx
+
+  # --- Sert izolasyon kapısı fixture'ı (ADR-0017 davranışını görünür kılar) --
+  # Gerçek bir şirket DEĞİLDİR. Yalnızca kapı davranışının CLI'da gözlemlenmesi içindir.
+  - slug: isolation-gate-fixture
+    name: Hard Isolation Gate Fixture
+    filesystemRoot: 'D:\cx\_fixtures\isolation-gate-fixture'
+    isolationLevel: Logical
+    requiresHardIsolation: true
+    environmentAllowlist:
+      - PATH
+      - SystemRoot
+    agentProfiles: []
+    projects:
+      - slug: gate-sample
+        name: Gate Sample Fixture
+        taskKeyPrefix: GATE
+        repositories:
+          - slug: gate-sample-repo
+            name: gate-sample
+            localPath: 'D:\cx\_fixtures\isolation-gate-fixture\gate-sample'
+            defaultBranch: main
+            protectedBranches:
+              - main
+            verificationProfiles:
+              - name: noop
+                isDefault: true
+                workingDirectory: '.'
+                steps:
+                  - name: build
+                    executable: dotnet
+                    args: ['build']
+                    timeoutSeconds: 300
+                    required: true
+                    resultParser: none
