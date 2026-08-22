@@ -55,6 +55,7 @@ internal static class FixtureConfig
                             timeoutSeconds: 1800
                             required: true
                             resultParser: trx
+                            resultPath: 'results/results.trx'
           - slug: isolation-gate-fixture
             name: Hard Isolation Gate Fixture
             filesystemRoot: 'D:\cx\_fixtures\isolation-gate-fixture'

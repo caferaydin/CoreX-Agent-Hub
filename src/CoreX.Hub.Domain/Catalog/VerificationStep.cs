@@ -14,7 +14,8 @@ public sealed record VerificationStep
         IReadOnlyList<string> args,
         int timeoutSeconds,
         bool required,
-        VerificationResultParser resultParser)
+        VerificationResultParser resultParser,
+        string? resultPath = null)
     {
         Name = Guard.NotBlankMax(name, nameof(name), 100);
         Executable = Guard.NotBlankMax(executable, nameof(executable), 200);
@@ -22,6 +23,7 @@ public sealed record VerificationStep
         TimeoutSeconds = Guard.Positive(timeoutSeconds, nameof(timeoutSeconds));
         Required = required;
         ResultParser = resultParser;
+        ResultPath = NormalizeResultPath(resultPath, Name, resultParser);
 
         if (Executable.Contains('|', StringComparison.Ordinal)
             || Executable.Contains('&', StringComparison.Ordinal)
@@ -45,6 +47,13 @@ public sealed record VerificationStep
 
     public VerificationResultParser ResultParser { get; }
 
+    /// <summary>
+    /// Where the step writes its machine readable report, relative to the verification
+    /// working directory. Required exactly when a parser is configured, so a parser step
+    /// never has to guess or search for "some report file".
+    /// </summary>
+    public string? ResultPath { get; }
+
     // Records compare reference-type members with the default comparer, which would make
     // two structurally identical steps unequal because Args is a different list instance.
     // Structural equality is what the idempotent config seed relies on.
@@ -55,7 +64,38 @@ public sealed record VerificationStep
         && TimeoutSeconds == other.TimeoutSeconds
         && Required == other.Required
         && ResultParser == other.ResultParser
+        && string.Equals(ResultPath, other.ResultPath, StringComparison.Ordinal)
         && Args.SequenceEqual(other.Args, StringComparer.Ordinal);
+
+    private static string? NormalizeResultPath(
+        string? value,
+        string stepName,
+        VerificationResultParser parser)
+    {
+        var trimmed = string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+
+        if (parser == VerificationResultParser.None)
+        {
+            return trimmed is null
+                ? null
+                : throw new DomainException(
+                    $"Verification step '{stepName}' declares a resultPath but no resultParser.");
+        }
+
+        if (trimmed is null)
+        {
+            throw new DomainException(
+                $"Verification step '{stepName}' uses the {parser} parser and must declare a resultPath.");
+        }
+
+        if (Path.IsPathRooted(trimmed))
+        {
+            throw new DomainException(
+                $"Verification step '{stepName}' resultPath must be relative to the verification working directory.");
+        }
+
+        return Guard.NotBlankMax(trimmed, "resultPath", 400);
+    }
 
     public override int GetHashCode()
     {
@@ -65,6 +105,7 @@ public sealed record VerificationStep
         hash.Add(TimeoutSeconds);
         hash.Add(Required);
         hash.Add(ResultParser);
+        hash.Add(ResultPath, StringComparer.Ordinal);
 
         foreach (var arg in Args)
         {

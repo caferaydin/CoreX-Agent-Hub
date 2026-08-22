@@ -321,7 +321,8 @@ public sealed class CatalogSeeder(IHubStore store)
             config.Args,
             config.TimeoutSeconds,
             config.Required,
-            parser);
+            parser,
+            config.ResultPath);
     }
 
     private static Slug ParseSlug(string? value, string field)

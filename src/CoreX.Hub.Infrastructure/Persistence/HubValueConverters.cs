@@ -72,7 +72,8 @@ internal static class HubValueConverters
                 [.. s.Args],
                 s.TimeoutSeconds,
                 s.Required,
-                s.ResultParser.ToString())).ToList(),
+                s.ResultParser.ToString(),
+                s.ResultPath)).ToList(),
             JsonOptions);
 
     private static List<VerificationStep> DeserializeSteps(string value)
@@ -89,7 +90,8 @@ internal static class HubValueConverters
             d.Args,
             d.TimeoutSeconds,
             d.Required,
-            Enum.Parse<VerificationResultParser>(d.ResultParser, ignoreCase: true)))];
+            Enum.Parse<VerificationResultParser>(d.ResultParser, ignoreCase: true),
+            d.ResultPath))];
     }
 
     private static string SerializeVerdicts(List<HumanCriterionVerdictRecord> value) =>
@@ -117,7 +119,8 @@ internal static class HubValueConverters
         string[] Args,
         int TimeoutSeconds,
         bool Required,
-        string ResultParser);
+        string ResultParser,
+        string? ResultPath = null);
 
     private sealed record VerdictDto(Guid CriterionId, string Verdict, string? Note);
 }

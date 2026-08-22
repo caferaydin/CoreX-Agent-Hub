@@ -27,6 +27,8 @@ v1.1.1 esas alınır.
 | ADR-0015 | Kabul kriterleri `MACHINE`/`HUMAN` beyanı taşır | Accepted |
 | ADR-0016 | Bloklu/başarısız execution'lar için result commit atılmaz | Accepted |
 | ADR-0017 | Kronos onboarding sert izolasyon doğrulanana kadar kod ile bloke | Accepted |
+| ADR-0018 | Doğrulama çalıştırılabilirleri allowlist ile çözülür; parser adımı rapor yolunu bildirir | Accepted |
+| ADR-0019 | Baseline anahtarı repository + base commit + profil hash'idir; baseline izin değildir | Accepted |
 
 ## Onaylanmış Faz 0 format kararları
 

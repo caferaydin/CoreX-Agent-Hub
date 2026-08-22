@@ -13,7 +13,24 @@ public sealed class HubConfig
 
     public HubWorkspaceConfig Workspace { get; set; } = new();
 
+    public HubVerificationConfig Verification { get; set; } = new();
+
     public List<OrganizationConfig> Organizations { get; set; } = [];
+}
+
+/// <summary>
+/// Machine verification settings that are configuration, not catalog: nothing here is
+/// seeded into the database.
+/// </summary>
+public sealed class HubVerificationConfig
+{
+    /// <summary>
+    /// Logical executable name to absolute executable path. A verification step may only
+    /// name a key that appears here (Phase 4 brief section 6), so PATH is never trusted
+    /// and no tool is discovered at runtime.
+    /// </summary>
+    public Dictionary<string, string> Executables { get; set; } =
+        new(StringComparer.OrdinalIgnoreCase);
 }
 
 public sealed class HubWorkspaceConfig
@@ -117,4 +134,10 @@ public sealed class VerificationStepConfig
     public bool Required { get; set; } = true;
 
     public string ResultParser { get; set; } = "none";
+
+    /// <summary>
+    /// Where the step writes its machine readable report, relative to the verification
+    /// working directory. Required when <see cref="ResultParser"/> is not "none".
+    /// </summary>
+    public string? ResultPath { get; set; }
 }

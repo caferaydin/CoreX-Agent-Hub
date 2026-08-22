@@ -43,6 +43,8 @@ return mode switch
     "utf8" => WriteUtf8(),
     "ansi" => WriteAnsi(),
     "stdin-wait" => await StdinWaitAsync(),
+    "report" => WriteReport(args),
+    "secrets" => WriteSecrets(args),
     _ => Help(),
 };
 
@@ -370,4 +372,234 @@ static async Task<int> StdinWaitAsync()
     await Console.Out.WriteLineAsync("STDIN-CLOSED");
     await Console.Out.FlushAsync();
     return 0;
+}
+
+// --- Phase 4 verification fixture modes -------------------------------------------
+//
+//   report <relative path> <kind> [exit code]
+//
+// Writes a deterministic machine readable report relative to the current working
+// directory, which is exactly the verification working directory the engine resolved.
+
+static int WriteReport(string[] args)
+{
+    if (args.Length < 3)
+    {
+        Console.Error.WriteLine("usage: report <relative path> <kind> [exit code]");
+        return 2;
+    }
+
+    var relative = args[1];
+    var kind = args[2];
+    var exitCode = args.Length > 3 && int.TryParse(args[3], CultureInfo.InvariantCulture, out var parsed)
+        ? parsed
+        : 0;
+
+    var content = ReportContent(kind);
+    if (content is null)
+    {
+        Console.Error.WriteLine("unknown report kind: " + kind);
+        return 2;
+    }
+
+    var full = Path.GetFullPath(relative);
+    var directory = Path.GetDirectoryName(full);
+    if (!string.IsNullOrEmpty(directory))
+    {
+        Directory.CreateDirectory(directory);
+    }
+
+    File.WriteAllText(full, content, new UTF8Encoding(false));
+    Console.Out.WriteLine("wrote " + kind + " report to " + relative);
+
+    return exitCode;
+}
+
+static string? ReportContent(string kind) => kind switch
+{
+    "trx-broken" => Trx(12, 11, 1, 0),
+    "trx-fixed" => Trx(12, 12, 0, 0),
+    "trx-skips" => Trx(10, 7, 1, 2),
+    "trx-outcomes" => TrxOutcomes(),
+    "trx-malformed" => "<TestRun><ResultSummary><Counters total=\"3\" ",
+    "trx-doctype" => TrxWithDoctype(),
+    "junit-pass" => JUnit(8, 0, 0, 1),
+    "junit-fail" => JUnit(8, 2, 1, 1),
+    "junit-nested" => JUnitNested(),
+    "junit-malformed" => "<testsuites><testsuite name=\"a\"></testsuites>",
+    "huge" => Huge(),
+    "junit-secret" => JUnitWithSecret(),
+    _ => null,
+};
+
+static string Trx(int total, int passed, int failed, int notExecuted) =>
+    "<?xml version=\"1.0\" encoding=\"utf-8\"?>"
+    + "<TestRun id=\"11111111-1111-1111-1111-111111111111\" "
+    + "xmlns=\"http://microsoft.com/schemas/VisualStudio/TeamTest/2010\">"
+    + "<Times creation=\"2026-01-01T10:00:00.0000000+00:00\" queuing=\"2026-01-01T10:00:00.0000000+00:00\" "
+    + "start=\"2026-01-01T10:00:00.0000000+00:00\" finish=\"2026-01-01T10:00:09.0000000+00:00\" />"
+    + "<ResultSummary outcome=\"Completed\"><Counters total=\"" + total.ToString(CultureInfo.InvariantCulture)
+    + "\" executed=\"" + (total - notExecuted).ToString(CultureInfo.InvariantCulture)
+    + "\" passed=\"" + passed.ToString(CultureInfo.InvariantCulture)
+    + "\" failed=\"" + failed.ToString(CultureInfo.InvariantCulture)
+    + "\" error=\"0\" timeout=\"0\" aborted=\"0\" inconclusive=\"0\" notExecuted=\""
+    + notExecuted.ToString(CultureInfo.InvariantCulture)
+    + "\" /></ResultSummary></TestRun>";
+
+static string TrxOutcomes() =>
+    "<?xml version=\"1.0\" encoding=\"utf-8\"?>"
+    + "<TestRun xmlns=\"http://microsoft.com/schemas/VisualStudio/TeamTest/2010\"><Results>"
+    + "<UnitTestResult testName=\"a\" outcome=\"Passed\" />"
+    + "<UnitTestResult testName=\"b\" outcome=\"Failed\" />"
+    + "<UnitTestResult testName=\"c\" outcome=\"NotExecuted\" />"
+    + "<UnitTestResult testName=\"d\" outcome=\"Interstellar\" />"
+    + "</Results></TestRun>";
+
+static string TrxWithDoctype() =>
+    "<?xml version=\"1.0\" encoding=\"utf-8\"?>"
+    + "<!DOCTYPE TestRun [<!ENTITY xxe SYSTEM \"file:///c:/windows/win.ini\">]>"
+    + "<TestRun><ResultSummary><Counters total=\"1\" passed=\"1\" /></ResultSummary>"
+    + "<Comment>&xxe;</Comment></TestRun>";
+
+static string JUnit(int tests, int failures, int errors, int skipped) =>
+    "<?xml version=\"1.0\" encoding=\"utf-8\"?>"
+    + "<testsuites name=\"fixture\" tests=\"" + tests.ToString(CultureInfo.InvariantCulture)
+    + "\" failures=\"" + failures.ToString(CultureInfo.InvariantCulture)
+    + "\" errors=\"" + errors.ToString(CultureInfo.InvariantCulture)
+    + "\" skipped=\"" + skipped.ToString(CultureInfo.InvariantCulture)
+    + "\" time=\"4.5\"><testsuite name=\"inner\" tests=\""
+    + tests.ToString(CultureInfo.InvariantCulture) + "\" failures=\""
+    + failures.ToString(CultureInfo.InvariantCulture) + "\" errors=\""
+    + errors.ToString(CultureInfo.InvariantCulture) + "\" skipped=\""
+    + skipped.ToString(CultureInfo.InvariantCulture) + "\" /></testsuites>";
+
+static string JUnitNested() =>
+    "<?xml version=\"1.0\" encoding=\"utf-8\"?>"
+    + "<testsuites>"
+    + "<testsuite name=\"outer\">"
+    + "<testsuite name=\"leaf-1\" tests=\"5\" failures=\"1\" errors=\"0\" skipped=\"1\" />"
+    + "<testsuite name=\"leaf-2\" tests=\"4\" failures=\"0\" errors=\"1\" skipped=\"0\" />"
+    + "</testsuite>"
+    + "</testsuites>";
+
+static string Huge()
+{
+    var builder = new StringBuilder(20 * 1024 * 1024);
+    builder.Append("<testsuites tests=\"1\" failures=\"0\" errors=\"0\" skipped=\"0\"><testsuite name=\"");
+    builder.Append('x', 17 * 1024 * 1024);
+    builder.Append("\" tests=\"1\" failures=\"0\" errors=\"0\" skipped=\"0\" /></testsuites>");
+    return builder.ToString();
+}
+
+static string JUnitWithSecret() =>
+    "<?xml version=\"1.0\" encoding=\"utf-8\"?>"
+    + "<testsuites name=\"fixture\" tests=\"2\" failures=\"0\" errors=\"0\" skipped=\"0\" time=\"1.0\">"
+    + "<testsuite name=\"inner\" tests=\"2\" failures=\"0\" errors=\"0\" skipped=\"0\">"
+    + "<system-out>configured with "
+    + CoreX.Hub.ProcessFixture.SyntheticSecrets.OpenAiToken
+    + " and "
+    + CoreX.Hub.ProcessFixture.SyntheticSecrets.ConnectionString
+    + "</system-out></testsuite></testsuites>";
+
+//   secrets <stdout|stderr|both>
+//
+// Emits every synthetic secret family so a test can prove the persisted evidence contains
+// none of them. The values are deliberately fake and exist only in this fixture.
+
+static int WriteSecrets(string[] args)
+{
+    var where = args.Length > 1 ? args[1] : "both";
+    var payload = CoreX.Hub.ProcessFixture.SyntheticSecrets.Payload();
+
+    if (where is "stdout" or "both")
+    {
+        Console.Out.Write(payload);
+        Console.Out.Flush();
+    }
+
+    if (where is "stderr" or "both")
+    {
+        Console.Error.Write(payload);
+        Console.Error.Flush();
+    }
+
+    return 0;
+}
+
+namespace CoreX.Hub.ProcessFixture
+{
+    /// <summary>
+    /// Synthetic credentials used only by the redaction tests. Nothing here is real, and
+    /// nothing here is a credential for any system: the values exist so a test can prove
+    /// they never reach a stored evidence blob.
+    /// </summary>
+    public static class SyntheticSecrets
+    {
+        public const string OpenAiToken = "sk-corexSYNTHETIC0000000000000000abcd";
+
+        public const string GitHubToken = "ghp_corexSYNTHETIC0000000000000000abcd";
+
+        public const string AwsAccessKey = "AKIACOREXSYNTHETIC00";
+
+        public const string Jwt =
+            "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJjb3JleC1zeW50aGV0aWMifQ.c29tZXN5bnRoZXRpY3NpZ25hdHVyZQ";
+
+        public const string PasswordValue = "SyntheticCorexPassw0rd";
+
+        public const string ConnectionString =
+            "Server=localhost;Database=corex;User Id=corex;Password=" + PasswordValue + ";";
+
+        public const string AuthorizationHeaderValue = "Bearer synthetic-corex-header-value";
+
+        public const string PrivateKeyBody = "U1lOVEhFVElDLUNPUkVYLUtFWS1NQVRFUklBTA==";
+
+        /// <summary>Text that only looks like a secret and must survive redaction unchanged.</summary>
+        public static readonly string[] NearMisses =
+        [
+            "sketch-book was updated",
+            "skip-this-step",
+            "ghost_writer signed off",
+            "AKIA is a prefix and AKIASHORT is not a key",
+            "the user requested a password reset",
+            "eyJ is not a token on its own",
+            "Authorized: yes",
+        ];
+
+        public static string PrivateKeyBlock() =>
+            "-----BEGIN RSA PRIVATE KEY-----\n"
+            + PrivateKeyBody + "\n"
+            + PrivateKeyBody + "\n"
+            + "-----END RSA PRIVATE KEY-----";
+
+        public static string[] AllSecretValues() =>
+        [
+            OpenAiToken,
+            GitHubToken,
+            AwsAccessKey,
+            Jwt,
+            PasswordValue,
+            AuthorizationHeaderValue,
+            PrivateKeyBody,
+        ];
+
+        public static string Payload()
+        {
+            var builder = new System.Text.StringBuilder();
+            builder.AppendLine("openai=" + OpenAiToken);
+            builder.AppendLine("github=" + GitHubToken);
+            builder.AppendLine("aws=" + AwsAccessKey);
+            builder.AppendLine("jwt=" + Jwt);
+            builder.AppendLine("connection=" + ConnectionString);
+            builder.AppendLine("Authorization: " + AuthorizationHeaderValue);
+            builder.AppendLine("repeated=" + OpenAiToken);
+            builder.AppendLine(PrivateKeyBlock());
+
+            foreach (var line in NearMisses)
+            {
+                builder.AppendLine(line);
+            }
+
+            return builder.ToString();
+        }
+    }
 }

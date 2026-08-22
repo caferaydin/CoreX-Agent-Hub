@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Phase 4 machine verification module.
+
+    E.1 #4: this module references the domain catalog model and nothing else. Running a
+    process, validating a managed path, storing evidence and caching a baseline all arrive
+    through narrow ports that the composition layer implements with ProcessRunner,
+    FileSystemGuard and the evidence store.
+  -->
+
+  <ItemGroup>
+    <ProjectReference Include="..\CoreX.Hub.Domain\CoreX.Hub.Domain.csproj" />
+  </ItemGroup>
+
+</Project>

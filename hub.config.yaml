@@ -18,6 +18,13 @@ workspace:
   root: 'D:\cx'
   fixtureRoot: 'D:\cx\_fixtures'
 
+# Makine doğrulaması (Faz 4). Katalog DEĞİLDİR: veritabanına yazılmaz.
+verification:
+  # Mantiksal ad -> mutlak calistirilabilir yolu. Bir verification adimi YALNIZCA burada
+  # gecen bir anahtari kullanabilir; PATH'e guvenilmez, arac calisma zamaninda aranmaz.
+  executables:
+    dotnet: 'C:\Program Files\dotnet\dotnet.exe'
+
 organizations:
 
   # --- Geliştirme / Loop Zero fixture organizasyonu -------------------------
@@ -82,10 +89,17 @@ organizations:
                     resultParser: none
                   - name: test
                     executable: dotnet
-                    args: ['test', '--no-build']
+                    args:
+                      - 'test'
+                      - '--no-build'
+                      - '--logger'
+                      - 'trx;LogFileName=results.trx'
+                      - '--results-directory'
+                      - 'results'
                     timeoutSeconds: 1800
                     required: true
                     resultParser: trx
+                    resultPath: 'results/results.trx'
 
   # --- Sert izolasyon kapısı fixture'ı (ADR-0017 davranışını görünür kılar) --
   # Gerçek bir şirket DEĞİLDİR. Yalnızca kapı davranışının CLI'da gözlemlenmesi içindir.
