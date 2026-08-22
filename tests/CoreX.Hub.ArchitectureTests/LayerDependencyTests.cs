@@ -2,6 +2,7 @@ using System.Reflection;
 using CoreX.Hub.Application.Abstractions;
 using CoreX.Hub.Domain.Catalog;
 using CoreX.Hub.Execution.FileSystem;
+using CoreX.Hub.Workspace;
 using CoreX.Hub.Infrastructure.Persistence;
 
 namespace CoreX.Hub.ArchitectureTests;
@@ -17,6 +18,7 @@ public sealed class LayerDependencyTests
     private static readonly Assembly Application = typeof(IHubStore).Assembly;
     private static readonly Assembly Infrastructure = typeof(HubDbContext).Assembly;
     private static readonly Assembly Execution = typeof(FileSystemGuard).Assembly;
+    private static readonly Assembly WorkspaceModule = typeof(WorkspaceManager).Assembly;
     private static readonly Assembly Cli = typeof(Cli.HubCli).Assembly;
 
     [Fact]
@@ -73,14 +75,46 @@ public sealed class LayerDependencyTests
     }
 
     [Fact]
-    public void Nothing_depends_on_execution_yet()
+    public void Workspace_depends_on_nothing_but_the_base_class_library()
     {
-        // Phase 2 introduces the primitives; wiring them into the orchestrator is Phase 5.
-        foreach (var assembly in new[] { Domain, Application, Infrastructure, Cli })
+        // E.1 #4: the Phase 3 module is a leaf too. It reaches git and managed path trust
+        // through its own ports, which the composition layer implements.
+        var references = ReferencedNames(WorkspaceModule);
+
+        Assert.DoesNotContain(references, r => r.StartsWith("CoreX.Hub.", StringComparison.Ordinal));
+        Assert.DoesNotContain(references, r => r.StartsWith("Microsoft.EntityFrameworkCore", StringComparison.Ordinal));
+        Assert.DoesNotContain(references, r => r.StartsWith("YamlDotNet", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void The_two_lower_modules_do_not_know_each_other()
+    {
+        // Workspace must not reference Execution and Execution must not reference
+        // Workspace, however convenient it would be for either to do so.
+        Assert.DoesNotContain(
+            ReferencedNames(WorkspaceModule),
+            r => r.StartsWith("CoreX.Hub.Execution", StringComparison.Ordinal));
+
+        Assert.DoesNotContain(
+            ReferencedNames(Execution),
+            r => r.StartsWith("CoreX.Hub.Workspace", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Only_the_composition_layer_joins_workspace_and_execution()
+    {
+        var cli = ReferencedNames(Cli);
+
+        Assert.Contains("CoreX.Hub.Execution", cli);
+        Assert.Contains("CoreX.Hub.Workspace", cli);
+
+        // The orchestrator that consumes them is Phase 5, so the application layer still
+        // knows about neither.
+        foreach (var assembly in new[] { Domain, Application, Infrastructure })
         {
-            Assert.DoesNotContain(
-                ReferencedNames(assembly),
-                r => r.StartsWith("CoreX.Hub.Execution", StringComparison.Ordinal));
+            var references = ReferencedNames(assembly);
+            Assert.DoesNotContain(references, r => r.StartsWith("CoreX.Hub.Execution", StringComparison.Ordinal));
+            Assert.DoesNotContain(references, r => r.StartsWith("CoreX.Hub.Workspace", StringComparison.Ordinal));
         }
     }
 
@@ -93,7 +127,7 @@ public sealed class LayerDependencyTests
             "RabbitMQ.Client", "Confluent.Kafka", "Npgsql", "FluentValidation",
         ];
 
-        foreach (var assembly in new[] { Domain, Application, Infrastructure, Execution, Cli })
+        foreach (var assembly in new[] { Domain, Application, Infrastructure, Execution, WorkspaceModule, Cli })
         {
             var references = ReferencedNames(assembly);
             foreach (var name in forbidden)

@@ -9,6 +9,8 @@
   <ItemGroup>
     <ProjectReference Include="..\CoreX.Hub.Application\CoreX.Hub.Application.csproj" />
     <ProjectReference Include="..\CoreX.Hub.Infrastructure\CoreX.Hub.Infrastructure.csproj" />
+    <ProjectReference Include="..\CoreX.Hub.Execution\CoreX.Hub.Execution.csproj" />
+    <ProjectReference Include="..\CoreX.Hub.Workspace\CoreX.Hub.Workspace.csproj" />
   </ItemGroup>
 
   <ItemGroup>

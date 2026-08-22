@@ -14,12 +14,14 @@ public sealed class ForbiddenConstructTests
     private const string ProcessRunnerFileName = "ProcessRunner.cs";
     private const string FileSystemGuardFileName = "FileSystemGuard.cs";
     private const string ShellPolicyFileName = "ShellExecutablePolicy.cs";
+    private const string WorkspaceManagerFileName = "WorkspaceManager.cs";
 
     /// <summary>
     /// Modules on the managed execution filesystem trust boundary. Later execution
     /// facing projects are added here as their phases land.
     /// </summary>
-    private static readonly string[] ExecutionFacingModules = ["CoreX.Hub.Execution"];
+    private static readonly string[] ExecutionFacingModules =
+        ["CoreX.Hub.Execution", "CoreX.Hub.Workspace"];
 
     private static readonly Regex ProcessLaunchPattern =
         new(@"\bProcess\s*\.\s*Start\b|\bnew\s+ProcessStartInfo\b", RegexOptions.CultureInvariant);
@@ -121,6 +123,50 @@ public sealed class ForbiddenConstructTests
 
         Assert.NotNull(guard);
         Assert.Contains("ResolveLinkTarget", File.ReadAllText(guard), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Only_the_workspace_manager_may_create_a_commit()
+    {
+        // E.1 #7-A: git commit is centralised. Whether a commit is permitted at all - the
+        // K0..K3 gates - is Phase 5 and is deliberately not implemented yet.
+        AssertNoMatch(
+            new Regex(@"""commit""", RegexOptions.CultureInvariant),
+            allowedFileName: WorkspaceManagerFileName,
+            because: "E.1 #7-A: git commit belongs to WorkspaceManager.CreateResultCommit only.");
+    }
+
+    [Fact]
+    public void The_commit_exemption_is_not_vacuous()
+    {
+        var manager = RepoLayout.ProductionSourceFiles
+            .SingleOrDefault(f => string.Equals(Path.GetFileName(f), WorkspaceManagerFileName, StringComparison.Ordinal));
+
+        Assert.NotNull(manager);
+        Assert.Contains("CreateResultCommitAsync", File.ReadAllText(manager), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Production_code_contains_no_publishing_path()
+    {
+        // Push, merge, pull, fetch, publish and deploy have no production code path at all.
+        // Push appears only in test code, where it proves the blocking protections work.
+        AssertNoMatch(
+            new Regex(
+                @"""push""|""merge""|""pull""|""fetch""|""clone""",
+                RegexOptions.CultureInvariant),
+            allowedFileName: null,
+            because: "Phase 3 brief section 23: there is no production git publishing path.");
+    }
+
+    [Fact]
+    public void The_publishing_guard_scans_production_only()
+    {
+        // The guard would be meaningless if the tests that prove push is blocked were
+        // themselves scanned, so confirm the scanner only ever reads src/**.
+        Assert.All(
+            RepoLayout.ProductionSourceFiles,
+            f => Assert.StartsWith(RepoLayout.SourceRoot, f, StringComparison.OrdinalIgnoreCase));
     }
 
     [Fact]

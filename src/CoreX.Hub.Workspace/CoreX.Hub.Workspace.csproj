@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    CoreX.Hub.Workspace
+
+    Git and worktree isolation (architecture G, Phase 3).
+
+    E.1 #4: this module must not know CoreX.Hub.Execution, and Execution must not know
+    it. Git execution and managed path validation are reached through narrow ports that
+    the composition layer implements. Like Domain and Execution, this project references
+    no other CoreX.Hub project and no third-party package.
+  -->
+
+</Project>

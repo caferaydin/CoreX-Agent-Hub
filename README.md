@@ -14,7 +14,7 @@ Kabul edilmiş kararlar: [`docs/adr/`](docs/adr/) (ADR-0001 … ADR-0017).
 | Faz 0 | Mimari kaydı, ADR'ler, format kararları | **TAMAM** |
 | Faz 1 | Foundation + Domain + Persistence + CLI | **TAMAM** |
 | Faz 2 | ProcessRunner (Job Object), FileSystemGuard | **TAMAM** |
-| Faz 3 | Workspace / git / worktree | uygulanmadı |
+| Faz 3 | Workspace / git / worktree | **TAMAM** |
 | Faz 4 | Doğrulama motoru + kanıt deposu | uygulanmadı |
 | Faz 5 | Orchestrator + Context Pack + ScriptedAgentRuntime (Loop Zero) | uygulanmadı |
 | Faz 6 | ClaudeCodeRuntime | uygulanmadı |
@@ -25,9 +25,13 @@ Kabul edilmiş kararlar: [`docs/adr/`](docs/adr/) (ADR-0001 … ADR-0017).
 
 Faz 1 kataloğu, görev modelini, Ready kapısını, kalıcılığı ve CLI'ı kurar.
 
-Faz 2 yalnızca **yerel çalıştırma ilkellerini** ekler: tek süreç başlatma sınırı
-(`ProcessRunner`) ve yönetilen dosya sistemi güven sınırı (`FileSystemGuard`). Hâlâ git
-çağrılmaz, agent çalıştırılmaz, doğrulama komutu yürütülmez, orchestration pipeline yoktur.
+Faz 2 **yerel çalıştırma ilkellerini** ekler: tek süreç başlatma sınırı (`ProcessRunner`)
+ve yönetilen dosya sistemi güven sınırı (`FileSystemGuard`).
+
+Faz 3 **git/worktree izolasyonunu** ekler: repository ön kontrolü, base-commit sabitleme,
+izole agent worktree'si, worktree'ye özgü sertleştirme, kanıt toplama ve güvenli
+release/reconcile. Hâlâ agent çalıştırılmaz, doğrulama komutu yürütülmez, Context Pack
+üretilmez ve orchestration pipeline yoktur.
 
 ## Gereksinimler
 
@@ -54,6 +58,7 @@ dotnet test CoreX.Hub.slnx -c Release
 | `CoreX.Hub.Domain.Tests` | Saf domain kuralları: organizasyon izolasyon değişmezi, TaskKey, kabul kriterleri, Ready kapısı, kabul override kümesi |
 | `CoreX.Hub.Integration.Tests` | Gerçek SQLite: migration, WAL, kısıtlar, eşzamanlılık, seed determinizmi/idempotansı, organizasyon kapsamlama, CLI uçtan uca |
 | `CoreX.Hub.Execution.Tests` | Gerçek süreçler: exit code, akış tahliyesi, UTF-8/ANSI, ortam izolasyonu, soft/idle/hard timeout, iptal, süreç ağacı ölümü, yol güven sınırı (gerçek NTFS junction ile) |
+| `CoreX.Hub.Workspace.Tests` | Gerçek git: repo ön kontrolü, commit sabitleme, kirli kaynak izolasyonu, repo hook'unun etkisizleştirilmesi, iki katmanlı push engeli, kanıt toplama, beklenmeyen commit tespiti, release/orphan/reconcile |
 | `CoreX.Hub.ArchitectureTests` | Katman bağımlılık yönü, yasaklı kod yapıları (E.1 değişmezleri), domain sözlüğü |
 
 Testler yalnızca geçici dizinlerde ve fixture verisiyle çalışır. Hiçbir test gerçek bir
@@ -184,6 +189,8 @@ src/CoreX.Hub.Application     Use case'ler, portlar, yapılandırma sözleşmesi
 src/CoreX.Hub.Infrastructure  EF Core + SQLite, YAML okuyucu, tek IHubStore uygulaması.
 src/CoreX.Hub.Execution       Faz 2 çalıştırma ilkelleri. Hiçbir CoreX projesine ve
                               hiçbir paket'e bağımlı değil.
+src/CoreX.Hub.Workspace       Faz 3 git/worktree izolasyonu. Execution'a bağımlı DEĞİL;
+                              git ve yol güveni dar port'lar üzerinden gelir.
 src/CoreX.Hub.Cli             Faz 1'in tek arayüzü ve composition root'u.
 tests/                        Domain / Integration / Execution / Architecture testleri
                               + corex-fixture (deterministik test yardımcı exe'si).
@@ -227,3 +234,34 @@ kaçış tespiti. Sanal dosya sistemi ya da `File.*` sarmalayıcısı değildir.
 küçük bir yarış penceresi vardır. Bu pencerede oluşturulan bir torun süreç job'dan
 kaçabilir. Dondurulmuş mimari bunu Faz 2 için kabul eder; Faz 10 askıya alınmış süreç
 oluşturmayla kapatır.
+
+## Git / worktree izolasyonu (Faz 3)
+
+`WorkspaceManager` her execution için, **sabitlenmiş bir commit'ten** `agent/<taskKey>/<attempt>`
+branch'i üzerinde ayrı bir git worktree'si açar. Worktree kaynak reponun dışındadır, bu
+yüzden geliştiricinin kirli çalışma ağacı, izlenmeyen dosyaları ve `.gitignore`'lu sırları
+agent'a hiç ulaşmaz.
+
+**Güvenlik açıklaması (Faz 3):** `git worktree add` komutunun kendisi `post-checkout`
+hook'unu çalıştırır. Kendi `core.hooksPath`'ini ayarlayan bir repo, bu yüzden **ilk
+checkout sırasında** kod çalıştırabilir — sonradan yapılacak sertleştirme çok geç kalır.
+Bu davranış git 2.54.0.windows.1 üzerinde birebir üretildi. Bu nedenle Hub'ın hook
+yapılandırması **ilk checkout yapabilen komutta zaten etkilidir**: komut kapsamlı
+`GIT_CONFIG_COUNT` / `GIT_CONFIG_KEY_n` / `GIT_CONFIG_VALUE_n` ortamı kullanılır.
+E.1 #8 komut satırındaki `-c core.hooksPath` yapısını bir atlatma mekanizması olarak
+yasakladığı için o yol kullanılmaz.
+
+Kalıcı sertleştirme worktree kapsamlıdır (`extensions.worktreeConfig` + `git config
+--worktree`), böylece geliştiricinin ana worktree davranışı değişmez. Etkin ayarlar:
+Hub'a ait `core.hooksPath`, yönlendirilemez `remote.origin.pushurl`, etkisiz
+`credential.helper`, `core.longpaths=true`, `gc.auto=0`. **`pre-commit` hook'u yoktur** —
+Hub kendi sonuç commit'ini hiçbir atlatma bayrağı olmadan atabilmelidir.
+
+Yayınlama iki bağımsız katmanla engellenir: Hub'a ait `pre-push` hook'u ve
+yönlendirilemez push hedefi. Üretim kodunda **push/merge/pull/fetch kod yolu yoktur**;
+`git commit` yalnızca `WorkspaceManager.CreateResultCommit` içinde çağrılır. Beklenmeyen
+bir agent commit'i tespit edilir ve SHA'sı kaydedilir, ama **asla onarılmaz**: reset,
+rebase, amend, `branch -f` ve `update-ref` kod tabanında yoktur.
+
+Sonuç commit'i olmayan bir workspace otomatik olarak bırakılamaz; kaldırma başarısız
+olursa workspace `Orphaned` olarak **raporlanır**, zorla silinmez.

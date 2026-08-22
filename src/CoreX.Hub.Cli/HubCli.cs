@@ -12,7 +12,7 @@ namespace CoreX.Hub.Cli;
 public static class HubCli
 {
     public const string UsageText = """
-        CoreX Agent Hub CLI (Phase 1: catalog + task foundation)
+        CoreX Agent Hub CLI (catalog, tasks, git workspaces)
 
         usage: hub [global options] <group> <command> [options]
 
@@ -37,11 +37,18 @@ public static class HubCli
           hub task show <TASKKEY> [--org <slug>]
           hub task ready <TASKKEY> [--org <slug>] [--actor <name>]
 
+          hub workspace reconcile     --org <slug> --repo <slug>
+          hub workspace release       --org <slug> --repo <slug> --path <dir> --confirm
+          hub workspace purge-orphans --org <slug> --repo <slug> --confirm
+
         exit codes:
           0 success   1 usage   2 operation refused   3 ready gate not satisfied   70 unexpected
 
-        Phase 2 and later commands (run, accept, reject, evidence, workspace, doctor)
-        are intentionally not implemented yet.
+        Workspace commands never remove anything without --confirm, and an orphaned
+        worktree is always reported rather than deleted.
+
+        Later phase commands are intentionally not implemented yet:
+        run, accept, request-changes, reject, evidence, doctor.
         """;
 
     public static async Task<int> RunAsync(
@@ -78,6 +85,18 @@ public static class HubCli
                 args.GetOption("config"),
                 error,
                 ct);
+
+            if (group == "workspace")
+            {
+                // Workspace commands drive real git through ProcessRunner, which is
+                // Windows only by design (Job Object based process tree termination).
+                if (!OperatingSystem.IsWindows())
+                {
+                    throw new UsageException("Workspace commands require Windows.");
+                }
+
+                return await DispatchWorkspaceAsync(session, args, output, command, ct);
+            }
 
             return (group, command) switch
             {
@@ -117,4 +136,19 @@ public static class HubCli
             return ExitCodes.OperationFailed;
         }
     }
+
+    [System.Runtime.Versioning.SupportedOSPlatform("windows")]
+    private static async Task<int> DispatchWorkspaceAsync(
+        HubSession session,
+        ArgParser args,
+        TextWriter output,
+        string? command,
+        CancellationToken ct) =>
+        command switch
+        {
+            "reconcile" => await WorkspaceCommands.ReconcileAsync(session, args, output, ct),
+            "release" => await WorkspaceCommands.ReleaseAsync(session, args, output, ct),
+            "purge-orphans" => await WorkspaceCommands.PurgeOrphansAsync(session, args, output, ct),
+            _ => throw new UsageException($"Unknown command 'workspace {command}'. Run 'hub --help'."),
+        };
 }

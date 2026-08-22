@@ -6,6 +6,10 @@ using CoreX.Hub.Infrastructure.Configuration;
 using CoreX.Hub.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
 
+// Phase 2/3 introduced a CoreX.Hub.Execution namespace, so the domain type of the
+// same short name is aliased here to keep the reference unambiguous.
+using DomainExecution = CoreX.Hub.Domain.Executions.Execution;
+
 namespace CoreX.Hub.Integration.Tests;
 
 /// <summary>Migration, WAL and constraint evidence for the SQLite store (ADR-0013).</summary>
@@ -146,7 +150,7 @@ public sealed class PersistenceTests
         await using var db = hub.NewContext();
         var task = await db.Tasks.FirstAsync();
 
-        var execution = new Execution(
+        var execution = new DomainExecution(
             Guid.CreateVersion7(),
             task.OrganizationId,
             task.Id,
@@ -165,7 +169,7 @@ public sealed class PersistenceTests
         await Assert.ThrowsAsync<DbUpdateException>(() => db.SaveChangesAsync());
     }
 
-    private static AcceptanceDecision NewDecision(Execution execution) =>
+    private static AcceptanceDecision NewDecision(DomainExecution execution) =>
         new(
             Guid.CreateVersion7(),
             execution.OrganizationId,
