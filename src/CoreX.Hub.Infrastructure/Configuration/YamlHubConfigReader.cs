@@ -20,12 +20,20 @@ namespace CoreX.Hub.Infrastructure.Configuration;
 /// which would defeat the ADR-0017 hard isolation gate before domain validation ever
 /// sees the intended value.
 ///
-/// This is not a schema validation framework: it is the YAML stack's own strict mode.
+/// Duplicate mapping keys are rejected for the same reason. YAML would otherwise let
+/// the last occurrence silently shadow the first, so
+/// <c>requiresHardIsolation: true</c> followed by <c>requiresHardIsolation: false</c>
+/// would quietly resolve to false and produce an Active organization. Effective
+/// configuration must never depend on which duplicate happened to come last.
+///
+/// This is not a schema validation framework and not a custom parser: both behaviours
+/// are the YAML stack's own strict modes.
 /// </summary>
 public sealed class YamlHubConfigReader : IHubConfigReader
 {
     private static readonly IDeserializer Deserializer = new DeserializerBuilder()
         .WithNamingConvention(CamelCaseNamingConvention.Instance)
+        .WithDuplicateKeyChecking()
         .Build();
 
     public HubConfig Read(string path)

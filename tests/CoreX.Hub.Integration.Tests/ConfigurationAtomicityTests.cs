@@ -103,6 +103,28 @@ public sealed class ConfigurationAtomicityTests
         Assert.True(recovered.MadeNoChanges);
     }
 
+    [Fact]
+    public async Task A_duplicate_key_leaves_a_seeded_catalog_untouched()
+    {
+        using var hub = TempHub.Create();
+
+        await PersistenceTests.SeedAsync(hub);
+        var before = await SnapshotAsync(hub);
+        Assert.NotEmpty(before);
+
+        await File.WriteAllTextAsync(
+            hub.ConfigPath,
+            ConfigurationDuplicateKeyTests.WithDuplicateKey(
+                "requiresHardIsolation: true",
+                "requiresHardIsolation: false"));
+
+        await Assert.ThrowsAsync<HubConfigurationException>(() => PersistenceTests.SeedAsync(hub));
+
+        // Row counts, values, UpdatedAtUtc stamps and the audit count are all part of
+        // the snapshot, so an unchanged snapshot means zero persisted mutation.
+        Assert.Equal(before, await SnapshotAsync(hub));
+    }
+
     private static async Task<string> SnapshotAsync(TempHub hub)
     {
         await using var db = hub.NewContext();

@@ -133,6 +133,20 @@ sayılmaz, yapılandırma yüklemesi hata verir ve CLI sıfırdan farklı bir ko
 ADR-0017 kapısını sessizce açamaz. Hata mesajı dosyayı, satır/sütunu ve sorunlu anahtarı
 adıyla bildirir; yapılandırma reddedildiğinde **hiçbir katalog satırı değişmez**.
 
+Aynı gerekçeyle **yinelenen YAML anahtarları** da reddedilir. YAML normalde son yazılanı
+kazandırır; bu, etkin yapılandırmayı belge sırasına bağlar ve
+`requiresHardIsolation: true` satırının hemen ardından gelen bir `false` satırının
+ADR-0017 kapısını sessizce açmasına yol açabilirdi.
+
+Ayrıştırıcı davranış matrisi:
+
+| Girdi | Sonuç |
+|---|---|
+| Bilinmeyen / yanlış yazılmış anahtar | REDDET |
+| Yinelenen anahtar | REDDET |
+| Geçersiz enum veya değer | REDDET |
+| Geçerli yapılandırma | KABUL |
+
 Depodaki `hub.config.yaml` yalnızca **fixture** değerleri içerir: gerçek ürün
 repository'si, gerçek Kronos verisi ve hiçbir sır içermez.
 
