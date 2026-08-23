@@ -2,6 +2,7 @@ using System.Runtime.Versioning;
 using CoreX.Hub.Agents.Abstractions;
 using CoreX.Hub.Execution.FileSystem;
 using CoreX.Hub.Execution.Processes;
+using CoreX.Hub.Workspace.Git;
 
 namespace CoreX.Hub.Cli.Agents;
 
@@ -12,17 +13,27 @@ namespace CoreX.Hub.Cli.Agents;
 /// E.1 #1 keeps its single launch point - job object, three level timeouts, bounded
 /// capture, empty based environment and the runtime no-shell policy - while E.1 #4 keeps
 /// the agents module free of any reference to the execution module.
+///
+/// It is also the one place every agent child passes through, which is why the git
+/// configuration baseline is applied here rather than inside a runtime. A runtime that had
+/// to remember to apply it would eventually be written by someone who did not, and the
+/// omission would be invisible: the child would simply start reading the developer's git
+/// configuration again.
 /// </summary>
 [SupportedOSPlatform("windows")]
 public sealed class ProcessAgentRunner : IAgentProcessRunner
 {
     private readonly FileSystemGuard _guard;
     private readonly ProcessRunner _runner;
+    private readonly string _gitConfigGlobalPath;
 
-    public ProcessAgentRunner(string trustRoot)
+    public ProcessAgentRunner(string trustRoot, string gitConfigGlobalPath)
     {
+        ArgumentException.ThrowIfNullOrWhiteSpace(gitConfigGlobalPath);
+
         _guard = FileSystemGuard.Create(trustRoot);
         _runner = new ProcessRunner(_guard);
+        _gitConfigGlobalPath = gitConfigGlobalPath;
     }
 
     public string TrustRoot => _guard.TrustRoot;
@@ -45,7 +56,7 @@ public sealed class ProcessAgentRunner : IAgentProcessRunner
                     Arguments = request.Arguments,
                     WorkingDirectory = request.WorkingDirectory,
                     EnvironmentAllowlist = request.EnvironmentAllowlist,
-                    AdditionalEnvironment = request.Environment,
+                    AdditionalEnvironment = ComposeEnvironment(request),
                     SoftTimeout = request.SoftTimeout,
                     IdleTimeout = request.IdleTimeout,
                     HardTimeout = request.HardTimeout,
@@ -74,6 +85,25 @@ public sealed class ProcessAgentRunner : IAgentProcessRunner
             Stderr = result.NormalizedStderr,
             StartFailureMessage = result.StartFailureMessage,
         };
+    }
+
+    /// <summary>
+    /// The runtime's own variables first, the git baseline on top.
+    ///
+    /// The order is the point: a runtime may add whatever its tool needs, and may not
+    /// weaken the configuration the child's git starts from, because the last writer wins
+    /// and it is never the runtime.
+    /// </summary>
+    private Dictionary<string, string> ComposeEnvironment(AgentProcessRequest request)
+    {
+        var environment = new Dictionary<string, string>(request.Environment, StringComparer.OrdinalIgnoreCase);
+
+        foreach (var entry in GitEnvironment.ForAgentChild(_gitConfigGlobalPath))
+        {
+            environment[entry.Key] = entry.Value;
+        }
+
+        return environment;
     }
 
     private static AgentProcessTermination Map(ProcessTerminationReason reason) => reason switch

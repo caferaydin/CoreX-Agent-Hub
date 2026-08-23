@@ -3,6 +3,7 @@ using CoreX.Hub.Agents.Abstractions;
 using CoreX.Hub.Agents.Scripted;
 using CoreX.Hub.Cli.Agents;
 using CoreX.Hub.Domain.Catalog;
+using CoreX.Hub.Workspace.Git;
 
 namespace CoreX.Hub.Agents.Tests;
 
@@ -20,13 +21,18 @@ public sealed class ScriptedFixture : IDisposable
         Root = root;
         WorkspaceRoot = Path.Combine(root, "workspace");
         ContextRoot = Path.Combine(root, "context");
+        GitControlRoot = Path.Combine(root, "git-control");
 
         Directory.CreateDirectory(WorkspaceRoot);
         Directory.CreateDirectory(ContextRoot);
 
         File.WriteAllText(Path.Combine(ContextRoot, "system.md"), "# contract\n");
 
-        Processes = new ProcessAgentRunner(WorkspaceRoot);
+        // The same Hub owned control files production materialises, so the adapter under
+        // test is wired the way it is wired for real.
+        var hooks = HubHooks.Materialise(GitControlRoot);
+
+        Processes = new ProcessAgentRunner(WorkspaceRoot, hooks.EmptyGlobalConfigPath);
     }
 
     public string Root { get; }
@@ -34,6 +40,8 @@ public sealed class ScriptedFixture : IDisposable
     public string WorkspaceRoot { get; }
 
     public string ContextRoot { get; }
+
+    public string GitControlRoot { get; }
 
     public ProcessAgentRunner Processes { get; }
 

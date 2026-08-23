@@ -86,7 +86,7 @@ public sealed class GateScenarioFixture : IDisposable
     {
         var runtime = new ScriptedAgentRuntime(
             new ScriptedAgentOptions { FixtureExecutablePath = FixtureExecutable, Mode = mode },
-            new ProcessAgentRunner(WorkspaceRoot));
+            new ProcessAgentRunner(WorkspaceRoot, Manager.Hooks.EmptyGlobalConfigPath));
 
         Environment.SetEnvironmentVariable("COREX_FIXTURE_GIT", Git);
 

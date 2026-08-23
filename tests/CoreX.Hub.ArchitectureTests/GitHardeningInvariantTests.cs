@@ -223,6 +223,227 @@ public sealed class GitHardeningInvariantTests
         Assert.Contains("HeadMismatch", code, StringComparison.Ordinal);
     }
 
+    // ------------------------------------------- WORKTREE SCOPED HARDENING (G6-0) ------
+
+    [Fact]
+    public void No_working_tree_git_command_runs_before_the_safety_revalidation()
+    {
+        var method = ExtractMethod(ReadProductionFile(WorkspaceManagerFileName), "CaptureChangesAsync");
+
+        var revalidate = method.IndexOf("RevalidateSafetyAsync(", StringComparison.Ordinal);
+        Assert.True(revalidate >= 0, "CaptureChangesAsync must revalidate");
+
+        // Every command below reads or refreshes the working tree, which is what gives a
+        // filter driver or an attribute the chance to run a program. Reading HEAD before
+        // them is deliberate and safe: refs are not the working tree.
+        foreach (var dangerous in new[] { "[\"status\"", "[\"add\", \"-N\"", "[\"diff\"" })
+        {
+            var at = method.IndexOf(dangerous, StringComparison.Ordinal);
+
+            Assert.True(at > 0, $"CaptureChangesAsync should still issue {dangerous}");
+            Assert.True(revalidate < at, $"the safety revalidation must precede {dangerous}");
+        }
+    }
+
+    [Fact]
+    public void The_workspace_revalidation_asks_all_four_questions()
+    {
+        var revalidation = WorkspaceRevalidation();
+
+        // Repository scope answers for what every worktree inherits; worktree scope for
+        // what this one worktree could change; hardening integrity for whether the durable
+        // protections are still the ones the Hub wrote; the working tree scan for the
+        // attribute files no commit contains. None of the four can answer for another.
+        Assert.Contains("InspectWorkingTreeAttributes(workspace.WorkspacePath)", revalidation, StringComparison.Ordinal);
+        Assert.Contains("InspectRepositorySafetyAsync(", revalidation, StringComparison.Ordinal);
+        Assert.Contains(
+            "InspectWorktreeConfigurationAsync(workspace.WorkspacePath", revalidation, StringComparison.Ordinal);
+        Assert.Contains(
+            "InspectWorkspaceHardeningAsync(workspace.WorkspacePath", revalidation, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void The_worktree_scoped_checks_are_addressed_by_the_workspace_not_the_repository()
+    {
+        var revalidation = WorkspaceRevalidation();
+
+        // The bug this replaces was exactly this: a workspace revalidation that forwarded
+        // to the repository path, so the mutable scope was never the one inspected.
+        foreach (var mustNot in new[]
+                 {
+                     "InspectWorktreeConfigurationAsync(workspace.RepositoryPath",
+                     "InspectWorkspaceHardeningAsync(workspace.RepositoryPath",
+                     "InspectWorkingTreeAttributes(workspace.RepositoryPath",
+                 })
+        {
+            Assert.DoesNotContain(mustNot, revalidation, StringComparison.Ordinal);
+        }
+    }
+
+    [Fact]
+    public void The_working_tree_attribute_scan_precedes_every_git_read_in_the_revalidation()
+    {
+        var revalidation = WorkspaceRevalidation();
+
+        var scan = revalidation.IndexOf("InspectWorkingTreeAttributes(", StringComparison.Ordinal);
+        var firstGit = revalidation.IndexOf("await Inspect", StringComparison.Ordinal);
+
+        Assert.True(scan >= 0 && firstGit > 0);
+        Assert.True(scan < firstGit, "the filesystem owned scan needs no git and must run first");
+    }
+
+    [Fact]
+    public void The_working_tree_attribute_scan_never_asks_git_to_find_the_files()
+    {
+        var scan = ExtractOverload(
+            ReadProductionFile(WorkspaceManagerFileName), "InspectWorkingTreeAttributes", "EnumerationOptions");
+
+        // Asking git to enumerate the working tree is itself one of the operations whose
+        // safety this scan exists to establish.
+        Assert.DoesNotContain("GitAsync(", scan, StringComparison.Ordinal);
+        Assert.Contains("Directory", scan, StringComparison.Ordinal);
+
+        // Reparse trust and containment stay with the managed path boundary.
+        Assert.Contains("_paths.Validate(", scan, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void The_safety_inspection_only_ever_reads_configuration()
+    {
+        var source = ReadProductionFile(WorkspaceManagerFileName);
+
+        foreach (var (methodName, marker) in new[]
+                 {
+                     ("InspectConfigurationScopeAsync", "scopeLabel"),
+                     ("ReadWorktreeSettingAsync", "--get-all"),
+                 })
+        {
+            var commands = ConfigCommandLines(ExtractOverload(source, methodName, marker));
+
+            // Non vacuous: the method really does issue configuration commands.
+            Assert.NotEmpty(commands);
+
+            foreach (var line in commands)
+            {
+                var reads = line.Contains("--list", StringComparison.Ordinal)
+                            || line.Contains("--get-all", StringComparison.Ordinal);
+
+                Assert.True(reads, $"{methodName} must only read configuration, not write it: {line}");
+            }
+        }
+
+        // The hardening assertion delegates its reads and issues no command of its own, so
+        // there is nowhere in it for a write to hide.
+        var assertion = ExtractOverload(source, "AssertHardeningAsync", "ReadWorktreeSettingAsync(");
+        Assert.Empty(ConfigCommandLines(assertion));
+    }
+
+    [Fact]
+    public void Configuration_is_written_in_exactly_one_place()
+    {
+        var source = ReadProductionFile(WorkspaceManagerFileName);
+
+        // Every configuration command in the module is either a read or one of the two
+        // writes that establish the hardening in the first place. There is no third kind,
+        // which is what makes "drift is refused, never repaired" a property of the code
+        // rather than a promise in a comment.
+        var writes = ConfigCommandLines(source)
+            .Where(l => !l.Contains("--list", StringComparison.Ordinal)
+                        && !l.Contains("--get", StringComparison.Ordinal))
+            .ToList();
+
+        Assert.Equal(
+            [
+                "[\"config\", \"--local\", GitConfigKeys.WorktreeConfigExtension, \"true\"],",
+                "[\"config\", \"--worktree\", setting.Key, setting.Value],",
+            ],
+            writes.Order(StringComparer.Ordinal));
+
+        var harden = ExtractOverload(source, "HardenAsync", "WorktreeConfigExtension");
+        Assert.Equal(2, ConfigCommandLines(harden).Count);
+
+        Assert.DoesNotContain("--unset", source, StringComparison.Ordinal);
+        Assert.DoesNotContain("--replace-all", source, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Both_configuration_scopes_share_one_unsupported_family_authority()
+    {
+        var source = ReadProductionFile(WorkspaceManagerFileName);
+
+        // Two scopes, one list. A second list would be a second thing to remember.
+        Assert.Single(
+            source.Split('\n'),
+            l => l.Contains("foreach (var family in UnsupportedConfigurationFamilies)", StringComparison.Ordinal));
+
+        foreach (var file in RepoLayout.ProductionSourceFiles)
+        {
+            Assert.DoesNotContain(
+                "WorktreeUnsupportedConfigurationFamilies",
+                File.ReadAllText(file),
+                StringComparison.Ordinal);
+        }
+
+        // And both scopes really do reach that one list.
+        Assert.Contains("SharedConfigurationScope, \"repository-local\"", source, StringComparison.Ordinal);
+        Assert.Contains("WorktreeConfigurationScope, \"worktree-scoped\"", source, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void The_agent_child_launch_adapter_applies_the_git_baseline_last()
+    {
+        var adapter = ReadProductionFile("ProcessAgentRunner.cs");
+
+        Assert.Contains("AdditionalEnvironment = ComposeEnvironment(request)", adapter, StringComparison.Ordinal);
+
+        var compose = ExtractOverload(adapter, "ComposeEnvironment", "ForAgentChild(");
+
+        var runtimeValues = compose.IndexOf("request.Environment", StringComparison.Ordinal);
+        var baseline = compose.IndexOf("GitEnvironment.ForAgentChild(", StringComparison.Ordinal);
+
+        Assert.True(runtimeValues >= 0 && baseline > 0);
+        Assert.True(baseline > runtimeValues, "the baseline must be applied after the runtime's own variables");
+
+        // The baseline is the Hub git baseline, not a second copy of it.
+        var environment = ReadProductionFile(GitEnvironmentFileName);
+        Assert.Contains("ForAgentChild(string emptyGlobalConfigPath) =>", environment, StringComparison.Ordinal);
+        Assert.Contains("Base(emptyGlobalConfigPath);", environment, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void The_native_windows_phase_six_shell_boundary_is_recorded()
+    {
+        var adr = Directory
+            .EnumerateFiles(Path.Combine(RepoLayout.Root, "docs", "adr"), "ADR-0020-*.md")
+            .SingleOrDefault();
+
+        Assert.True(adr is not null, "the native Windows agent shell boundary must be recorded as an ADR");
+
+        var text = File.ReadAllText(adr!);
+
+        // The decision, the reason it is not a policy claim, and the condition for revisiting.
+        Assert.Contains("Bash", text, StringComparison.Ordinal);
+        Assert.Contains("--disallowedTools", text, StringComparison.Ordinal);
+        Assert.Contains("--no-verify", text, StringComparison.Ordinal);
+        Assert.Contains("Accepted", text, StringComparison.Ordinal);
+
+        var index = File.ReadAllText(Path.Combine(RepoLayout.Root, "docs", "adr", "README.md"));
+        Assert.Contains("ADR-0020", index, StringComparison.Ordinal);
+    }
+
+    private static string WorkspaceRevalidation() =>
+        ExtractOverload(
+            ReadProductionFile(WorkspaceManagerFileName),
+            "RevalidateSafetyAsync",
+            "InspectWorkspaceHardeningAsync(");
+
+    /// <summary>Every git configuration command the source issues, one per line.</summary>
+    private static List<string> ConfigCommandLines(string source) =>
+        [.. source
+            .Split('\n')
+            .Select(l => l.Trim())
+            .Where(l => l.StartsWith("[\"config\"", StringComparison.Ordinal))];
+
     private static string ReadProductionFile(string fileName)
     {
         var path = RepoLayout.ProductionSourceFiles

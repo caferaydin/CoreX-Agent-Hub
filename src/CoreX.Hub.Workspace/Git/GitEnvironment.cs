@@ -63,6 +63,26 @@ public static class GitEnvironment
         };
 
     /// <summary>
+    /// The configuration a managed AGENT child process must start from.
+    ///
+    /// Deliberately the same values as <see cref="Base" />, and deliberately expressed as a
+    /// forward to it rather than as a second literal set: the git the Hub runs and the git
+    /// an agent runs itself have to see one configuration, not two.
+    ///
+    /// The asymmetry this closes was measured, not imagined. Everything above was supplied
+    /// per Hub command through the environment, so a child process that ran git on its own
+    /// read the developer's system and global files instead: a credential helper the Hub
+    /// had reset, a line ending policy the Hub did not apply, filter drivers the Hub never
+    /// saw. The same worktree answered two different questions depending on who asked.
+    ///
+    /// It is not a boundary against a deliberate agent - configuration is caller
+    /// overridable by anything holding a shell - and it is not claimed as one. It makes
+    /// the child's starting configuration deterministic and equal to the Hub's.
+    /// </summary>
+    public static Dictionary<string, string> ForAgentChild(string emptyGlobalConfigPath) =>
+        Base(emptyGlobalConfigPath);
+
+    /// <summary>
     /// Base configuration plus command scoped overrides that must be effective before the
     /// command executes. Used for every checkout capable command.
     /// </summary>

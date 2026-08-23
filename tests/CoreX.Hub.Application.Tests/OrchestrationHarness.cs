@@ -147,7 +147,7 @@ public sealed class OrchestrationHarness : IAsyncDisposable
         {
             ["scripted"] = new ScriptedAgentRuntime(
                 new ScriptedAgentOptions { FixtureExecutablePath = FixtureExecutable, Mode = Mode },
-                new ProcessAgentRunner(WorkspaceRoot)),
+                new ProcessAgentRunner(WorkspaceRoot, WorkspaceManager.Hooks.EmptyGlobalConfigPath)),
         };
 
         IExecutionWorkspace workspace = new WorkspaceGateway(

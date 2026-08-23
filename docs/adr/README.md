@@ -29,6 +29,7 @@ v1.1.1 esas alınır.
 | ADR-0017 | Kronos onboarding sert izolasyon doğrulanana kadar kod ile bloke | Accepted |
 | ADR-0018 | Doğrulama çalıştırılabilirleri allowlist ile çözülür; parser adımı rapor yolunu bildirir | Accepted |
 | ADR-0019 | Baseline anahtarı repository + base commit + profil hash'idir; baseline izin değildir | Accepted |
+| ADR-0020 | Faz 6 native Windows gerçek-agent profili kabuk (Bash) açmaz | Accepted |
 
 ## Onaylanmış Faz 0 format kararları
 

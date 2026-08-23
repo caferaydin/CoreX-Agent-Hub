@@ -141,7 +141,8 @@ public sealed class ExecutionComposition
                 new ContextPackBuilder(new FileSystemGuardContextPathGuard()),
                 contextRoot,
                 _ => new ContextRepositoryFacts(repository.DefaultBranch, repository.ProtectedBranches)),
-            new AgentGateway(BuildRuntimes(config, config.Workspace.Root)),
+            new AgentGateway(BuildRuntimes(
+                config, config.Workspace.Root, workspaceManager.Hooks.EmptyGlobalConfigPath)),
             verifier,
             new EvidenceGateway(evidenceStore),
             new ExecutionSafetyGates(new SecretGuard(new CatalogSecretScanner())),
@@ -162,7 +163,10 @@ public sealed class ExecutionComposition
     /// gets an honest "no runtime is registered under that key" from the gateway rather than
     /// something that happens to be lying around.
     /// </summary>
-    private static IReadOnlyDictionary<string, IAgentRuntime> BuildRuntimes(HubConfig config, string workspaceRoot)
+    private static IReadOnlyDictionary<string, IAgentRuntime> BuildRuntimes(
+        HubConfig config,
+        string workspaceRoot,
+        string gitConfigGlobalPath)
     {
         var runtimes = new Dictionary<string, IAgentRuntime>(StringComparer.OrdinalIgnoreCase);
 
@@ -194,7 +198,7 @@ public sealed class ExecutionComposition
 
             runtimes[declared.Key] = new ScriptedAgentRuntime(
                 new ScriptedAgentOptions { FixtureExecutablePath = fixturePath, Mode = mode },
-                new ProcessAgentRunner(workspaceRoot));
+                new ProcessAgentRunner(workspaceRoot, gitConfigGlobalPath));
         }
 
         return runtimes;
