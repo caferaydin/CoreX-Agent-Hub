@@ -140,11 +140,9 @@ public sealed class GitHelperHardeningTests
 
         var author = await fixture.RequireGitAsync(
             prepared.Workspace.WorkspacePath, "log", "-1", "--format=%an <%ae>");
-        // Read from the Hub identity rather than a copied literal, so the assertion cannot
-        // drift away from the value the commit actually uses.
-        Assert.Equal(
-            $"{GitEnvironment.HubCommitterName} <{GitEnvironment.HubCommitterEmail}>",
-            author);
+        // The literal the architecture fixes, not whatever the constant currently holds:
+        // production and test must not be able to drift together.
+        Assert.Equal("CoreX Agent Hub <agent@corex.local>", author);
 
         var signature = await fixture.RequireGitAsync(
             prepared.Workspace.WorkspacePath, "log", "-1", "--format=%G?");

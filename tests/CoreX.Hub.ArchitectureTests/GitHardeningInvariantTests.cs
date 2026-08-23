@@ -79,6 +79,43 @@ public sealed class GitHardeningInvariantTests
             Workspace.WorkspaceManager.UnsupportedConfigurationFamilies.Order(StringComparer.Ordinal));
     }
 
+    [Fact]
+    public void Worktree_creation_and_hardening_share_one_repository_critical_section()
+    {
+        var method = ExtractMethod(ReadProductionFile(WorkspaceManagerFileName), "PrepareAsync");
+
+        var acquire = method.IndexOf("gate.WaitAsync(", StringComparison.Ordinal);
+        var add = method.IndexOf("[\"worktree\", \"add\"", StringComparison.Ordinal);
+        var harden = method.IndexOf("HardenAsync(", StringComparison.Ordinal);
+        var release = method.IndexOf("gate.Release()", StringComparison.Ordinal);
+
+        Assert.True(acquire >= 0, "PrepareAsync must acquire the repository lock");
+        Assert.True(release > acquire, "PrepareAsync must release the repository lock");
+
+        // Both shared metadata mutations belong to the same section: the worktree add and
+        // the hardening that rewrites <repo>/.git/config. Hardening drifting back outside
+        // the lock is exactly the race this guards against.
+        Assert.InRange(add, acquire, release);
+        Assert.InRange(harden, acquire, release);
+    }
+
+    [Fact]
+    public void The_repository_lock_is_keyed_by_a_normalised_repository_path()
+    {
+        var source = ReadProductionFile(WorkspaceManagerFileName);
+
+        // Every acquisition goes through the one key function, so two spellings of one
+        // repository can never take two locks.
+        var acquisitions = source
+            .Split('\n')
+            .Where(l => l.Contains("RepositoryLocks.GetOrAdd", StringComparison.Ordinal))
+            .ToList();
+
+        Assert.NotEmpty(acquisitions);
+        Assert.All(acquisitions, l =>
+            Assert.Contains("RepositoryLockKey(", l, StringComparison.Ordinal));
+    }
+
     private static string ReadProductionFile(string fileName)
     {
         var path = RepoLayout.ProductionSourceFiles

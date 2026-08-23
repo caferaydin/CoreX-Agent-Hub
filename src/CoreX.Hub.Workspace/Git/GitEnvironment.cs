@@ -35,8 +35,19 @@ public static class GitEnvironment
         ["SystemRoot", "windir", "TEMP", "TMP", "PATH", "PATHEXT", "ProgramFiles",
          "ProgramFiles(x86)", "LOCALAPPDATA", "NUMBER_OF_PROCESSORS", "COMSPEC"];
 
+    /// <summary>
+    /// Deterministic machine identity for Hub created result commits, fixed by the
+    /// architecture (ADIM 3: <c>user.name="CoreX Agent Hub"</c>,
+    /// <c>user.email="agent@corex.local"</c>).
+    ///
+    /// This is not a contact address and must never be replaced by a person, an
+    /// organisation mailbox, the current Windows user or the developer's global git
+    /// identity: a result commit has to stay mechanically attributable to the Hub.
+    /// </summary>
     public const string HubCommitterName = "CoreX Agent Hub";
-    public const string HubCommitterEmail = "info@corexlogic.com";
+
+    /// <inheritdoc cref="HubCommitterName" />
+    public const string HubCommitterEmail = "agent@corex.local";
 
     /// <summary>
     /// Base configuration for every managed git command: no system config, an empty

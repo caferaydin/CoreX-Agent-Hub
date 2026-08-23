@@ -31,6 +31,29 @@ public sealed class WorkspaceManager
     private static readonly ConcurrentDictionary<string, SemaphoreSlim> RepositoryLocks =
         new(StringComparer.OrdinalIgnoreCase);
 
+    /// <summary>
+    /// Lock identity for one physical repository.
+    ///
+    /// Two calls that address the same repository must never take two different locks, so
+    /// the key is normalised the way Windows compares paths: a single separator form and
+    /// no trailing separator. Case is handled by the dictionary comparer. The path handed
+    /// in has already passed the managed path boundary, so this only removes the spelling
+    /// differences that boundary is allowed to preserve.
+    /// </summary>
+    public static string RepositoryLockKey(string repositoryPath)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(repositoryPath);
+
+        var normalised = repositoryPath
+            .Trim()
+            .Replace('/', Path.DirectorySeparatorChar);
+
+        // A root such as "D:\" keeps its separator; anything else loses the trailing one.
+        return normalised.Length > 3
+            ? normalised.TrimEnd(Path.DirectorySeparatorChar)
+            : normalised;
+    }
+
     private readonly IGitCommandExecutor _git;
     private readonly IWorkspacePathGuard _paths;
     private readonly WorkspaceOptions _options;
@@ -224,7 +247,14 @@ public sealed class WorkspaceManager
             return Failed(preflight, WorkspaceIssueCode.BranchAlreadyExists, request.BranchName);
         }
 
-        var gate = RepositoryLocks.GetOrAdd(repository, _ => new SemaphoreSlim(1, 1));
+        // Everything that mutates shared repository metadata runs inside one repository
+        // scoped critical section. Hardening belongs here as well, not only the worktree
+        // add: enabling extensions.worktreeConfig rewrites <repo>/.git/config, and every
+        // subsequent --worktree write has to read that same file. Leaving hardening
+        // outside the section let one preparation rewrite .git/config while another was
+        // reading it, which git reports on Windows as "unable to access .git/config:
+        // Permission denied".
+        var gate = RepositoryLocks.GetOrAdd(RepositoryLockKey(repository), _ => new SemaphoreSlim(1, 1));
         await gate.WaitAsync(cancellationToken);
 
         try
@@ -242,16 +272,16 @@ public sealed class WorkspaceManager
             {
                 return Failed(preflight, WorkspaceIssueCode.WorktreeAddFailed, add.Describe());
             }
+
+            var hardening = await HardenAsync(repository, workspacePath, cancellationToken);
+            if (hardening is not null)
+            {
+                return Failed(preflight, WorkspaceIssueCode.HardeningFailed, hardening);
+            }
         }
         finally
         {
             gate.Release();
-        }
-
-        var hardening = await HardenAsync(repository, workspacePath, cancellationToken);
-        if (hardening is not null)
-        {
-            return Failed(preflight, WorkspaceIssueCode.HardeningFailed, hardening);
         }
 
         return new WorkspacePreparationResult
@@ -490,7 +520,7 @@ public sealed class WorkspaceManager
             };
         }
 
-        var gate = RepositoryLocks.GetOrAdd(workspace.RepositoryPath, _ => new SemaphoreSlim(1, 1));
+        var gate = RepositoryLocks.GetOrAdd(RepositoryLockKey(workspace.RepositoryPath), _ => new SemaphoreSlim(1, 1));
         await gate.WaitAsync(cancellationToken);
 
         try
@@ -659,7 +689,22 @@ public sealed class WorkspaceManager
 
         if (!listed.Succeeded)
         {
-            // An empty local config exits non-zero; that is not a failure to report.
+            // git exits 1 with nothing on stderr when the listing is simply empty, which is
+            // not a finding. Anything else - an unreadable or momentarily locked config,
+            // for instance - means the scan did not happen, and a scan that did not happen
+            // must never be reported as "nothing unsafe found".
+            var listingWasEmpty = listed.Started
+                && listed.ExitCode == 1
+                && string.IsNullOrWhiteSpace(listed.Stderr);
+
+            if (!listingWasEmpty)
+            {
+                issues.Add(new RepositoryIssue(
+                    RepositoryIssueCode.UnsafeGitConfiguration,
+                    "the repository configuration could not be read, so it could not be "
+                    + $"checked for unsupported executable configuration ({listed.Describe()})"));
+            }
+
             return issues;
         }
 

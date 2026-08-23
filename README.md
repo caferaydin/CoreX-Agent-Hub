@@ -339,6 +339,11 @@ yönetilen komutlarda etkisizdir ve bu, kaynak taramasıyla değil, gerçek git 
 çalışan **davranışsal işaret (marker) testleriyle** doğrulanır. Yeni bir git sürümü
 yeni bir yürütme yüzeyi eklerse aynı yöntem tekrar uygulanmalıdır.
 
+## Katkı kuralları
+
+Çalışma akışı güvenlik önlemleri — beklenmeyen kirli çalışma ağacı, commit disiplini ve
+test disiplini — `CONTRIBUTING.md` dosyasındadır. Orası mimari karar içermez.
+
 ## Açık denetim kapıları
 
 | Kapı | Kapsam | Ne zaman kapanmalı |
