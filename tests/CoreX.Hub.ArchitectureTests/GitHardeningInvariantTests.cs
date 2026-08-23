@@ -68,7 +68,36 @@ public sealed class GitHardeningInvariantTests
         var materialise = ExtractOverload(source, "PrepareAsync", "[\"worktree\", \"add\"");
 
         Assert.DoesNotContain("await PreflightAsync(", materialise, StringComparison.Ordinal);
-        Assert.Contains("preflight.BaseCommitSha", materialise, StringComparison.Ordinal);
+
+        // The one form that turns a branch name into a commit belongs to the preflight and
+        // nowhere else. Here only the pinned commit is verified, as itself.
+        Assert.DoesNotContain("DefaultBranch + \"^{commit}\"", materialise, StringComparison.Ordinal);
+        Assert.Contains("preflight.BaseCommitSha + \"^{commit}\"", materialise, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Safety_is_revalidated_under_the_lock_and_before_anything_is_created()
+    {
+        var materialise = ExtractOverload(
+            ReadProductionFile(WorkspaceManagerFileName), "PrepareAsync", "[\"worktree\", \"add\"");
+
+        var acquire = materialise.IndexOf("gate.WaitAsync(", StringComparison.Ordinal);
+        var revalidate = materialise.IndexOf("RevalidateSafetyAsync(", StringComparison.Ordinal);
+        var pinned = materialise.IndexOf("preflight.BaseCommitSha + \"^{commit}\"", StringComparison.Ordinal);
+        var create = materialise.IndexOf("Directory.CreateDirectory(", StringComparison.Ordinal);
+        var add = materialise.IndexOf("[\"worktree\", \"add\"", StringComparison.Ordinal);
+        var harden = materialise.IndexOf("HardenAsync(", StringComparison.Ordinal);
+
+        Assert.True(revalidate >= 0, "the materialising overload must revalidate safety");
+
+        // Checking out is itself the dangerous operation - git worktree add runs hooks and
+        // filters - so noticing unsafe configuration afterwards and deleting the tree would
+        // mean the repository's program had already run. The order is the protection:
+        // lock, revalidate, verify the pin, then create.
+        Assert.InRange(revalidate, acquire, pinned);
+        Assert.InRange(pinned, revalidate, create);
+        Assert.InRange(create, pinned, add);
+        Assert.True(add < harden, "hardening follows the worktree it hardens");
     }
 
     [Fact]

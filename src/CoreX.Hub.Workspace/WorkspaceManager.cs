@@ -313,6 +313,39 @@ public sealed partial class WorkspaceManager
 
         try
         {
+            // Safety is re-read here, inside the lock and before anything exists, because
+            // the preflight may be old: a caller that pins a commit, records it and only
+            // then asks for a worktree leaves a window, and repository-local configuration
+            // is shared mutable state that anything can change inside it. Checking out is
+            // itself the dangerous operation - git worktree add runs filters and hooks - so
+            // noticing afterwards and deleting the tree would mean the unsafe program had
+            // already run.
+            //
+            // This is the same authority that guards staging and evidence collection, not a
+            // second policy: one place decides what unsafe configuration means.
+            if (await RevalidateSafetyAsync(repository, preflight.BaseCommitSha, cancellationToken)
+                is { } unsafeConfiguration)
+            {
+                return Failed(preflight, WorkspaceIssueCode.RepositoryUnusable, unsafeConfiguration);
+            }
+
+            // Provenance is untouched by that: the pinned commit is verified as itself, and
+            // the default branch is never consulted again. A branch that moved is allowed;
+            // configuration that turned unsafe is not.
+            var pinned = await GitAsync(
+                repository,
+                ["rev-parse", "--verify", "--quiet", preflight.BaseCommitSha + "^{commit}"],
+                cancellationToken);
+
+            if (!pinned.Succeeded)
+            {
+                return Failed(
+                    preflight,
+                    WorkspaceIssueCode.RepositoryUnusable,
+                    $"the pinned commit {preflight.BaseCommitSha[..12]} is no longer resolvable "
+                    + $"in '{repository}' ({pinned.Describe()})");
+            }
+
             Directory.CreateDirectory(Path.GetDirectoryName(workspacePath)!);
 
             // The worktree is created from the commit the preflight pinned, never from the
@@ -901,13 +934,23 @@ public sealed partial class WorkspaceManager
     /// that could invoke a repository configured helper. Configuration inspected when the
     /// workspace was created may since have changed.
     /// </summary>
-    private async Task<string?> RevalidateSafetyAsync(
+    private Task<string?> RevalidateSafetyAsync(
         PreparedWorkspace workspace,
+        CancellationToken cancellationToken) =>
+        RevalidateSafetyAsync(workspace.RepositoryPath, workspace.BaseCommitSha, cancellationToken);
+
+    /// <summary>
+    /// The single revalidation authority, addressed by repository and pinned commit rather
+    /// than by a workspace, so the boundary before a worktree exists can use the same one
+    /// as the boundaries after it.
+    /// </summary>
+    private async Task<string?> RevalidateSafetyAsync(
+        string repository,
+        string commit,
         CancellationToken cancellationToken)
     {
-        var issues = await InspectRepositoryConfigurationAsync(workspace.RepositoryPath, cancellationToken);
-        var attributes = await InspectTrackedAttributesAsync(
-            workspace.RepositoryPath, workspace.BaseCommitSha, cancellationToken);
+        var issues = await InspectRepositoryConfigurationAsync(repository, cancellationToken);
+        var attributes = await InspectTrackedAttributesAsync(repository, commit, cancellationToken);
 
         issues.AddRange(attributes.Issues);
 

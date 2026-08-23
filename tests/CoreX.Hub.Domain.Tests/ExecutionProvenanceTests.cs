@@ -111,31 +111,77 @@ public sealed class ExecutionProvenanceTests
         Assert.Equal(["RecordWorkspace"], setters);
     }
 
-    [Fact]
-    public void A_cancelled_execution_cannot_carry_a_result_commit()
+    [Theory]
+    [InlineData(ExecutionState.Failed)]
+    [InlineData(ExecutionState.TimedOut)]
+    [InlineData(ExecutionState.Cancelled)]
+    [InlineData(ExecutionState.Interrupted)]
+    public void No_terminal_error_state_can_carry_a_result_commit(ExecutionState terminal)
     {
+        // All four say the same thing about the attempt: it ended without a verdict and
+        // produced nothing. An execution holding a commit produced something, and the
+        // commit is in the repository whatever this row claims - so the row that would
+        // contradict it is refused, rather than the commit being quietly dropped to make
+        // the row fit.
         var execution = NewExecution();
         execution.RecordResultCommit(ResultCommit, DomainFixtures.Now);
 
         var refused = Assert.Throws<DomainException>(
-            () => execution.Terminate(ExecutionState.Cancelled, DomainFixtures.Now));
+            () => execution.Terminate(terminal, DomainFixtures.Now));
 
         Assert.Contains(ResultCommit, refused.Message, StringComparison.Ordinal);
+        Assert.Contains(terminal.ToString(), refused.Message, StringComparison.Ordinal);
+
+        // Fails closed: the commit survives and the execution is still open, so recovery
+        // remains somebody's decision instead of already having been made wrongly.
         Assert.Equal(ResultCommit, execution.ResultCommitSha);
         Assert.False(execution.IsTerminal);
     }
 
-    [Fact]
-    public void An_interrupted_execution_may_carry_one_because_it_really_does()
+    [Theory]
+    [InlineData(ExecutionState.Failed)]
+    [InlineData(ExecutionState.TimedOut)]
+    [InlineData(ExecutionState.Cancelled)]
+    [InlineData(ExecutionState.Interrupted)]
+    public void Every_terminal_error_state_stays_reachable_without_a_commit(ExecutionState terminal)
     {
-        // A host that died after the commit was created holds one. Refusing to say so would
-        // hide a real commit, which is the opposite of what the invariant is for.
         var execution = NewExecution();
-        execution.RecordResultCommit(ResultCommit, DomainFixtures.Now);
 
-        execution.Terminate(ExecutionState.Interrupted, DomainFixtures.Now);
+        execution.Terminate(terminal, DomainFixtures.Now);
 
-        Assert.Equal(ExecutionState.Interrupted, execution.State);
-        Assert.Equal(ResultCommit, execution.ResultCommitSha);
+        Assert.Equal(terminal, execution.State);
+        Assert.Null(execution.Outcome);
+        Assert.Null(execution.ResultCommitSha);
+        Assert.True(execution.WorktreeMustBePreserved);
+    }
+
+    [Fact]
+    public void A_completed_outcome_still_decides_its_own_result_commit()
+    {
+        // The other half of the matrix, unchanged: outcomes that produce a commit require
+        // one, outcomes that never do must not carry one.
+        var passing = NewExecution();
+        Assert.Throws<DomainException>(() => passing.Complete(ExecutionOutcome.Passed, DomainFixtures.Now));
+
+        passing.RecordResultCommit(ResultCommit, DomainFixtures.Now);
+        passing.Complete(ExecutionOutcome.Passed, DomainFixtures.Now);
+        Assert.Equal(ExecutionOutcome.Passed, passing.Outcome);
+
+        var blocked = NewExecution();
+        blocked.RecordResultCommit(ResultCommit, DomainFixtures.Now);
+
+        foreach (var outcome in new[]
+                 {
+                     ExecutionOutcome.ScopeViolation,
+                     ExecutionOutcome.SecretGuardBlocked,
+                     ExecutionOutcome.RuntimePolicyViolation,
+                 })
+        {
+            Assert.Throws<DomainException>(() => blocked.Complete(outcome, DomainFixtures.Now));
+        }
+
+        var clean = NewExecution();
+        clean.Complete(ExecutionOutcome.ScopeViolation, DomainFixtures.Now);
+        Assert.Equal(ExecutionOutcome.ScopeViolation, clean.Outcome);
     }
 }

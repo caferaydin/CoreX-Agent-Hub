@@ -45,6 +45,7 @@ public sealed class OrchestrationLeaseTests
         var reconciled = Assert.Single(report.Interrupted);
         Assert.Equal(execution.Id, reconciled.ExecutionId);
         Assert.Contains("gone", reconciled.Reason, StringComparison.Ordinal);
+        Assert.Empty(report.RecoveryRequired);
 
         var afterwards = await hub.ExecutionAsync(execution.Id);
         Assert.Equal(ExecutionState.Interrupted, afterwards.State);

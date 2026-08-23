@@ -100,22 +100,33 @@ public sealed class DomainInvariantTests
     }
 
     [Fact]
-    public void A_terminal_cancelled_execution_can_never_carry_a_result_commit()
+    public void No_terminal_error_state_can_ever_carry_a_result_commit()
     {
-        // Cancelled means "no commit was produced", so the aggregate refuses to be told
-        // otherwise. The invariant lives in the model rather than in the caller, because a
-        // pipeline that reached for Cancelled after committing would otherwise produce a row
-        // that contradicts itself and no reader could resolve.
-        var execution = NewExecution();
-        execution.RecordResultCommit("9876543210fedcba9876543210fedcba98765432", Now);
+        // Failed, TimedOut, Cancelled and Interrupted are terminal but not Completed, so
+        // they carry no outcome - and an attempt with no outcome produced nothing. The
+        // invariant lives in the model rather than in each caller, because a pipeline or a
+        // reconciler that reached one of these after a commit existed would otherwise write
+        // a row contradicting a repository it does not own.
+        var terminalErrorStates = Enum.GetValues<ExecutionState>()
+            .Where(s => ExecutionStateRules.IsTerminal(s) && !ExecutionStateRules.IsCompleted(s))
+            .ToList();
 
-        Assert.ThrowsAny<Exception>(() => execution.Terminate(ExecutionState.Cancelled, Now));
-        Assert.False(execution.IsTerminal);
+        Assert.Equal(4, terminalErrorStates.Count);
 
-        // The other terminal states stay reachable: a host that died after committing really
-        // does hold a commit, and hiding it would be the worse lie.
-        execution.Terminate(ExecutionState.Interrupted, Now);
-        Assert.Equal(ExecutionState.Interrupted, execution.State);
+        foreach (var state in terminalErrorStates)
+        {
+            var execution = NewExecution();
+            execution.RecordResultCommit("9876543210fedcba9876543210fedcba98765432", Now);
+
+            Assert.ThrowsAny<Exception>(() => execution.Terminate(state, Now));
+            Assert.False(execution.IsTerminal);
+            Assert.NotNull(execution.ResultCommitSha);
+
+            // Still reachable when the attempt really did produce nothing.
+            var empty = NewExecution();
+            empty.Terminate(state, Now);
+            Assert.Equal(state, empty.State);
+        }
     }
 
     [Fact]

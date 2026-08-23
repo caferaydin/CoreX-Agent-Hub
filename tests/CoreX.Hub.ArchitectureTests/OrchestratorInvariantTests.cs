@@ -217,6 +217,31 @@ public sealed class OrchestratorInvariantTests
     }
 
     [Fact]
+    public void The_unmaterialised_worktree_path_never_leaves_the_row_it_was_written_to()
+    {
+        // An execution exists before its worktree does, so its path is a placeholder for a
+        // while. That is tolerable only as long as nothing treats it as a location: it is
+        // written once, at construction, and no other production file mentions it - so no
+        // filesystem or git call can be reached with it.
+        var mentions = RepoLayout.ProductionSourceFiles
+            .Where(f => File.ReadAllText(f).Contains("(not created yet)", StringComparison.Ordinal))
+            .Select(Path.GetFileName)
+            .Order(StringComparer.Ordinal)
+            .ToList();
+
+        Assert.Equal(["ExecutionOrchestrator.Persistence.cs"], mentions);
+
+        // And it is spelled as a sentence, not as a path: nothing can accidentally combine,
+        // root or resolve it into something that looks real.
+        Assert.Contains(
+            "(not created yet)",
+            File.ReadAllText(RepoLayout.ProductionSourceFiles.Single(f =>
+                string.Equals(
+                    Path.GetFileName(f), "ExecutionOrchestrator.Persistence.cs", StringComparison.Ordinal))),
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Cancellation_immunity_is_bounded_rather_than_absolute()
     {
         // CancellationToken.None is immunity with no end to it. The mandatory sections do
@@ -240,6 +265,32 @@ public sealed class OrchestratorInvariantTests
             StringComparison.Ordinal);
 
         Assert.Throws<ArgumentOutOfRangeException>(() => new MandatoryWorkScope(TimeSpan.Zero));
+    }
+
+    [Fact]
+    public void The_reconciler_looks_for_a_result_commit_before_it_writes_a_terminal_state()
+    {
+        var source = File.ReadAllText(RepoLayout.ProductionSourceFiles.Single(f =>
+            string.Equals(Path.GetFileName(f), "StaleExecutionReconciler.cs", StringComparison.Ordinal)));
+
+        var code = CodeOnly(source);
+
+        var checkedForCommit = code.IndexOf("execution.ResultCommitSha is", StringComparison.Ordinal);
+        var terminate = code.IndexOf("execution.Terminate(", StringComparison.Ordinal);
+
+        Assert.True(checkedForCommit >= 0, "the reconciler must ask whether a result commit exists");
+        Assert.True(terminate > checkedForCommit, "it must ask before it writes a terminal state");
+
+        // The stranded case is a reconciliation result, never a state or an outcome, so no
+        // new vocabulary was invented to make it persistable.
+        Assert.DoesNotContain("ExecutionState.RecoveryRequired", code, StringComparison.Ordinal);
+        Assert.DoesNotContain("ExecutionOutcome.", code, StringComparison.Ordinal);
+        Assert.DoesNotContain("TaskState.Accepted", code, StringComparison.Ordinal);
+
+        Assert.DoesNotContain(
+            "RecoveryRequired",
+            string.Join("\n", Enum.GetNames<Domain.Executions.ExecutionState>()),
+            StringComparison.Ordinal);
     }
 
     [Fact]

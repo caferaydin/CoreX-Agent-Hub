@@ -130,6 +130,11 @@ public sealed partial class Execution
     /// Ends the pipeline without a verdict: the agent failed, ran out of time, was
     /// cancelled, or the host died. These carry no outcome by design - failure lives on
     /// the execution and never becomes a judgement about the work.
+    ///
+    /// None of them may carry a result commit. Failed, TimedOut, Cancelled and Interrupted
+    /// all assert that this attempt produced nothing, so an execution holding a commit
+    /// cannot be described by any of them; the commit is real and stays, and the state that
+    /// would contradict it is refused instead.
     /// </summary>
     public void Terminate(ExecutionState terminalState, DateTimeOffset nowUtc)
     {
@@ -144,16 +149,18 @@ public sealed partial class Execution
             throw new DomainException($"Execution {Id} is already {State}.");
         }
 
-        // A cancelled execution is defined as one that produced no result commit, so an
-        // execution that already made one cannot be turned into a cancellation. Interrupted
-        // deliberately stays legal: a host that died after the commit was created really
-        // does hold one, and pretending otherwise would hide it. Nothing here removes,
-        // rewrites or disowns a commit to make a state fit.
-        if (terminalState == ExecutionState.Cancelled && ResultCommitSha is not null)
+        // Every terminal error state means the same thing: this attempt ended without a
+        // verdict and produced nothing. An execution that already made a result commit
+        // produced something, so none of them can describe it - and the way out is never to
+        // drop the commit from the record, because the commit exists in the repository
+        // whatever this row says. Reaching one of these states here would create a row that
+        // contradicts the repository, so it fails closed and the recovery stays somebody
+        // else's decision.
+        if (ResultCommitSha is not null)
         {
             throw new DomainException(
                 $"Execution {Id} already recorded result commit {ResultCommitSha}, so it cannot end as "
-                + "Cancelled: that state means no commit was produced.");
+                + $"{terminalState}: a terminal error state means no commit was produced.");
         }
 
         State = terminalState;
