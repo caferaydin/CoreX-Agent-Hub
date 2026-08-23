@@ -176,6 +176,104 @@ public sealed class ProviderNeutralityTests
         }
     }
 
+    // -------------------------------------- ACTIVE NOW: local and self hosted --------
+
+    [Fact]
+    public void Active_a_self_hosted_agent_profile_is_representable_today()
+    {
+        // Not every provider is a cloud service. A locally hosted harness has to be
+        // expressible without touching a single type, so this builds one.
+        var local = NewProfile(provider: "self-hosted", runtimeKey: "local-agent", model: "qwen3-coder");
+
+        Assert.Equal("self-hosted", local.Provider);
+        Assert.Equal("local-agent", local.RuntimeKey);
+        Assert.Equal("qwen3-coder", local.Model);
+
+        // Not every runtime owns its model either: a harness that decides the model itself
+        // leaves the field empty rather than being forced to invent a value.
+        var harnessOwned = NewProfile(provider: "custom", runtimeKey: "custom-cli", model: null);
+        Assert.Null(harnessOwned.Model);
+
+        // And nothing rejects an identifier just because no Hub code has heard of it.
+        foreach (var (provider, runtime) in new[]
+                 {
+                     ("self-hosted", "local-agent"), ("vendor-x", "custom-cli"),
+                     ("on-prem", "qwen-code"), ("workstation", "scripted"),
+                 })
+        {
+            var profile = NewProfile(provider, runtime, model: null);
+            Assert.Equal(provider, profile.Provider);
+            Assert.Equal(runtime, profile.RuntimeKey);
+        }
+    }
+
+    [Fact]
+    public void Active_the_catalog_declares_no_credential_or_endpoint_field()
+    {
+        // Authentication is not always an API key, and a local endpoint is not always a
+        // URL, so the catalog commits to neither. A runtime that needs credentials gets
+        // them from its own configured environment, not from a Hub column.
+        string[] forbidden =
+        [
+            "ApiKey", "Token", "Secret", "Credential", "Password",
+            "BaseUrl", "Endpoint", "Url", "Host", "Port", "Auth",
+        ];
+
+        foreach (var type in new[] { typeof(AgentProfile), typeof(Application.Configuration.AgentProfileConfig) })
+        {
+            foreach (var property in type.GetProperties())
+            {
+                foreach (var word in forbidden)
+                {
+                    Assert.False(
+                        property.Name.Contains(word, StringComparison.OrdinalIgnoreCase),
+                        $"{type.Name}.{property.Name} assumes {word}");
+                }
+            }
+        }
+    }
+
+    [Fact]
+    public void Active_no_inference_client_or_model_gateway_surface_exists()
+    {
+        // No LLM gateway, no model router, no vendor SDK and no HTTP client: Phase 5 talks
+        // to a harness through ProcessRunner, and a future local backend is that harness's
+        // own business.
+        string[] forbidden =
+        [
+            "HttpClient", "HttpRequestMessage", "WebRequest", "WebSocket", "TcpClient",
+            "RestClient", "Ollama", "vLLM", "LiteLLM", "OpenAI", "ChatCompletion",
+        ];
+
+        foreach (var file in RepoLayout.ProductionSourceFiles)
+        {
+            var name = RepoLayout.Relative(file);
+
+            // The secret pattern catalog names an OPENAI token shape. That is a secret to
+            // redact, not a backend to call, and the exemption is proven below.
+            if (string.Equals(Path.GetFileName(file), SecretCatalogFileName, StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            var code = CodeOnly(File.ReadAllText(file));
+
+            foreach (var construct in forbidden)
+            {
+                Assert.False(code.Contains(construct, StringComparison.OrdinalIgnoreCase), $"{name}: {construct}");
+            }
+        }
+
+        // Non vacuous exemption: the one skipped file really is the secret catalog, and it
+        // really does contain the token name, so the skip cannot quietly cover a client.
+        var catalog = RepoLayout.ProductionSourceFiles
+            .Single(f => string.Equals(Path.GetFileName(f), SecretCatalogFileName, StringComparison.Ordinal));
+
+        var catalogCode = CodeOnly(File.ReadAllText(catalog));
+        Assert.Contains("OPENAI_TOKEN", catalogCode, StringComparison.Ordinal);
+        Assert.DoesNotContain("HttpClient", catalogCode, StringComparison.Ordinal);
+    }
+
     // ------------------------------------------------------- ARMED FOR PHASE 5 --------
 
     [Fact]
@@ -285,7 +383,43 @@ public sealed class ProviderNeutralityTests
         }
     }
 
+    [Fact]
+    public void Armed_orchestration_knows_nothing_about_model_backends()
+    {
+        // The orchestrator drives a harness. Which model that harness reaches, and how it
+        // authenticates, is never its concern - so a base URL or a key has no business in
+        // orchestration source, local backend or not.
+        Assert.NotEmpty(FindBackendConcepts("var client = new HttpClient { BaseAddress = baseUrl };"));
+        Assert.NotEmpty(FindBackendConcepts("options.ApiKey = profile.ApiKey;"));
+        Assert.Empty(FindBackendConcepts("var runtime = registry.Resolve(profile.RuntimeKey);"));
+
+        foreach (var file in OrchestrationSourceFiles())
+        {
+            var offenders = FindBackendConcepts(CodeOnly(File.ReadAllText(file)));
+            Assert.Empty(offenders.Select(o => $"{RepoLayout.Relative(file)}: {o}"));
+        }
+    }
+
     // ------------------------------------------------------------------ helpers -------
+
+    private const string SecretCatalogFileName = "SecretPatternCatalog.cs";
+
+    private static AgentProfile NewProfile(string provider, string runtimeKey, string? model) =>
+        new(
+            Guid.CreateVersion7(),
+            Guid.CreateVersion7(),
+            "compat-probe",
+            AgentRole.Implementer,
+            provider,
+            runtimeKey,
+            AgentPermissionProfile.WorkspaceWrite,
+            model,
+            null,
+            300,
+            600,
+            1800,
+            DateTimeOffset.UnixEpoch);
+
 
     /// <summary>
     /// Source files that will make up orchestration. Discovered by name so the guards
@@ -311,6 +445,12 @@ public sealed class ProviderNeutralityTests
 
         return ProviderWords.Any(w =>
             path.Contains($"{separator}{w}", StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static IReadOnlyList<string> FindBackendConcepts(string code)
+    {
+        string[] concepts = ["HttpClient", "BaseAddress", "BaseUrl", "ApiKey", "Endpoint", "ChatCompletion"];
+        return [.. concepts.Where(c => code.Contains(c, StringComparison.OrdinalIgnoreCase))];
     }
 
     private static IReadOnlyList<string> FindProviderNames(string code) =>

@@ -368,6 +368,55 @@ uygulanır; diğerleri bugün ne çağrılır ne de yazılır.
   çalıştırılabilir + `argv[]` + ilan edilmiş yetenekler + ortam allowlist'i +
   `ProcessRunner` yaşam döngüsü. Kabuk komut dizesi yoktur.
 
+### Yerel / kendi barındırılan modeller
+
+Sağlayıcı bağımsızlığı **bulut SaaS ile sınırlı değildir.** Kullanıcı modeli vLLM,
+Ollama, OpenAI uyumlu bir uç nokta, kendi HTTP çıkarım servisi veya yerel kurulu bir
+harness üzerinden çalıştırabilir. Bu yüzden iki kavram ayrı tutulur:
+
+1. **Agent runtime / harness** — Hub'ın süreç olarak çalıştırdığı şey
+2. **O harness'in kullandığı model / backend** — Hub'ın **bilmediği** şey
+
+`ClaudeCodeRuntime` modeli Claude Code'un kendi kimlik doğrulamalı çalışma zamanından
+alır; `QwenCodeRuntime` Qwen Code'un yapılandırılmış backend'ini kullanır;
+`CustomCliRuntime` rastgele yerel bir kodlama-agent'ı çalıştırılabilirini sarar. İleride
+bir `LocalAgentRuntime` altında vLLM/Ollama/OpenAI-uyumlu bir uç nokta olabilir — **bu
+Hub'ın sorunu değildir.**
+
+Varsayılmayanlar (hepsi test edilir):
+
+- provider'ın Claude/Codex/Gemini/Qwen'den biri olması gerekmez,
+- provider'ın API anahtarı gerektirmesi gerekmez — kimlik doğrulama her zaman
+  anahtar/OAuth değildir,
+- çalıştırılabilirin bir bulut satıcısına ait olması gerekmez,
+- modelin uzakta barındırılması gerekmez,
+- runtime'ın modele sahip olması gerekmez (`model` alanı **boş bırakılabilir**).
+
+Katalogda **kimlik bilgisi veya uç nokta alanı yoktur**: `ApiKey`, `Token`, `BaseUrl`,
+`Endpoint`, `Host`, `Port` gibi bir kolon ne domain'de ne yapılandırmadadır. Kimlik
+bilgisine ihtiyaç duyan bir harness onu kendi yapılandırılmış ortamından alır.
+
+Bugün şu profil **hiçbir tip veya şema değişmeden** ifade edilebiliyor (test ediliyor:
+`SelfHostedProfileTests`):
+
+```yaml
+- name: local-implementer
+  role: Implementer
+  provider: self-hosted
+  runtimeKey: local-agent
+  model: qwen3-coder        # harness modele sahipse tamamen atlanabilir
+  permissionProfile: WorkspaceWrite
+  softTimeoutSeconds: 300
+  idleTimeoutSeconds: 600
+  hardTimeoutSeconds: 1800
+```
+
+Yukarıdaki `backend: { kind: openai-compatible, baseUrl: … }` tarzı bir nesne **Faz 5'te
+eklenmez.** Mevcut yapılandırma bunu gerçekten gerektirmedikçe şema büyütülmez: erken LLM
+gateway soyutlaması yok, LiteLLM klonu yok, genel sağlayıcı SDK'sı yok, model router yok.
+Faz 5 hiçbir vLLM/Ollama/model HTTP istemcisi uygulamaz — `src/` altında bugün
+`HttpClient` dahil hiçbir çıkarım istemcisi yüzeyi yoktur ve bu da test edilir.
+
 Bu kısıtlar `tests/CoreX.Hub.ArchitectureTests/ProviderNeutralityTests.cs` içinde iki
 grupta test edilir: bugün geçerli olan **ACTIVE** guard'lar ve ilgili üretim tipi ortaya
 çıktığı anda gerçekten denetim yapmaya başlayan **ARMED** guard'lar. Bir ARMED guard,
