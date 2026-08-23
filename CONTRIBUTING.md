@@ -33,6 +33,64 @@ kimliğini bozdu; kural bu olaydan sonra yazıldı.
 - Commit mesajı ne yapıldığını **ve neden** yapıldığını anlatır; kırılan bir değişmez
   varsa adıyla anılır.
 
+## Test çalıştırma politikası (Faz 5'ten itibaren)
+
+Her sınırlı dilimden sonra tüm çözümü koşturmak yok. **Etki tabanlı** test edilir: neyin
+değiştiği, hangi test kümesini gerektirir.
+
+| Değişen | Koşulacak | Koşulmayacak |
+|---|---|---|
+| **Tek modül, yerel değişiklik** | o modülün test assembly'si + `ArchitectureTests` | Execution / Workspace / Verification testleri (üretim kodu veya sözleşmesi elleniyorsa hariç) |
+| **Paylaşılan sözleşme** | üreten modül + **doğrudan** etkilenen tüketiciler + `ArchitectureTests` | gerçek bağımlılık etkisinin dışı |
+| **`ProcessRunner` / `FileSystemGuard`** | `Execution.Tests` + doğrudan etkilenen integration + `ArchitectureTests` | pahalı süreç-ağacı ve junction senaryoları — yalnızca o sınır gerçekten değiştiyse ya da faz kapanışında |
+| **Workspace / git üretim kodu** | `Workspace.Tests` + `ArchitectureTests` | 50 iterasyonluk eşzamanlılık stresi (aşağıya bak) |
+| **Verification / Evidence** | `Verification.Tests` + ilgili integration + `ArchitectureTests` | Workspace/Execution (sözleşmeleri değişmedikçe) |
+| **Domain / config / persistence / EF modeli** | `Domain.Tests` + `Integration.Tests` + `ArchitectureTests` | — |
+| **Yalnızca test veya doküman** | değişen test assembly'si (+ guard değiştiyse `ArchitectureTests`) | tam çözüm koşusu **gerekmez** |
+
+Derleme, güvenilir olduğu yerde etkilenen projelerle sınırlanabilir.
+
+**Eşzamanlılık stres süiti** (`RepositoryConcurrencyStressTests`, 50 iterasyon) yalnızca şu
+durumlarda zorunludur: kilitleme/eşzamanlılık kodu değiştiyse · repository metadata yaşam
+döngüsü değiştiyse · bilinen bir race araştırılıyorsa · faz kapanış regresyonu yapılıyorsa.
+İlgisiz değişiklikler için koşulmaz.
+
+`dotnet ef migrations has-pending-model-changes` **yalnızca** EF/domain persistence modeli
+makul biçimde değişmiş olabilecekse koşulur. Doküman veya yalnız-mimari-testi
+değişikliklerinde koşulmaz.
+
+### Faz kapanışı (tek yetkili tam regresyon)
+
+Büyük bir fazın sonunda **bir kez**:
+
+```
+dotnet restore CoreX.Hub.slnx
+dotnet build   CoreX.Hub.slnx -c Release --no-restore
+dotnet test    CoreX.Hub.slnx -c Release --no-build
+```
+Beklenen: 0 failed · 0 skipped · 0 warning.
+
+### Güvenlik istisnası
+
+Faz kapanışından önce de tam regresyon koşulabilir — ama **refleksle değil**, gerekçesi
+yazılarak. Geçerli gerekçeler kesişen bir güvenlik sınırının değişmesidir: `ProcessRunner` ·
+`FileSystemGuard` · Workspace git sertleştirmesi · kanıt redaksiyonu · persistence işlem
+semantiği · Execution durum makinesi · Acceptance durum makinesi · birden çok modülü
+etkileyen paylaşılan runtime sözleşmesi.
+
+### Raporlama zorunluluğu
+
+Her uygulama raporu şunları yazar:
+
+```
+TEST SCOPE:           Focused | Expanded | Full
+WHY:                  hangi değişen üretim sınırı bu kapsamı gerektirdi
+TESTS RUN:            hangi assembly'ler / hangi odaklı senaryolar
+DEFERRED REGRESSION:  bilinçli olarak koşulmayanlar ve neden etkilenmedikleri
+```
+
+Bağımlılık yüzeyine dokunulmadıysa **"koşulmadı" bir eksiklik değildir**; öyle sunulmaz.
+
 ## Test disiplini
 
 - Kaynak dizesi taraması davranışsal testin **yerine geçmez**; yanına eklenir.
