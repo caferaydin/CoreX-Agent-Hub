@@ -241,6 +241,108 @@ public sealed class AcceptanceInvariantTests
         }
     }
 
+    [Fact]
+    public void Review_blocking_is_decided_in_exactly_one_place()
+    {
+        // A per-finding boolean cannot express the rule: a Critical blocks alone, a Major
+        // blocks by count. So the judgement lives on the collection, and nothing else may
+        // keep a second copy of it.
+        var deciders = RepoLayout.ProductionSourceFiles
+            .Where(f => CodeOnly(File.ReadAllText(f))
+                .Contains("FindingSeverity.Critical", StringComparison.Ordinal))
+            .Select(f => Path.GetFileName(f))
+            .Order(StringComparer.Ordinal)
+            .ToList();
+
+        Assert.Equal(["ReviewFindingGate.cs"], deciders);
+
+        // Acceptance asks the gate rather than restating it, and keeps no threshold of
+        // its own.
+        foreach (var file in AcceptanceSourceFiles())
+        {
+            var code = CodeOnly(File.ReadAllText(file));
+            var name = RepoLayout.Relative(file);
+
+            Assert.False(code.Contains("FindingSeverity", StringComparison.Ordinal), $"{name}");
+            Assert.False(code.Contains("MajorThreshold", StringComparison.Ordinal), $"{name}");
+            Assert.False(code.Contains("OutOfScope", StringComparison.Ordinal), $"{name}");
+        }
+
+        Assert.Contains(
+            "ReviewFindingGate.HasBlockingFindings",
+            File.ReadAllText(RepoLayout.ProductionSourceFiles.Single(f =>
+                string.Equals(Path.GetFileName(f), "AcceptanceService.Rules.cs", StringComparison.Ordinal))),
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Minor_and_info_can_never_block_and_out_of_scope_never_counts()
+    {
+        // Asserted against the gate itself rather than its source text, so the rule is
+        // proven rather than pattern matched.
+        Assert.False(ReviewFindingGate.HasBlockingFindings([Finding(FindingSeverity.Minor)]));
+        Assert.False(ReviewFindingGate.HasBlockingFindings([Finding(FindingSeverity.Info)]));
+
+        Assert.True(ReviewFindingGate.HasBlockingFindings([Finding(FindingSeverity.Critical)]));
+        Assert.True(ReviewFindingGate.HasBlockingFindings([Finding(FindingSeverity.Major)]));
+
+        foreach (var severity in Enum.GetValues<FindingSeverity>())
+        {
+            Assert.False(ReviewFindingGate.HasBlockingFindings([Finding(severity, outOfScope: true)]));
+        }
+
+        // The frozen default. Moving it is G7-1, and it moves here.
+        Assert.Equal(1, ReviewFindingGate.MajorThreshold);
+    }
+
+    [Fact]
+    public void Cleanup_happens_after_the_decision_and_only_the_workspace_removes_a_worktree()
+    {
+        var rules = File.ReadAllText(RepoLayout.ProductionSourceFiles.Single(f =>
+            string.Equals(Path.GetFileName(f), "AcceptanceService.Rules.cs", StringComparison.Ordinal)));
+
+        var service = File.ReadAllText(RepoLayout.ProductionSourceFiles.Single(f =>
+            string.Equals(Path.GetFileName(f), "AcceptanceService.cs", StringComparison.Ordinal)));
+
+        // The decision is saved before cleanup is even called, in both routes.
+        foreach (var route in service.Split("await _store.SaveChangesAsync(ct);").Skip(1))
+        {
+            Assert.Contains("ReleaseWorkspaceAsync", route, StringComparison.Ordinal);
+        }
+
+        Assert.True(
+            service.IndexOf("await _store.SaveChangesAsync(ct);", StringComparison.Ordinal)
+            < service.IndexOf("ReleaseWorkspaceAsync(", StringComparison.Ordinal),
+            "the decision must be committed before any cleanup is attempted");
+
+        // Nothing here removes anything itself; it asks a port.
+        foreach (var construct in new[] { "\"worktree\"", "Directory.Delete", "File.Delete", "--force" })
+        {
+            Assert.False(rules.Contains(construct, StringComparison.Ordinal), construct);
+            Assert.False(service.Contains(construct, StringComparison.Ordinal), construct);
+        }
+
+        // And it never offers an execution with no commit for release.
+        Assert.Contains("WorkspaceCleanupOutcome.DeniedNoResultCommit", rules, StringComparison.Ordinal);
+        Assert.Contains("execution.ResultCommitSha is null", rules, StringComparison.Ordinal);
+    }
+
+    private static Finding Finding(FindingSeverity severity, bool outOfScope = false) =>
+        new(
+            Guid.CreateVersion7(),
+            Guid.CreateVersion7(),
+            Guid.CreateVersion7(),
+            severity,
+            FindingCategory.Correctness,
+            "A concern",
+            "It would break.",
+            "src/thing.cs",
+            1,
+            null,
+            FindingConfidence.High,
+            outOfScope,
+            new DateTimeOffset(2026, 8, 22, 12, 0, 0, TimeSpan.Zero));
+
     private static string CodeOnly(string source) =>
         string.Join(
             "\n",

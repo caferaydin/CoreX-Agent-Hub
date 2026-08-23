@@ -26,11 +26,22 @@ public sealed partial class AcceptanceService
 
     private readonly IHubStore _store;
     private readonly VerificationTruthReader _truth;
+    private readonly IExecutionWorkspaceRelease? _release;
 
-    public AcceptanceService(IHubStore store, VerificationTruthReader truth)
+    /// <summary>
+    /// <paramref name="release"/> is optional because cleanup is not part of the decision.
+    /// Without it a decision is still recorded in full and simply reports that no worktree
+    /// was released - which is the honest description of a Hub that has no workspace
+    /// attached, and never a reason to refuse a person's answer.
+    /// </summary>
+    public AcceptanceService(
+        IHubStore store,
+        VerificationTruthReader truth,
+        IExecutionWorkspaceRelease? release = null)
     {
         _store = store ?? throw new ArgumentNullException(nameof(store));
         _truth = truth ?? throw new ArgumentNullException(nameof(truth));
+        _release = release;
     }
 
     /// <summary>
@@ -122,7 +133,11 @@ public sealed partial class AcceptanceService
 
         await _store.SaveChangesAsync(ct);
 
-        return ResultFor(target, decision, machine.Results);
+        // The decision is now recorded. Everything below is housekeeping, and nothing it
+        // does can take that back.
+        var cleanup = await ReleaseWorkspaceAsync(target, decision, nowUtc, ct);
+
+        return ResultFor(target, decision, machine.Results, cleanup);
     }
 
     /// <summary>
@@ -195,13 +210,16 @@ public sealed partial class AcceptanceService
 
         await _store.SaveChangesAsync(ct);
 
-        return ResultFor(target, decision, []);
+        var cleanup = await ReleaseWorkspaceAsync(target, decision, nowUtc, ct);
+
+        return ResultFor(target, decision, [], cleanup);
     }
 
     private static AcceptanceResult ResultFor(
         DecisionTarget target,
         AcceptanceDecision decision,
-        IReadOnlyList<MachineCriterionResult> machine) => new()
+        IReadOnlyList<MachineCriterionResult> machine,
+        WorkspaceCleanupResult cleanup) => new()
     {
         TaskKey = target.Task.TaskKey.Value,
         ExecutionId = target.Execution.Id,
@@ -214,6 +232,7 @@ public sealed partial class AcceptanceService
         Reason = decision.Reason,
         MachineCriteria = machine,
         HumanVerdicts = decision.HumanCriterionVerdicts,
+        WorkspaceCleanup = cleanup,
     };
 
     private static AuditEvent AuditFor(

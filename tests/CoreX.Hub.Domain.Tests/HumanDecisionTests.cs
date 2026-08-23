@@ -138,28 +138,4 @@ public sealed class HumanDecisionTests
         Assert.Equal("needs another pass", task.BlockReason);
     }
 
-    [Fact]
-    public void A_finding_outside_the_diff_never_blocks()
-    {
-        // The only settled part of the blocking rule today. Which severities block is G7-1,
-        // to be calibrated when a reviewer exists, and is deliberately not guessed at.
-        Assert.False(Finding(outOfScope: true).IsBlocking);
-        Assert.True(Finding(outOfScope: false).IsBlocking);
-    }
-
-    private static Finding Finding(bool outOfScope) =>
-        new(
-            Guid.CreateVersion7(),
-            Guid.CreateVersion7(),
-            Guid.CreateVersion7(),
-            FindingSeverity.Major,
-            FindingCategory.Correctness,
-            "A blocking concern",
-            "It would break on the empty input.",
-            "src/thing.cs",
-            12,
-            null,
-            FindingConfidence.High,
-            outOfScope,
-            DomainFixtures.Now);
 }

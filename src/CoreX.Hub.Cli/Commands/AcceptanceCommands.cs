@@ -355,6 +355,13 @@ public static class AcceptanceCommands
             Output.WriteField(output, "Reason", reason);
         }
 
+        // Reported separately, and after the decision, because it is a different kind of
+        // fact: the decision above is recorded whatever this line says.
+        Output.WriteField(
+            output,
+            "Workspace cleanup",
+            $"{result.WorkspaceCleanup.Outcome} - {result.WorkspaceCleanup.Detail}");
+
         foreach (var verdict in result.HumanVerdicts)
         {
             output.WriteLine($"human verdict: {verdict.Verdict}"

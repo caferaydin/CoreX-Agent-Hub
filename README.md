@@ -631,6 +631,23 @@ otomatik kapı zaten execution outcome'udur.
 istenmez, yoksa liste okunmayan bir formaliteye dönerdi. Machine kriteri elle
 cevaplanamaz; ne serviste ne CLI'da böyle bir alan vardır.
 
+**Bloklayıcı bulgu bir küme kuralıdır.** Frozen J.4: kapsam içi `Critical` >= 1 **veya**
+kapsam içi `Major` >= eşik (frozen varsayılan **1**) bloklar; yalnızca `Minor`/`Info`
+bloklamaz; `outOfScope` hiçbir zaman saymaz. Bu tek bir yerde durur —
+`ReviewFindingGate.HasBlockingFindings` — çünkü tek bir bulguya "bloklayıcı mısın" diye
+sorulamaz: `Critical` tek başına, `Major` ise sayıyla bloklar. Bu yüzden `Finding` yalnızca
+`ParticipatesInReview` der; kararı küme verir. Override, execution'ın `ReviewBlocked`
+demesine güvenip kalmaz, aynı kapıyı tekrar sorar: kayıtlı bulgular bloklamıyorsa override
+reddedilir. **Major eşiğinin kalibrasyonu G7-1 / Faz 7'dir** ve aynı otoritede, tek bir
+sayıyı değiştirerek yapılır.
+
+**Karar sonrası worktree.** Frozen G.6: `Passed` + kabul/ret → worktree kaldırılır, branch
+ve result commit korunur, `WorkspaceState = Released`. Sıra kesindir: **önce** karar işlemi
+(Task geçişi + `AcceptanceDecision` + `AuditEvent`) commit edilir, **sonra** release
+denenir. Temizlik başarısızlığı kararı geri alamaz; ikisi ayrı ayrı raporlanır ve CLI
+"Workspace cleanup" satırını kararın yanında ayrı basar. `RequestChanges` ve override
+otomatik release **yapmaz**; commit'siz execution hiçbir zaman release edilmez (D6).
+
 **Karar hedefi açıktır.** `hub accept HUB-001#1` — attempt adı verilir, en yenisi
 tahmin edilmez. `LatestExecution` en yüksek `AttemptNo`'dur; daha yeni bir attempt varsa
 eskisi ne kabul edilebilir ne override edilebilir.

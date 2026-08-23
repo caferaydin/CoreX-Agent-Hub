@@ -72,13 +72,13 @@ public sealed class Finding
     public DateTimeOffset CreatedAtUtc { get; private set; }
 
     /// <summary>
-    /// Whether this finding is one a review override is answering for.
+    /// Whether this finding is counted when the review is judged.
     ///
-    /// Only one rule about this is settled today: a finding anchored outside the diff is an
-    /// observation and never blocks. The severity threshold - which of Critical, Major,
-    /// Minor actually blocks - is G7-1, to be calibrated against real reviewer output when
-    /// a reviewer exists, so it is deliberately not guessed at here. Guessing high would
-    /// silently narrow what a human is accepting responsibility for.
+    /// Deliberately not called "blocking". Whether a review blocks is a property of the
+    /// whole set - one Critical does it alone, Major does it by count - so no single
+    /// finding can answer that question, and a property claiming to would be wrong the
+    /// moment the threshold moved. <see cref="ReviewFindingGate"/> owns the judgement;
+    /// this only says whether this finding takes part in it.
     /// </summary>
-    public bool IsBlocking => !OutOfScope;
+    public bool ParticipatesInReview => !OutOfScope;
 }

@@ -53,6 +53,9 @@ internal static class AcceptanceFixture
         /// <summary>A finding anchored outside the diff, which never blocks.</summary>
         public bool FindingIsOutOfScope { get; init; }
 
+        /// <summary>What the persisted finding claims. Critical and Major block; Minor and Info do not.</summary>
+        public FindingSeverity FindingSeverity { get; init; } = FindingSeverity.Critical;
+
         public bool UnexpectedAgentCommit { get; init; }
 
         public VerificationCommandStatus RequiredVerification { get; init; } = VerificationCommandStatus.Passed;
@@ -162,7 +165,7 @@ internal static class AcceptanceFixture
                 Guid.CreateVersion7(),
                 hub.OrganizationId,
                 review.Id,
-                FindingSeverity.Major,
+                options.FindingSeverity,
                 FindingCategory.Correctness,
                 "Empty input is not handled",
                 "The new branch throws on an empty collection.",

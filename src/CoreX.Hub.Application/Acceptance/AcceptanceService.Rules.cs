@@ -208,16 +208,102 @@ public sealed partial class AcceptanceService
 
         await EnsureRequiredVerificationPassedAsync(execution, ct);
 
+        // The same gate the review step is judged by, not a second reading of it. An
+        // execution can be marked ReviewBlocked and yet carry findings that do not block -
+        // a stale outcome, a hand written row - and overriding that would be answering for
+        // a blocker nobody found.
         var findings = await _store.ListFindingsAsync(execution.Id, ct);
 
-        if (!findings.Any(f => f.IsBlocking))
+        if (!ReviewFindingGate.HasBlockingFindings(findings))
         {
             throw new AcceptanceException(
                 $"Attempt {execution.AttemptNo} has no blocking finding, so there is nothing for an override "
-                + "to answer for.");
+                + $"to answer for: {ReviewFindingGate.Describe(findings)}.");
         }
 
         return reason;
+    }
+
+    /// <summary>
+    /// Releases the worktree of an execution whose work is now safely in a commit.
+    ///
+    /// Runs after the decision is committed and never inside its transaction, because a
+    /// locked directory must not be able to unmake a person's answer. It therefore reports
+    /// rather than throws: whatever happens here, the decision above already happened.
+    ///
+    /// Only the case G.6 states plainly is automatic - a passing execution a person has
+    /// accepted or rejected. An override leaves the worktree alone, because a blocked review
+    /// is a lifecycle Phase 7 owns; sending the work back leaves it alone, because another
+    /// iteration was explicitly asked for; and an execution with no commit is never touched,
+    /// because its worktree is the only copy of the work (D6).
+    /// </summary>
+    private async Task<WorkspaceCleanupResult> ReleaseWorkspaceAsync(
+        DecisionTarget target,
+        AcceptanceDecision decision,
+        DateTimeOffset nowUtc,
+        CancellationToken ct)
+    {
+        var execution = target.Execution;
+
+        if (decision.OverrideUsed
+            || decision.Decision is not (AcceptanceDecisionKind.Accept or AcceptanceDecisionKind.Reject))
+        {
+            return WorkspaceCleanupResult.NotAttempted(
+                $"{decision.Decision}{(decision.OverrideUsed ? " by review override" : string.Empty)} "
+                + "does not release a worktree");
+        }
+
+        // Written as a positive match: only Passed releases, so a new outcome is left alone
+        // by default rather than swept in by an inverted test.
+        if (execution.Outcome is not ExecutionOutcome.Passed)
+        {
+            return WorkspaceCleanupResult.NotAttempted(
+                $"only a passing execution is released automatically; this one is "
+                + $"{execution.Outcome?.ToString() ?? "without an outcome"}");
+        }
+
+        if (execution.ResultCommitSha is null)
+        {
+            // Unreachable through Passed, which requires a commit. Stated anyway, because
+            // D6 is the invariant that must not depend on another rule staying true.
+            return new WorkspaceCleanupResult(
+                WorkspaceCleanupOutcome.DeniedNoResultCommit,
+                "the execution produced no result commit, so its worktree holds the only copy of the work");
+        }
+
+        if (_release is null)
+        {
+            return WorkspaceCleanupResult.NotAttempted("no workspace release port is wired");
+        }
+
+        WorkspaceCleanupResult cleanup;
+
+        try
+        {
+            cleanup = await _release.ReleaseAsync(target.Task.RepositoryId, execution, ct);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            // A failure out here is an operational fact about a machine, not a verdict about
+            // the work, so it is reported in those terms rather than thrown at somebody who
+            // has already decided.
+            return new WorkspaceCleanupResult(
+                WorkspaceCleanupOutcome.Failed,
+                $"the worktree could not be released: {ex.Message}");
+        }
+
+        if (!cleanup.Succeeded)
+        {
+            return cleanup;
+        }
+
+        // A second, separate transaction. If this one fails the worktree is gone and the row
+        // still says Active, which reconciliation reports - the opposite order would risk a
+        // row claiming the work was released while it is still on disk.
+        execution.MarkWorkspaceReleased(nowUtc);
+        await _store.SaveChangesAsync(ct);
+
+        return cleanup;
     }
 
     /// <summary>

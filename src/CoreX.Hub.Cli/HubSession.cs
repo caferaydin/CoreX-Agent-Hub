@@ -4,6 +4,7 @@ using CoreX.Hub.Application.Catalog;
 using CoreX.Hub.Application.Configuration;
 using CoreX.Hub.Application.Tasks;
 using CoreX.Hub.Application.Verification;
+using CoreX.Hub.Cli.Orchestration;
 using CoreX.Hub.Infrastructure.Configuration;
 using CoreX.Hub.Infrastructure.Persistence;
 
@@ -15,7 +16,13 @@ namespace CoreX.Hub.Cli;
 /// </summary>
 public sealed class HubSession : IAsyncDisposable
 {
-    private HubSession(HubDbContext db, OrganizationScope scope, IHubStore store, string dataDirectory, string configPath)
+    private HubSession(
+        HubDbContext db,
+        OrganizationScope scope,
+        IHubStore store,
+        string dataDirectory,
+        string configPath,
+        IExecutionWorkspaceRelease? release)
     {
         Db = db;
         Scope = scope;
@@ -23,7 +30,7 @@ public sealed class HubSession : IAsyncDisposable
         DataDirectory = dataDirectory;
         ConfigPath = configPath;
         Tasks = new TaskService(store);
-        Acceptance = new AcceptanceService(store, new VerificationTruthReader(store));
+        Acceptance = new AcceptanceService(store, new VerificationTruthReader(store), release);
     }
 
     public HubDbContext Db { get; }
@@ -62,7 +69,15 @@ public sealed class HubSession : IAsyncDisposable
         await HubDatabase.MigrateAsync(db, ct);
 
         var store = new EfHubStore(db);
-        var session = new HubSession(db, scope, store, dataDirectory, configPath);
+
+        // Releasing a worktree is a Windows-only path, because it drives git through the
+        // Job Object based runner. Elsewhere a decision is still recorded in full and simply
+        // reports that no worktree was released.
+        var release = OperatingSystem.IsWindows()
+            ? new SessionWorkspaceRelease(store, dataDirectory, configPath)
+            : null;
+
+        var session = new HubSession(db, scope, store, dataDirectory, configPath, release);
 
         if (File.Exists(configPath))
         {

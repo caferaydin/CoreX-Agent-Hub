@@ -160,4 +160,11 @@ public sealed record AcceptanceResult
     public IReadOnlyList<MachineCriterionResult> MachineCriteria { get; init; } = [];
 
     public IReadOnlyList<HumanCriterionVerdictRecord> HumanVerdicts { get; init; } = [];
+
+    /// <summary>
+    /// What happened to the worktree afterwards. Reported beside the decision rather than
+    /// folded into it: the decision succeeded whatever this says.
+    /// </summary>
+    public WorkspaceCleanupResult WorkspaceCleanup { get; init; } =
+        WorkspaceCleanupResult.NotAttempted("no cleanup was required");
 }

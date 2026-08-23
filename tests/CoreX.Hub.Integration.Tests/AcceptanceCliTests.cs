@@ -135,6 +135,44 @@ public sealed class AcceptanceCliTests
     }
 
     [Fact]
+    public async Task Cleanup_is_reported_beside_the_decision_and_never_as_a_failed_decision()
+    {
+        // The seeded execution names a worktree that does not exist, so cleanup cannot
+        // succeed - which is exactly the case worth checking. The decision is still recorded
+        // and the command still succeeds; the cleanup line says what happened separately.
+        using var hub = TempHub.Create();
+        await SeedPassingExecutionAsync(hub);
+
+        var (exitCode, output) = await RunAcceptAsync(hub, ["HUB-001#1"], ["met"]);
+
+        Assert.Equal(ExitCodes.Success, exitCode);
+
+        Assert.Contains("Decision", output, StringComparison.Ordinal);
+        Assert.Contains("Workspace cleanup", output, StringComparison.Ordinal);
+        Assert.DoesNotContain("accept failed", output, StringComparison.OrdinalIgnoreCase);
+
+        await using var db = hub.NewContext();
+        Assert.Equal(TaskState.Accepted, (await db.Tasks.FirstAsync()).State);
+        Assert.Equal(1, await db.AcceptanceDecisions.CountAsync());
+    }
+
+    [Fact]
+    public async Task Sending_the_work_back_reports_that_nothing_was_released()
+    {
+        using var hub = TempHub.Create();
+        await SeedPassingExecutionAsync(hub);
+
+        var result = await hub.RunAsync("request-changes", "HUB-001#1", "--reason", "another pass");
+
+        Assert.Equal(ExitCodes.Success, result.ExitCode);
+        Assert.Contains("Workspace cleanup", result.StdOut, StringComparison.Ordinal);
+        Assert.Contains("NotAttempted", result.StdOut, StringComparison.Ordinal);
+
+        await using var db = hub.NewContext();
+        Assert.Equal(WorkspaceState.Active, (await db.Executions.FirstAsync()).WorkspaceState);
+    }
+
+    [Fact]
     public async Task There_is_no_flag_that_states_a_machine_result()
     {
         // I-A6 at the command line. Declaring a machine criterion when a task is written is

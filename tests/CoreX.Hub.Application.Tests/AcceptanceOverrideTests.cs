@@ -218,6 +218,67 @@ public sealed class AcceptanceOverrideTests
         await AssertRefusedAsync(hub, execution, await OverrideAsync(hub));
     }
 
+    [Theory]
+    [InlineData(FindingSeverity.Minor)]
+    [InlineData(FindingSeverity.Info)]
+    public async Task A_review_that_only_found_minor_or_info_is_not_something_to_override(
+        FindingSeverity severity)
+    {
+        // The execution says ReviewBlocked, but what was actually recorded does not block.
+        // Trusting the outcome alone would let a person answer for a blocker nobody found -
+        // so the same gate the review is judged by is asked again here.
+        await using var hub = await HubAsync();
+
+        var execution = await AcceptanceFixture.PersistCompletedAsync(
+            hub, new Options { FindingSeverity = severity });
+
+        await AssertRefusedAsync(hub, execution, await OverrideAsync(hub));
+    }
+
+    [Theory]
+    [InlineData(FindingSeverity.Critical)]
+    [InlineData(FindingSeverity.Major)]
+    public async Task A_review_that_found_something_blocking_can_be_overridden(FindingSeverity severity)
+    {
+        // Critical blocks alone; Major blocks at the frozen threshold of one.
+        await using var hub = await HubAsync();
+
+        await AcceptanceFixture.PersistCompletedAsync(hub, new Options { FindingSeverity = severity });
+
+        var result = await AcceptanceFixture.Service(hub).AcceptAsync(
+            await OverrideAsync(hub), hub.Clock.GetUtcNow(), CancellationToken.None);
+
+        Assert.True(result.OverrideUsed);
+        Assert.Equal(TaskState.Accepted, result.TaskState);
+    }
+
+    [Fact]
+    public async Task An_out_of_scope_critical_is_not_something_to_override()
+    {
+        await using var hub = await HubAsync();
+
+        var execution = await AcceptanceFixture.PersistCompletedAsync(
+            hub, new Options { FindingSeverity = FindingSeverity.Critical, FindingIsOutOfScope = true });
+
+        await AssertRefusedAsync(hub, execution, await OverrideAsync(hub));
+    }
+
+    [Fact]
+    public async Task An_override_never_releases_the_worktree()
+    {
+        // A blocked review is a lifecycle Phase 7 owns. This fix releases only the case G.6
+        // states plainly, and an override is not it.
+        await using var hub = await HubAsync();
+
+        await AcceptanceFixture.PersistCompletedAsync(hub, new Options());
+
+        var result = await AcceptanceFixture.Service(hub).AcceptAsync(
+            await OverrideAsync(hub), hub.Clock.GetUtcNow(), CancellationToken.None);
+
+        Assert.Equal(WorkspaceCleanupOutcome.NotAttempted, result.WorkspaceCleanup.Outcome);
+        Assert.Contains("review override", result.WorkspaceCleanup.Detail, StringComparison.Ordinal);
+    }
+
     [Fact]
     public async Task A_task_that_is_not_ready_is_not_in_the_override_situation()
     {
