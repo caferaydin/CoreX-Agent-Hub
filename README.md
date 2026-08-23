@@ -344,6 +344,36 @@ yeni bir yürütme yüzeyi eklerse aynı yöntem tekrar uygulanmalıdır.
 Çalışma akışı güvenlik önlemleri — beklenmeyen kirli çalışma ağacı, commit disiplini ve
 test disiplini — `CONTRIBUTING.md` dosyasındadır. Orası mimari karar içermez.
 
+## Sağlayıcı bağımsızlığı (provider neutrality)
+
+Otorite **ADR-0008** ve mimari § F.1'dir; burada yeni bir karar yoktur, yalnızca Faz 5
+başlamadan **mekanik olarak kilitlenen** kısıtın özeti vardır.
+
+Hedef adapter aileleri: `scripted` · `claude-code` · `codex` · `gemini-cli` · `qwen-code`
+· `custom-cli`. Faz 5'te bunlardan **yalnızca `scripted`** gerçek bir runtime olarak
+uygulanır; diğerleri bugün ne çağrılır ne de yazılır.
+
+- **Orchestrator sağlayıcı körüdür.** `if provider == "claude"`, `switch (provider)` gibi
+  yollar yasaktır. Seçim `AgentProfile.Provider`/`RuntimeKey` verisinden gelir; runtime
+  composition katmanında çözülür. Yeni bir adapter eklemek orkestrasyon kodunu
+  değiştirmemelidir.
+- **Kimlikler veridir.** `Provider` ve `RuntimeKey` `string`'dir, enum değildir; yeni bir
+  aile eklemek domain veya şema değişikliği gerektirmez.
+- **Yetenekler ilan edilir, taklit edilmez.** Eksik bir yetenek telafi edilmez; adım
+  `Unsupported` olur (`ExecutionStepState.Unsupported` zaten vardır). Sessiz geçiş yoktur.
+- **Sağlayıcıya özgü CLI bayrakları yalnızca o sağlayıcının adapter'ında yaşar.**
+- **Süreç sınırı tektir:** her şey `ProcessRunner`'dan geçer.
+- **MVP'de dinamik eklenti (DLL/plugin) çerçevesi yoktur.** Gelecekteki `CustomCliRuntime`
+  sabit bir runtime kimliğiyle kayıt olur ve yalnızca şunları kullanır: mutlak
+  çalıştırılabilir + `argv[]` + ilan edilmiş yetenekler + ortam allowlist'i +
+  `ProcessRunner` yaşam döngüsü. Kabuk komut dizesi yoktur.
+
+Bu kısıtlar `tests/CoreX.Hub.ArchitectureTests/ProviderNeutralityTests.cs` içinde iki
+grupta test edilir: bugün geçerli olan **ACTIVE** guard'lar ve ilgili üretim tipi ortaya
+çıktığı anda gerçekten denetim yapmaya başlayan **ARMED** guard'lar. Bir ARMED guard,
+konusu yokken bile kendi dedektörünü sentetik bir pozitif kontrolle doğrular; yani
+"bakacak bir şey olmadığı için geçti" durumuna düşemez.
+
 ## Açık denetim kapıları
 
 | Kapı | Kapsam | Ne zaman kapanmalı |
