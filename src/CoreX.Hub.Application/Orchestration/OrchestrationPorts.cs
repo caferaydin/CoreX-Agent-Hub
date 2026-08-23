@@ -139,8 +139,38 @@ public interface IAgentRuntimeGateway
         CancellationToken ct);
 }
 
-/// <summary>One verification step's machine result, flattened.</summary>
-public sealed record VerificationStepView(string StepName, bool Required, string Status, int? ExitCode);
+/// <summary>
+/// One verification step's machine result, flattened.
+///
+/// Everything a later decision could need is carried here rather than left in the run,
+/// because the decision happens in another process: the step's own name, whether it was
+/// required at the time, how it ended, and what it ran. The status is the domain's own
+/// vocabulary - the composition layer has already converted it exhaustively - so nothing
+/// downstream has to interpret a string.
+/// </summary>
+public sealed record VerificationStepView
+{
+    public required string StepName { get; init; }
+
+    /// <summary>Whether the step was required for this run, not for the profile as it stands now.</summary>
+    public required bool Required { get; init; }
+
+    public required VerificationCommandStatus Status { get; init; }
+
+    public string Executable { get; init; } = string.Empty;
+
+    public IReadOnlyList<string> Arguments { get; init; } = [];
+
+    public int? ExitCode { get; init; }
+
+    public long? DurationMilliseconds { get; init; }
+
+    public int? TestsPassed { get; init; }
+
+    public int? TestsFailed { get; init; }
+
+    public int? TestsSkipped { get; init; }
+}
 
 /// <summary>What a verification run reported.</summary>
 public sealed record VerificationRunView(

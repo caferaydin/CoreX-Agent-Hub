@@ -76,6 +76,15 @@ public interface IHubStore
 
     Task<IReadOnlyList<ExecutionStep>> ListExecutionStepsAsync(Guid executionId, CancellationToken ct);
 
+    /// <summary>
+    /// The verification commands this execution actually ran, in order.
+    ///
+    /// Reached through the execution's own Verify step rather than by querying commands at
+    /// large, because that relationship is the whole point: these are one execution's
+    /// machine truth, and a baseline measured elsewhere must never appear among them.
+    /// </summary>
+    Task<IReadOnlyList<CommandResult>> ListVerificationCommandsAsync(Guid executionId, CancellationToken ct);
+
     Task<IReadOnlyList<EvidenceArtifact>> ListEvidenceAsync(Guid executionId, CancellationToken ct);
 
     Task<IReadOnlyList<OrchestrationEvent>> ListOrchestrationEventsAsync(Guid executionId, CancellationToken ct);
@@ -85,6 +94,8 @@ public interface IHubStore
     void AddExecution(Execution execution);
 
     void AddExecutionStep(ExecutionStep step);
+
+    void AddCommandResult(CommandResult commandResult);
 
     void AddEvidenceArtifact(EvidenceArtifact artifact);
 

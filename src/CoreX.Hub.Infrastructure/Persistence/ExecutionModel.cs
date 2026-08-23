@@ -69,14 +69,25 @@ internal static class ExecutionModel
             e.HasKey(x => x.Id);
             e.Property(x => x.StepName).HasMaxLength(100).IsRequired();
             e.Property(x => x.Executable).HasMaxLength(400).IsRequired();
+            e.Property(x => x.Status).HasConversion<string>().HasMaxLength(20).IsRequired();
+            e.Property(x => x.Required).IsRequired();
             e.Property<List<string>>("_args")
                 .HasColumnName("Args")
                 .HasConversion(HubValueConverters.StringList, HubValueConverters.StringListComparer)
                 .IsRequired();
             e.Ignore(x => x.Args);
+            e.Ignore(x => x.IsPass);
             e.HasIndex(x => new { x.ExecutionStepId, x.Order })
                 .IsUnique()
                 .HasDatabaseName("UX_CommandResults_Step_Order");
+
+            // A Machine acceptance criterion names a step, so one step name under one
+            // execution has to mean one row. Two would not be a tie to break later - they
+            // would be machine truth that contradicts itself, and the database refuses it
+            // at the point it would be created rather than at the point it is read.
+            e.HasIndex(x => new { x.ExecutionStepId, x.StepName })
+                .IsUnique()
+                .HasDatabaseName("UX_CommandResults_Step_Name");
             e.HasOne<ExecutionStep>().WithMany().HasForeignKey(x => x.ExecutionStepId)
                 .OnDelete(DeleteBehavior.Cascade);
             e.HasQueryFilter(x => ctx.CurrentOrganizationId == null || x.OrganizationId == ctx.CurrentOrganizationId);

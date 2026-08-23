@@ -2,6 +2,7 @@ using System.Runtime.Versioning;
 using CoreX.Hub.Application.Orchestration;
 using CoreX.Hub.Cli.Verification;
 using CoreX.Hub.Domain.Catalog;
+using CoreX.Hub.Domain.Executions;
 using CoreX.Hub.Verification;
 using CoreX.Hub.Verification.Baseline;
 using CoreX.Hub.Verification.Profiles;
@@ -68,7 +69,7 @@ public sealed class VerificationGateway : IExecutionVerifier
         var view = new VerificationRunView(
             current.RequiredOutcome == VerificationOutcome.Passed,
             current.ProfileHash,
-            [.. current.Steps.Select(s => new VerificationStepView(s.StepName, s.Required, s.Status.ToString(), s.ExitCode))],
+            [.. current.Steps.Select(s => ViewOf(s, setup.Profile))],
             current.TestSummary?.Total,
             current.TestSummary?.Passed,
             current.TestSummary?.FailedOrErrored);
@@ -104,6 +105,62 @@ public sealed class VerificationGateway : IExecutionVerifier
 
         return new VerificationOutcomeView(view, baselineView, residual, current.Describe());
     }
+
+    /// <summary>
+    /// Flattens one step's machine result for the record that outlives this process.
+    ///
+    /// The executable is the resolved absolute path when there is one, and the step's
+    /// declared executable when the command never got far enough to resolve it - both are
+    /// what the Hub was actually asked to run, and nothing is invented when neither is
+    /// available beyond saying so.
+    /// </summary>
+    private static VerificationStepView ViewOf(VerificationStepResult step, VerificationProfile profile)
+    {
+        // Profile step names are unique by construction, so this identifies the declaration
+        // this result came from rather than merely one that looks like it.
+        var declared = profile.Steps
+            .FirstOrDefault(s => string.Equals(s.Name, step.StepName, StringComparison.Ordinal));
+
+        return new VerificationStepView
+        {
+            StepName = step.StepName,
+            Required = step.Required,
+            Status = StatusOf(step.Status),
+            Executable = step.ResolvedExecutable ?? declared?.Executable ?? "(unresolved)",
+            Arguments = step.Arguments,
+            ExitCode = step.ExitCode,
+            DurationMilliseconds = step.Duration == TimeSpan.Zero
+                ? null
+                : (long)step.Duration.TotalMilliseconds,
+            TestsPassed = step.TestSummary?.Passed,
+            TestsFailed = step.TestSummary?.FailedOrErrored,
+            TestsSkipped = step.TestSummary?.Skipped,
+        };
+    }
+
+    /// <summary>
+    /// The one conversion between the verification module's status vocabulary and the
+    /// domain's.
+    ///
+    /// Exhaustive on purpose, with no fallback arm. A status this does not know is not
+    /// something to record as a failure and move on from - it means the two vocabularies
+    /// have drifted, and a persisted row would silently mean the wrong thing for as long as
+    /// it exists. So it throws, here, where the drift was introduced.
+    /// </summary>
+    private static VerificationCommandStatus StatusOf(VerificationStepStatus status) => status switch
+    {
+        VerificationStepStatus.Passed => VerificationCommandStatus.Passed,
+        VerificationStepStatus.Failed => VerificationCommandStatus.Failed,
+        VerificationStepStatus.TimedOut => VerificationCommandStatus.TimedOut,
+        VerificationStepStatus.Cancelled => VerificationCommandStatus.Cancelled,
+        VerificationStepStatus.StartFailed => VerificationCommandStatus.StartFailed,
+        VerificationStepStatus.ParseFailed => VerificationCommandStatus.ParseFailed,
+        VerificationStepStatus.Skipped => VerificationCommandStatus.Skipped,
+        _ => throw new ArgumentOutOfRangeException(
+            nameof(status),
+            status,
+            "Unknown verification step status: machine truth would be persisted with the wrong meaning."),
+    };
 
     /// <summary>
     /// Measures the baseline in a disposable tree pinned to the exact base commit.

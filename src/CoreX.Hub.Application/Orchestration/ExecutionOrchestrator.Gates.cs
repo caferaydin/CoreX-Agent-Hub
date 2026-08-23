@@ -134,11 +134,14 @@ public sealed partial class ExecutionOrchestrator
         // says Cancelled so the timeline still distinguishes "was stopped" from "failed".
         var cancelled = !passed && ct.IsCancellationRequested;
 
-        await FinishStepAsync(
-            execution.Id,
-            ExecutionStepKind.Verify,
+        // The step and its commands are written together: what each verification step was
+        // called, whether it was required at the time and how it ended is the only thing a
+        // Machine acceptance criterion can be answered from once this process is gone.
+        await FinishVerifyStepAsync(
+            execution,
             passed ? StepFate.Succeeded : cancelled ? StepFate.Cancelled : StepFate.Failed,
             verification.Detail,
+            verification.Result?.Steps ?? [],
             record);
 
         // Review ---------------------------------------------------------------------

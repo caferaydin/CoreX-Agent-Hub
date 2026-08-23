@@ -61,6 +61,70 @@ public sealed partial class ExecutionOrchestrator
     }
 
     /// <summary>
+    /// Closes the Verify step and writes what its commands did, in one transaction.
+    ///
+    /// Grouped deliberately. The step's state is the claim "verification happened and this
+    /// is how it went"; the command rows are the only durable evidence for that claim, and
+    /// they are what a Machine acceptance criterion will be answered from in some later
+    /// process. Saving them separately would allow a crash to leave an execution asserting a
+    /// verification whose result nobody can look up any more.
+    ///
+    /// The verification itself has already run by the time this is called: no transaction is
+    /// ever open across a subprocess.
+    /// </summary>
+    private async Task FinishVerifyStepAsync(
+        Execution execution,
+        StepFate fate,
+        string? reason,
+        IReadOnlyList<VerificationStepView> commands,
+        CancellationToken ct)
+    {
+        var step = await FindStepAsync(execution.Id, ExecutionStepKind.Verify, ct);
+        if (step is null)
+        {
+            return;
+        }
+
+        var now = _clock.GetUtcNow();
+        var order = 0;
+
+        foreach (var command in commands)
+        {
+            _store.AddCommandResult(new CommandResult(
+                Guid.CreateVersion7(),
+                execution.OrganizationId,
+                step.Id,
+                ++order,
+                command.StepName,
+                command.Executable,
+                command.Arguments,
+                command.Status,
+                command.Required,
+                command.ExitCode,
+                command.DurationMilliseconds,
+                command.TestsPassed,
+                command.TestsFailed,
+                command.TestsSkipped,
+                now));
+        }
+
+        switch (fate)
+        {
+            case StepFate.Succeeded:
+                step.Succeed(now);
+                break;
+            case StepFate.Cancelled:
+                step.Cancel(reason ?? "the run was cancelled", now);
+                break;
+            default:
+                step.Fail(reason ?? "the step failed", now);
+                break;
+        }
+
+        await _store.SaveChangesAsync(ct);
+    }
+
+    /// <summary>
     /// Records a step that deliberately did not run, with the reason. A silent skip would
     /// be indistinguishable from a success nobody checked.
     /// </summary>

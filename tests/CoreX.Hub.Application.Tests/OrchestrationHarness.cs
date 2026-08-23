@@ -200,6 +200,28 @@ public sealed class OrchestrationHarness : IAsyncDisposable
                 new Dictionary<string, string> { ["fixture"] = FixtureExecutable }, out _),
             Clock);
 
+    /// <summary>
+    /// Closes every context this harness opened and hands back a store on a new connection.
+    ///
+    /// What is read afterwards came out of the file. No change tracker, no cached entity and
+    /// nothing left over from the run can make an assertion pass, which is the whole point
+    /// when the question is what survives the process that produced it.
+    /// </summary>
+    public async Task<IHubStore> ReopenStoreAsync()
+    {
+        foreach (var context in _extraContexts)
+        {
+            await context.DisposeAsync();
+        }
+
+        _extraContexts.Clear();
+        await _db.DisposeAsync();
+
+        Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+
+        return OpenStore();
+    }
+
     /// <summary>A second, short lived store so the heartbeat never shares a context.</summary>
     public IHubStore OpenStore()
     {

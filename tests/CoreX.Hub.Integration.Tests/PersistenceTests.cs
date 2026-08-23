@@ -23,9 +23,13 @@ public sealed class PersistenceTests
 
         Assert.True(File.Exists(hub.DatabasePath));
 
-        var applied = await db.Database.GetAppliedMigrationsAsync();
-        Assert.Single(applied);
-        Assert.EndsWith("InitialCreate", applied.Single(), StringComparison.Ordinal);
+        // The second migration made verification step truth durable. It added columns to an
+        // existing table and no table of its own, which is what this count is here to catch.
+        var applied = (await db.Database.GetAppliedMigrationsAsync()).ToList();
+
+        Assert.Equal(2, applied.Count);
+        Assert.EndsWith("InitialCreate", applied[0], StringComparison.Ordinal);
+        Assert.EndsWith("PersistVerificationCommandTruth", applied[1], StringComparison.Ordinal);
 
         var tables = await ReadUserTablesAsync(db);
 

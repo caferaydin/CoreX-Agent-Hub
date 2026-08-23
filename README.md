@@ -550,6 +550,39 @@ kuyruk, worker cluster yok. Aynı görevin iki terminal-olmayan execution'ı ola
 **İşlem sınırı.** Her durum geçişi kendi AuditEvent'iyle **tek işlemde** yazılır; hiçbir
 veritabanı işlemi agent, git, context veya doğrulama çalışırken açık tutulmaz.
 
+### Kalıcı doğrulama adımı gerçeği
+
+Kabul kararı, koşuyu üreten süreç kapandıktan **sonra** verilir. Bu yüzden bir MACHINE
+kabul kriterinin (`VerificationRef`) cevabı SQLite'ta, yorum gerektirmeyen bir biçimde
+durmak zorundadır. Faz 5C bu bilgiyi hesaplıyordu ama yalnızca bellekteki
+`VerificationRunView` taşıyordu; süreç bitince kayboluyordu. Bu bir mimari değişiklik
+değil, Faz 1 kalıcılığının frozen gereksinimi karşılamamasının düzeltilmesidir.
+
+Artık **sonuç** doğrulama koşusunun her adımı için, execution'ın `Verify` adımına bağlı bir
+`CommandResult` satırı yazılır: `StepName`, `Status`, `Required`, `ExitCode`, süre ve test
+sayaçları. Satırlar Verify adımının kapanışıyla **aynı işlemde** yazılır — doğrulamanın
+geçtiğini söyleyen ama kanıtı bulunmayan bir execution oluşamaz.
+
+**`Required` neden satırda duruyor.** Profil sonradan değişebilir. Dün isteğe bağlı olan
+`lint` bugün zorunlu yapılırsa, dünkü execution yine de dünkü kurala göre okunmalıdır;
+requiredness bu yüzden koşu anındaki değeriyle saklanır ve karar anında profilden
+okunmaz.
+
+**`ExitCode` bir cevap değildir.** `Passed` ve `ParseFailed` adımlarının ikisi de sıfırla
+çıkar; çıkış koduna bakan bir kriter, Hub raporu hiç okuyamamışken işi doğrulanmış sayardı.
+Bu yüzden yapısal `VerificationStepStatus` sözlüğünün tamamı saklanır. Domain kendi
+kopyasını tutar (Domain hiçbir şeye bağımlı değildir) ve dönüşüm kompozisyon katmanında
+**tüketicidir**: bilinmeyen bir durum sessizce `Failed`'e düşmez, orada hata verir.
+
+**Baseline karışmaz.** `CommandResults` yalnızca execution'ın kendi worktree'sinde ölçülen
+sonuç koşusuna aittir. Baseline kendi anahtarında (`RepositoryId` + `BaseCommitSha` +
+`ProfileHash`) kalır; okuma execution → `Verify` adımı → komutlar yolundan yapıldığı için
+tek kullanımlık ağaçta ölçülen baseline bir kriteri asla cevaplayamaz.
+
+**Belirlenimcilik.** Bir execution içinde bir adım adı tek bir satır demektir —
+`UX_CommandResults_Step_Name` bunu veritabanında zorlar; çözümleyici sıfır eşleşmede
+"kayıt yok", birden fazla eşleşmede "çelişkili" der ve hiçbir zaman satır seçmez.
+
 ## Katkı kuralları
 
 Çalışma akışı güvenlik önlemleri — beklenmeyen kirli çalışma ağacı, commit disiplini ve

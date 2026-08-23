@@ -193,6 +193,34 @@ public sealed class EfHubStore(HubDbContext db) : IHubStore
             .OrderBy(s => s.Order)
             .ToListAsync(ct);
 
+    /// <summary>
+    /// Execution to Verify step to commands, in that order.
+    ///
+    /// The join is the guarantee: a baseline is measured in a disposable tree and belongs to
+    /// no execution's Verify step, so it cannot reach this result however similar its step
+    /// names are.
+    /// </summary>
+    public async Task<IReadOnlyList<CommandResult>> ListVerificationCommandsAsync(
+        Guid executionId,
+        CancellationToken ct)
+    {
+        var verifySteps = await db.ExecutionSteps
+            .Where(s => s.ExecutionId == executionId && s.Kind == ExecutionStepKind.Verify)
+            .Select(s => s.Id)
+            .ToListAsync(ct);
+
+        if (verifySteps.Count == 0)
+        {
+            return [];
+        }
+
+        var commands = await db.CommandResults
+            .Where(c => verifySteps.Contains(c.ExecutionStepId))
+            .ToListAsync(ct);
+
+        return [.. commands.OrderBy(c => c.Order)];
+    }
+
     public async Task<IReadOnlyList<EvidenceArtifact>> ListEvidenceAsync(Guid executionId, CancellationToken ct)
     {
         var artifacts = await db.EvidenceArtifacts
@@ -219,6 +247,8 @@ public sealed class EfHubStore(HubDbContext db) : IHubStore
     public void AddExecution(Execution execution) => db.Executions.Add(execution);
 
     public void AddExecutionStep(ExecutionStep step) => db.ExecutionSteps.Add(step);
+
+    public void AddCommandResult(CommandResult commandResult) => db.CommandResults.Add(commandResult);
 
     public void AddEvidenceArtifact(EvidenceArtifact artifact) => db.EvidenceArtifacts.Add(artifact);
 

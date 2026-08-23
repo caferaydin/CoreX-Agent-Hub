@@ -447,6 +447,14 @@ namespace CoreX.Hub.Infrastructure.Persistence.Migrations
                     b.Property<Guid>("OrganizationId")
                         .HasColumnType("TEXT");
 
+                    b.Property<bool>("Required")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("TEXT");
+
                     b.Property<string>("StepName")
                         .IsRequired()
                         .HasMaxLength(100)
@@ -471,6 +479,10 @@ namespace CoreX.Hub.Infrastructure.Persistence.Migrations
                     b.HasIndex("ExecutionStepId", "Order")
                         .IsUnique()
                         .HasDatabaseName("UX_CommandResults_Step_Order");
+
+                    b.HasIndex("ExecutionStepId", "StepName")
+                        .IsUnique()
+                        .HasDatabaseName("UX_CommandResults_Step_Name");
 
                     b.ToTable("CommandResults", (string)null);
                 });

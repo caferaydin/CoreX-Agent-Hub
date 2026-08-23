@@ -77,6 +77,46 @@ public enum ExecutionStepState
     Unsupported = 7,
 }
 
+/// <summary>
+/// How one verification command ended, as the Hub records it for ever.
+///
+/// The verification module has its own status vocabulary; this is the domain's copy of it,
+/// because the domain depends on nothing and a persisted row has to keep meaning something
+/// long after the run that produced it. The composition layer converts between the two
+/// exhaustively, so a new member on either side is a compile-time and fail-closed problem
+/// rather than a silent one.
+///
+/// The distinctions matter more than they look. <see cref="Passed"/> and
+/// <see cref="ParseFailed"/> both exit zero, and collapsing them would report a criterion as
+/// met when the Hub could not read the report at all.
+/// </summary>
+public enum VerificationCommandStatus
+{
+    /// <summary>
+    /// No structured status was recorded. Only rows written before durable machine truth
+    /// existed can hold this, and it is never a pass: machine truth nobody captured must
+    /// not become evidence that something worked.
+    /// </summary>
+    Unavailable = 0,
+
+    Passed = 1,
+
+    Failed = 2,
+
+    TimedOut = 3,
+
+    Cancelled = 4,
+
+    /// <summary>Nothing was launched: a rejected executable, a rejected path, a start failure.</summary>
+    StartFailed = 5,
+
+    /// <summary>The command exited zero but its report could not be turned into counters.</summary>
+    ParseFailed = 6,
+
+    /// <summary>Deterministically not run, because a required step had already failed.</summary>
+    Skipped = 7,
+}
+
 public enum FindingSeverity
 {
     Critical = 0,

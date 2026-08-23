@@ -174,9 +174,7 @@ public sealed class OrchestrationCancellationTests
 
         Assert.NotNull(outcome.Result);
         Assert.True(outcome.Result!.RequiredPassed);
-        Assert.All(
-            outcome.Result.Steps,
-            s => Assert.Equal(VerificationStepStatus.Passed.ToString(), s.Status));
+        Assert.All(outcome.Result.Steps, s => Assert.Equal(VerificationCommandStatus.Passed, s.Status));
     }
 
     /// <summary>A real hardened worktree, the way an execution would have one.</summary>
