@@ -641,6 +641,33 @@ demesine güvenip kalmaz, aynı kapıyı tekrar sorar: kayıtlı bulgular blokla
 reddedilir. **Major eşiğinin kalibrasyonu G7-1 / Faz 7'dir** ve aynı otoritede, tek bir
 sayıyı değiştirerek yapılır.
 
+**Sonuç doğrulaması agent worktree'sinde çalışmaz.** Hem baseline hem sonuç, tam commit'e
+sabitlenmiş **tek kullanımlık** bir ağaçta ölçülür: baseline `BaseCommitSha`'da (X), sonuç
+Hub'ın kendi commit'inde (Y). Sebep düzenlilik değil: doğrulama ağacı build çıktısıyla
+doldurur, build çıktısıyla dolu bir worktree ise zorlamadan kaldırılamaz — ve Hub bir
+execution worktree'sini asla zorlamaz. Ölçümü atılabilir bir kopyada yapmak, gerçek
+worktree'nin commit'in bıraktığı hâlde kalmasını ve insan kararından sonra release
+edilebilmesini sağlar. Ayrıca ölçümü, commit'i barındıran bir dizin hakkında değil,
+**commit hakkında** yapar.
+
+Pin iki kez doğrulanır: ölçümden önce ve sonra. HEAD'i oynatan bir komut başka bir commit'i
+ölçmüştür; o sonuç raporlanmaz, atılır — yanlış commit'e atfedilmiş bir sonuç, hiç sonuç
+olmamasından kötüdür, çünkü execution'ın makine gerçeği olarak kalıcılaşır. Kapanış pin
+kontrolü **iptalle atlanmaz**: kendi sınırlı token'ında çalışır, yoksa her adımı biten ve bir
+an sonra iptal edilen bir koşu, hangi ağacın ürettiği doğrulanmadan "geçti" diye
+raporlanabilirdi.
+
+Ölçülemeyen bir sonuç sessizlik değildir: motorun kendi "başlatamadım" davranışı gibi,
+profildeki **her adım için bir satır** yazılır (`StartFailed`/`Cancelled`), böylece o adımı
+işaret eden bir MACHINE kriteri "kayıt yok" yerine nedenini öğrenir. Hiçbiri asla `Passed`
+olmaz.
+
+`CreateResultCommitAsync` artık commit sonrası worktree'de ne kaldığını da bildirir
+(`UncommittedPaths`), tam olarak git'in `worktree remove`'u reddettiği terimlerle: değişmiş
+veya izlenmeyen yollar, ignore edilenler hariç. Boş olması beklenir; boş değilse ağaç ile
+commit farklı şeylerdir ve orchestrator **fail-closed** davranır — doğrulama yapılmaz,
+`VerificationFailed` ile kapanır, hiçbir dosya silinmez.
+
 **Karar sonrası worktree.** Frozen G.6: `Passed` + kabul/ret → worktree kaldırılır, branch
 ve result commit korunur, `WorkspaceState = Released`. Sıra kesindir: **önce** karar işlemi
 (Task geçişi + `AcceptanceDecision` + `AuditEvent`) commit edilir, **sonra** release

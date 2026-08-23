@@ -197,6 +197,26 @@ public sealed record ResultCommitOutcome
     public string? CommitDiff { get; init; }
 
     public string? Detail { get; init; }
+
+    /// <summary>
+    /// What the worktree still holds that the commit did not take, reported the way
+    /// <c>git worktree remove</c> would judge it: modified or untracked paths, ignored
+    /// files excluded.
+    ///
+    /// Empty is the expected answer, because the commit staged everything. A non empty one
+    /// says the tree is not the commit, which matters to anyone about to measure it or
+    /// remove it.
+    /// </summary>
+    public IReadOnlyList<string> UncommittedPaths { get; init; } = [];
+
+    /// <summary>
+    /// Whether the tree could be inspected at all.
+    ///
+    /// Separate from an empty <see cref="UncommittedPaths"/> on purpose: "nothing is left"
+    /// and "nobody could look" are different answers, and collapsing them would let an
+    /// unreadable tree pass for a clean one.
+    /// </summary>
+    public bool WorktreeStateKnown { get; init; } = true;
 }
 
 public enum WorkspaceReleaseState

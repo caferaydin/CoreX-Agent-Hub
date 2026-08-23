@@ -279,4 +279,51 @@ public sealed class PinnedSnapshotTests
             prepared.Workspace.WorkspacePath, "rev-parse", "--abbrev-ref", "HEAD");
         Assert.Equal("agent/HUB-001/1", branch);
     }
+
+    [Fact]
+    public async Task A_snapshot_that_is_refused_after_it_exists_is_taken_back_again()
+    {
+        // Preparation can fail after "worktree add" has already succeeded - hardening, or a
+        // HEAD that is not what was asked for. The caller is handed no snapshot in that
+        // case, so nobody downstream can ever release it: if the tree were left behind it
+        // would stay registered for the life of the repository.
+        using var fixture = GitFixture.Create();
+        await fixture.InitialiseRepositoryAsync();
+
+        var commit = await fixture.RequireGitAsync(fixture.RepositoryPath, "rev-parse", "HEAD");
+
+        // Hardening writes local configuration first, and git takes '.git/config.lock'
+        // before it does. An existing lock file makes exactly that write fail and nothing
+        // else: "worktree add" only reads configuration, so the tree is created first and
+        // refused afterwards, which is the sequence this test is about.
+        var lockFile = Path.Combine(fixture.RepositoryPath, ".git", "config.lock");
+        File.WriteAllText(lockFile, string.Empty);
+
+        PinnedSnapshotResult result;
+
+        try
+        {
+            result = await fixture.Manager.PrepareSnapshotAsync(
+                Request(fixture, commit, "refused-1"), CancellationToken.None);
+        }
+        finally
+        {
+            File.Delete(lockFile);
+        }
+
+        Assert.False(result.Succeeded);
+        Assert.Null(result.Snapshot);
+        Assert.Contains(result.Issues, i => i.Code == SnapshotIssueCode.HardeningFailed);
+
+        // Nothing was left on disk, and nothing was left registered.
+        var expected = Path.Combine(fixture.WorkspaceRoot, PinnedSnapshot.DirectoryName, "refused-1");
+        Assert.False(Directory.Exists(expected));
+
+        var worktrees = await fixture.RequireGitAsync(fixture.RepositoryPath, "worktree", "list");
+        Assert.DoesNotContain("refused-1", worktrees, StringComparison.OrdinalIgnoreCase);
+
+        EvidenceLog.Write(
+            "PinnedSnapshot: a preparation refused after 'worktree add' removes the tree it "
+            + "created - " + result.Describe());
+    }
 }

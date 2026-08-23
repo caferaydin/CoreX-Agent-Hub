@@ -75,6 +75,12 @@ public sealed partial class WorkspaceManager
         var gate = RepositoryLocks.GetOrAdd(RepositoryLockKey(repository), _ => new SemaphoreSlim(1, 1));
         await gate.WaitAsync(cancellationToken);
 
+        // Set once the tree exists on disk. From that point a refusal is not just an answer
+        // to the caller: it leaves a registered worktree behind that only this method knows
+        // about, so it has to be taken back before returning.
+        SnapshotIssueCode? refusedAfterAdd = null;
+        var refusal = string.Empty;
+
         try
         {
             Directory.CreateDirectory(Path.GetDirectoryName(snapshotPath)!);
@@ -92,7 +98,8 @@ public sealed partial class WorkspaceManager
             var hardening = await HardenAsync(repository, snapshotPath, cancellationToken);
             if (hardening is not null)
             {
-                return SnapshotFailed(SnapshotIssueCode.HardeningFailed, hardening);
+                refusedAfterAdd = SnapshotIssueCode.HardeningFailed;
+                refusal = hardening;
             }
         }
         finally
@@ -100,15 +107,25 @@ public sealed partial class WorkspaceManager
             gate.Release();
         }
 
-        // Trust git's answer rather than the request: if HEAD is not what was asked for,
-        // the snapshot is not the thing the caller wanted and must not be usable as it.
-        var observed = await ReadValueAsync(snapshotPath, ["rev-parse", "HEAD"], cancellationToken);
-
-        if (!string.Equals(observed, commitSha, StringComparison.OrdinalIgnoreCase))
+        if (refusedAfterAdd is null)
         {
-            return SnapshotFailed(
-                SnapshotIssueCode.HeadMismatch,
-                $"the snapshot reports HEAD {observed ?? "(unknown)"} but {commitSha} was requested");
+            // Trust git's answer rather than the request: if HEAD is not what was asked for,
+            // the snapshot is not the thing the caller wanted and must not be usable as it.
+            var observed = await ReadValueAsync(snapshotPath, ["rev-parse", "HEAD"], cancellationToken);
+
+            if (!string.Equals(observed, commitSha, StringComparison.OrdinalIgnoreCase))
+            {
+                refusedAfterAdd = SnapshotIssueCode.HeadMismatch;
+                refusal = $"the snapshot reports HEAD {observed ?? "(unknown)"} but {commitSha} was requested";
+            }
+        }
+
+        if (refusedAfterAdd is { } code)
+        {
+            // A refused snapshot is never handed back, so nobody downstream can release it.
+            // Leaving it would accumulate registered worktrees in the snapshot root that no
+            // execution accounts for.
+            return SnapshotFailed(code, refusal + await AbandonSnapshotAsync(repository, snapshotPath, commitSha));
         }
 
         return new PinnedSnapshotResult
@@ -181,6 +198,56 @@ public sealed partial class WorkspaceManager
             snapshot.SnapshotPath,
             ["worktree", "remove", "--force", snapshot.SnapshotPath],
             cancellationToken);
+    }
+
+    /// <summary>
+    /// Takes back a snapshot that was materialised and then refused.
+    ///
+    /// The tree exists because this method created it, which makes removing it owed work
+    /// rather than something the caller's token gets a say in - a cancelled preparation
+    /// would otherwise leave the registration behind for good. The budget is the ordinary
+    /// removal budget, so a wedged git still cannot hold the call open indefinitely.
+    ///
+    /// Returns a sentence to append to the refusal, and an empty string when the tree went
+    /// away cleanly: a caller that never sees the snapshot has no other way to learn that
+    /// one is still on disk.
+    /// </summary>
+    private async Task<string> AbandonSnapshotAsync(string repositoryPath, string snapshotPath, string commitSha)
+    {
+        using var undo = new CancellationTokenSource(
+            (_options.GitTimeout + _options.RemovalRetryDelay) * _options.WorktreeRemovalAttempts);
+
+        WorkspaceReleaseResult removal;
+
+        try
+        {
+            // Through the ordinary disposal path, not a second removal of its own: a refused
+            // snapshot is disposed of for exactly the reasons any other snapshot is, and the
+            // one forcing removal in the codebase stays one.
+            removal = await ReleaseSnapshotAsync(
+                new PinnedSnapshot
+                {
+                    RepositoryPath = repositoryPath,
+                    SnapshotPath = snapshotPath,
+                    CommitSha = commitSha,
+                    // Deliberately blank: the tree is being thrown away precisely because
+                    // what it holds could not be established, and disposal reads neither
+                    // this nor the commit id.
+                    ObservedHeadSha = string.Empty,
+                    CreatedAtUtc = DateTimeOffset.UtcNow,
+                },
+                undo.Token);
+        }
+        catch (OperationCanceledException)
+        {
+            return $"; the refused snapshot at '{snapshotPath}' could not be removed within the removal budget "
+                   + "and is still registered";
+        }
+
+        return removal.State == WorkspaceReleaseState.Released
+            ? string.Empty
+            : $"; the refused snapshot at '{snapshotPath}' could not be removed and is still registered: "
+              + removal.Detail;
     }
 
     private static PinnedSnapshotResult SnapshotFailed(SnapshotIssueCode code, string detail) => new()

@@ -112,34 +112,75 @@ public sealed class WorkspaceReleaseGatewayTests
     }
 
     [Fact]
-    public async Task A_worktree_still_holding_uncommitted_files_is_orphaned_and_the_decision_stands()
+    public async Task The_real_pipeline_leaves_a_worktree_clean_enough_to_release_without_forcing()
     {
-        // The real pipeline leaves verification output in the execution worktree, and the
-        // workspace module never forces a removal. So this is what an accepted run normally
-        // reports today - said out loud rather than smoothed over, because the tree really
-        // is still on disk and somebody has to know.
+        // The whole point of measuring the result in a throwaway tree. Verification fills a
+        // tree with build output; when that happened in the execution worktree the tree was
+        // dirty at decision time and git refused to remove it, so an accepted run reported
+        // Orphaned. Now the output lands in a snapshot, the worktree is exactly the commit,
+        // and the ordinary non-forcing removal succeeds.
         await using var hub = await HubAsync();
         var executionId = await AcceptanceFixture.RunPassingAsync(hub);
 
         var before = await hub.ExecutionAsync(executionId);
-        Assert.True(Directory.Exists(before.WorktreePath));
+        var worktree = before.WorktreePath;
+        var commit = before.ResultCommitSha!;
+
+        Assert.True(Directory.Exists(worktree));
+
+        // Nothing uncommitted is left behind by the run itself.
+        Assert.Equal(string.Empty, hub.RunGitIn(worktree, "status", "--porcelain"));
+        Assert.Equal(commit, hub.RunGitIn(worktree, "rev-parse", "HEAD"));
 
         var result = await ServiceFor(hub).AcceptAsync(
             await AcceptRequestAsync(hub), hub.Clock.GetUtcNow(), CancellationToken.None);
 
-        // The decision succeeded; only the cleanup did not.
         Assert.Equal(AcceptanceDecisionKind.Accept, result.Decision);
         Assert.Equal(TaskState.Accepted, result.TaskState);
-        Assert.Equal(WorkspaceCleanupOutcome.Orphaned, result.WorkspaceCleanup.Outcome);
+        Assert.Equal(WorkspaceCleanupOutcome.Released, result.WorkspaceCleanup.Outcome);
 
         var after = await hub.ExecutionAsync(executionId);
 
-        // Still Active, because the tree really is still there. Nothing was deleted behind
-        // git's refusal.
-        Assert.Equal(WorkspaceState.Active, after.WorkspaceState);
-        Assert.True(Directory.Exists(after.WorktreePath));
+        Assert.Equal(WorkspaceState.Released, after.WorkspaceState);
+        Assert.False(Directory.Exists(worktree));
+
+        // Released, not undone: the commit and the branch it sits on are still there.
         Assert.Equal(ExecutionOutcome.Passed, after.Outcome);
+        Assert.Equal(commit, after.ResultCommitSha);
+        Assert.Equal(commit, hub.RunGit("rev-parse", after.BranchName));
         Assert.Equal(1, await hub.Store.CountAcceptanceDecisionsAsync(executionId, CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task The_real_pipeline_also_releases_after_a_rejection()
+    {
+        await using var hub = await HubAsync();
+        var executionId = await AcceptanceFixture.RunPassingAsync(hub);
+
+        var before = await hub.ExecutionAsync(executionId);
+        var worktree = before.WorktreePath;
+        var commit = before.ResultCommitSha!;
+
+        var result = await ServiceFor(hub).RejectAsync(
+            new TaskDecisionRequest
+            {
+                TaskKey = "HUB-001",
+                AttemptNo = 1,
+                Actor = "cafer",
+                Reason = "we are not doing this after all",
+            },
+            hub.Clock.GetUtcNow(),
+            CancellationToken.None);
+
+        Assert.Equal(TaskState.Rejected, result.TaskState);
+        Assert.Equal(WorkspaceCleanupOutcome.Released, result.WorkspaceCleanup.Outcome);
+
+        Assert.False(Directory.Exists(worktree));
+        Assert.Equal(commit, hub.RunGit("rev-parse", before.BranchName));
+
+        var after = await hub.ExecutionAsync(executionId);
+        Assert.Equal(WorkspaceState.Released, after.WorkspaceState);
+        Assert.Equal(ExecutionOutcome.Passed, after.Outcome);
     }
 
     [Fact]

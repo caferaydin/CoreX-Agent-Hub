@@ -126,7 +126,9 @@ public sealed class WorkspaceGateway : IExecutionWorkspace
             outcome.State == ResultCommitState.Created,
             outcome.CommitSha,
             outcome.CommitDiff,
-            outcome.Detail ?? outcome.State.ToString());
+            outcome.Detail ?? outcome.State.ToString(),
+            outcome.UncommittedPaths,
+            outcome.WorktreeStateKnown);
     }
 
     private PreparedWorkspace Resolve(PreparedExecutionWorkspace workspace) =>

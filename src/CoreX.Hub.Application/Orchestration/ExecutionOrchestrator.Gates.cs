@@ -98,13 +98,41 @@ public sealed partial class ExecutionOrchestrator
             await WriteEvidenceAsync(execution, commit.CommitDiff, EvidenceKind.GitCommitDiff, "text/plain", record);
         }
 
+        // The commit staged everything, so the worktree should now be exactly the commit.
+        // If it is not, the tree and the commit are different things and nothing may be
+        // measured or released on the assumption that they are the same - so this fails
+        // closed rather than continuing. Nothing is deleted to make it true.
+        if (!commit.WorktreeStateKnown || commit.UncommittedPaths.Count > 0)
+        {
+            // A tree nobody could inspect is not a clean tree. Both answers stop here,
+            // because both mean the same thing: it cannot be shown that the tree is the
+            // commit.
+            var why = commit.WorktreeStateKnown
+                ? $"the worktree still holds {commit.UncommittedPaths.Count} uncommitted path(s) after the "
+                  + $"result commit ({string.Join(", ", commit.UncommittedPaths.Take(5))})"
+                : "the worktree state could not be read after the result commit";
+
+            await SkipAsync(execution.Id, ExecutionStepKind.Verify, WorktreeNotAtResultCommit, record);
+            await SkipAsync(execution.Id, ExecutionStepKind.Review, ReviewNotConfigured, record);
+
+            return await CompleteAsync(
+                execution, task, ExecutionOutcome.VerificationFailed, why + ", so nothing was verified",
+                null, record);
+        }
+
         // Verification ---------------------------------------------------------------
         // Never before a result commit exists: verifying an uncommitted tree would measure
         // something no one can go back and look at.
+        //
+        // Both measurements happen in a disposable tree pinned to a commit - the result at
+        // this execution's own commit, the baseline at the one it started from. The agent's
+        // worktree is deliberately not one of them: build output belongs in something
+        // throwaway, and a worktree full of it could not be released afterwards without
+        // forcing, which the Hub does not do.
         await AdvanceAsync(execution, ExecutionState.Verifying, ExecutionStepKind.Verify, record);
 
         var verification = await _verifier.VerifyAsync(
-            repositoryId, workspace, execution.BaseCommitSha, ct);
+            repositoryId, execution.BaseCommitSha, commit.CommitSha, ct);
 
         await RecordEventAsync(execution, "Verification", verification.Detail, record);
 
@@ -162,6 +190,8 @@ public sealed partial class ExecutionOrchestrator
     private const string ReviewNotConfigured = "ReviewNotConfiguredInPhase5";
 
     private const string CancelledBeforeCommit = "CancelledBeforeResultCommit";
+
+    private const string WorktreeNotAtResultCommit = "WorktreeNotAtResultCommit";
 
     private static ExecutionOutcome OutcomeFor(GateKind kind) => kind switch
     {

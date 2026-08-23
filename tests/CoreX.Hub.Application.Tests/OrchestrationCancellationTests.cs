@@ -120,20 +120,21 @@ public sealed class OrchestrationCancellationTests
         await using var hub = await OrchestrationHarness.CreateAsync();
 
         var x = hub.RunGit("rev-parse", "HEAD");
-        var workspace = await PrepareWorktreeAsync(hub);
+        var committed = await PrepareCommittedWorktreeAsync(hub);
 
         using var cancellation = new CancellationTokenSource();
 
         var interrupted = new CancellingCommandExecutor(cancellation, hub.Clock);
 
-        // The current run is real; only the baseline - which runs in the disposable
-        // snapshot, at a different root - is interrupted.
+        // Both runs happen in snapshots now, so they are told apart by which commit their
+        // tree was pinned to. The result run is real; only the baseline is interrupted.
         var gateway = hub.CreateVerificationGateway(root =>
-            string.Equals(root, workspace.WorkspacePath, StringComparison.OrdinalIgnoreCase)
-                ? hub.CreateVerificationEngine(root)
-                : hub.CreateVerificationEngine(interrupted));
+            IsBaselineTree(root)
+                ? hub.CreateVerificationEngine(interrupted)
+                : hub.CreateVerificationEngine(root));
 
-        var outcome = await gateway.VerifyAsync(hub.RepositoryId, workspace, x, cancellation.Token);
+        var outcome = await gateway.VerifyAsync(
+            hub.RepositoryId, x, committed.CommitSha, cancellation.Token);
 
         Assert.Equal(1, interrupted.Invocations);
         Assert.True(cancellation.IsCancellationRequested);
@@ -161,20 +162,60 @@ public sealed class OrchestrationCancellationTests
         await using var hub = await OrchestrationHarness.CreateAsync();
 
         var x = hub.RunGit("rev-parse", "HEAD");
-        var workspace = await PrepareWorktreeAsync(hub);
+        var committed = await PrepareCommittedWorktreeAsync(hub);
 
         using var cancellation = new CancellationTokenSource();
 
         var gateway = hub.CreateVerificationGateway(root =>
-            string.Equals(root, workspace.WorkspacePath, StringComparison.OrdinalIgnoreCase)
-                ? hub.CreateVerificationEngine(root)
-                : hub.CreateVerificationEngine(new CancellingCommandExecutor(cancellation, hub.Clock)));
+            IsBaselineTree(root)
+                ? hub.CreateVerificationEngine(new CancellingCommandExecutor(cancellation, hub.Clock))
+                : hub.CreateVerificationEngine(root));
 
-        var outcome = await gateway.VerifyAsync(hub.RepositoryId, workspace, x, cancellation.Token);
+        var outcome = await gateway.VerifyAsync(
+            hub.RepositoryId, x, committed.CommitSha, cancellation.Token);
 
         Assert.NotNull(outcome.Result);
         Assert.True(outcome.Result!.RequiredPassed);
         Assert.All(outcome.Result.Steps, s => Assert.Equal(VerificationCommandStatus.Passed, s.Status));
+    }
+
+    /// <summary>
+    /// Which disposable tree a verification engine was asked for.
+    ///
+    /// The snapshot id names the purpose, so a test can interrupt one measurement without
+    /// touching the other. Nothing in production reads it: it names a directory.
+    /// </summary>
+    private static bool IsBaselineTree(string root) =>
+        root.Contains("baseline-", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>A real hardened worktree with a real Hub commit in it.</summary>
+    private static async Task<(PreparedExecutionWorkspace Workspace, string CommitSha)>
+        PrepareCommittedWorktreeAsync(OrchestrationHarness hub)
+    {
+        var workspace = await PrepareWorktreeAsync(hub);
+
+        File.WriteAllText(Path.Combine(workspace.WorkspacePath, "src", "added.cs"), "// added" + Environment.NewLine);
+
+        var prepared = hub.WorkspaceManager;
+
+        var commit = await prepared.CreateResultCommitAsync(
+            new PreparedWorkspace
+            {
+                RepositoryPath = hub.RepositoryPath,
+                WorkspacePath = workspace.WorkspacePath,
+                BranchName = workspace.BranchName,
+                BaseCommitSha = workspace.BaseCommitSha,
+                HooksDirectory = prepared.Hooks.HooksDirectory,
+                CreatedAtUtc = hub.Clock.GetUtcNow(),
+            },
+            "HUB-001",
+            1,
+            CancellationToken.None);
+
+        Assert.Equal(ResultCommitState.Created, commit.State);
+        Assert.Empty(commit.UncommittedPaths);
+
+        return (workspace, commit.CommitSha!);
     }
 
     /// <summary>A real hardened worktree, the way an execution would have one.</summary>

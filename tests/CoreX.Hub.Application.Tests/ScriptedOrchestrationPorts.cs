@@ -101,16 +101,24 @@ internal sealed class ScriptedVerifier(IExecutionVerifier inner) : IExecutionVer
     /// <summary>Whether verification was given a token that had already been cancelled.</summary>
     public bool VerifySawCancellation { get; private set; }
 
+    /// <summary>The commits the run was asked to measure, so a test can check which they were.</summary>
+    public string? BaseCommitSha { get; private set; }
+
+    public string? ResultCommitSha { get; private set; }
+
     public Task<VerificationOutcomeView> VerifyAsync(
         Guid repositoryId,
-        PreparedExecutionWorkspace workspace,
         string baseCommitSha,
+        string resultCommitSha,
         CancellationToken ct)
     {
+        BaseCommitSha = baseCommitSha;
+        ResultCommitSha = resultCommitSha;
+
         BeforeVerify?.Invoke();
         VerifySawCancellation = ct.IsCancellationRequested;
 
-        return inner.VerifyAsync(repositoryId, workspace, baseCommitSha, ct);
+        return inner.VerifyAsync(repositoryId, baseCommitSha, resultCommitSha, ct);
     }
 }
 

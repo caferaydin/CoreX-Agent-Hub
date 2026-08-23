@@ -196,9 +196,10 @@ public sealed class EfHubStore(HubDbContext db) : IHubStore
     /// <summary>
     /// Execution to Verify step to commands, in that order.
     ///
-    /// The join is the guarantee: a baseline is measured in a disposable tree and belongs to
-    /// no execution's Verify step, so it cannot reach this result however similar its step
-    /// names are.
+    /// The join is the guarantee. Both a result and a baseline are measured in a disposable
+    /// tree, so where they ran distinguishes nothing; what does is that only the result is
+    /// written against this execution's Verify step. A baseline belongs to a commit and is
+    /// answered elsewhere, so it cannot reach this result however similar its step names are.
     /// </summary>
     public async Task<IReadOnlyList<CommandResult>> ListVerificationCommandsAsync(
         Guid executionId,

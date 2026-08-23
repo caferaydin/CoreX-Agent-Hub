@@ -55,10 +55,12 @@ public sealed class VerificationTruthWiringTests
     [Fact]
     public async Task The_baseline_run_never_appears_among_the_execution_commands()
     {
-        // Both runs use the same profile and therefore the same step names. Only the run
-        // measured in the execution's own worktree is that execution's machine truth; the
-        // baseline belongs to a commit, is measured in a disposable tree, and would be a
-        // second contradictory answer to the same criterion if it leaked in here.
+        // Both runs use the same profile, the same step names, and now both are measured in
+        // a disposable tree - so nothing about where they ran tells them apart any more.
+        // What does is the relationship: only the run reported as this execution's result is
+        // written against its Verify step. The baseline belongs to a commit and is answered
+        // through the baseline cache, and it would be a second contradictory answer to the
+        // same criterion if it leaked in here.
         await using var hub = await OrchestrationHarness.CreateAsync();
         hub.Mode = ScriptedAgentMode.ApplyPatch;
 

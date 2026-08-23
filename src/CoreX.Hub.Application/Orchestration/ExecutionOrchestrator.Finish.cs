@@ -27,7 +27,7 @@ public sealed partial class ExecutionOrchestrator
         }
         else
         {
-            task.ReturnToReady(detail, now);
+            task.ReturnToReady(Bounded(detail), now);
         }
 
         _store.AddOrchestrationEvent(EventFor(execution, "Completed", outcome + ": " + detail));
@@ -52,7 +52,7 @@ public sealed partial class ExecutionOrchestrator
         var now = _clock.GetUtcNow();
 
         execution.Terminate(terminal, now);
-        task.ReturnToReady(detail, now);
+        task.ReturnToReady(Bounded(detail), now);
 
         _store.AddOrchestrationEvent(EventFor(execution, terminal.ToString(), detail));
         _store.AddAuditEvent(AuditFor(execution, "ExecutionTerminated", terminal + ": " + Bounded(detail)));

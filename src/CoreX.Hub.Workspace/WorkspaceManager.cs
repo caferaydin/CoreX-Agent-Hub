@@ -575,12 +575,50 @@ public sealed partial class WorkspaceManager
             ["diff", NoExternalDiff, NoTextConv, workspace.BaseCommitSha + ".." + (sha ?? "HEAD")],
             cancellationToken);
 
+        // What the tree still holds, in the same terms git itself uses to decide whether a
+        // worktree may be removed: modified or untracked paths, ignored files excluded.
+        // Everything was just staged, so this should be empty - and a caller about to
+        // measure or release the tree needs to know when it is not.
+        var remaining = await GitAsync(
+            workspace.WorkspacePath,
+            ["status", "--porcelain", "--untracked-files=normal"],
+            cancellationToken);
+
         return new ResultCommitOutcome
         {
             State = ResultCommitState.Created,
             CommitSha = sha,
             CommitDiff = diff.Stdout,
+            UncommittedPaths = remaining.Succeeded ? ParseStatusPaths(remaining.Stdout) : [],
+            WorktreeStateKnown = remaining.Succeeded,
+            Detail = remaining.Succeeded ? null : "the worktree state could not be read: " + remaining.Describe(),
         };
+    }
+
+    /// <summary>
+    /// Paths out of <c>git status --porcelain</c>: two status characters, a space, then the
+    /// path. Renames report "old -&gt; new"; the new name is the one that exists on disk.
+    /// </summary>
+    private static IReadOnlyList<string> ParseStatusPaths(string status)
+    {
+        var paths = new List<string>();
+
+        foreach (var line in status.Split('\n'))
+        {
+            var trimmed = line.TrimEnd('\r');
+
+            if (trimmed.Length <= 3)
+            {
+                continue;
+            }
+
+            var path = trimmed[3..].Trim();
+            var arrow = path.IndexOf(" -> ", StringComparison.Ordinal);
+
+            paths.Add(arrow >= 0 ? path[(arrow + 4)..] : path);
+        }
+
+        return paths;
     }
 
     /// <summary>

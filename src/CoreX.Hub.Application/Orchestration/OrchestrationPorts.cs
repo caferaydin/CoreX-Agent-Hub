@@ -54,7 +54,20 @@ public sealed record ExecutionCapture
     public IReadOnlyList<AddedLine> AddedLines { get; init; } = [];
 }
 
-public sealed record ResultCommitOutcomeView(bool Created, string? CommitSha, string? CommitDiff, string Detail);
+/// <summary>
+/// What the Hub's own commit did, and what the worktree still holds afterwards.
+///
+/// <see cref="UncommittedPaths"/> is expected to be empty: everything was staged. When it
+/// is not, the tree and the commit are different things, and nothing downstream may treat
+/// measuring the tree as measuring the commit.
+/// </summary>
+public sealed record ResultCommitOutcomeView(
+    bool Created,
+    string? CommitSha,
+    string? CommitDiff,
+    string Detail,
+    IReadOnlyList<string> UncommittedPaths,
+    bool WorktreeStateKnown);
 
 /// <summary>
 /// The Application owned port for the workspace.
@@ -193,16 +206,18 @@ public sealed record VerificationOutcomeView(
 /// <summary>
 /// The Application owned port for verification.
 ///
-/// The current result is measured in the execution worktree; the baseline is measured in
-/// a disposable tree pinned to the execution's own base commit. Keeping both behind one
-/// port is what stops the orchestrator from accidentally measuring the wrong one.
+/// Both measurements are of a commit, and both happen in a disposable tree pinned to it:
+/// the baseline at the execution's base commit, the result at the Hub's own commit. The
+/// port takes two commit ids and no workspace path at all, which is what makes it
+/// impossible to measure the agent's worktree by accident - and what keeps that worktree
+/// clean enough to be released once a person has decided.
 /// </summary>
 public interface IExecutionVerifier
 {
     Task<VerificationOutcomeView> VerifyAsync(
         Guid repositoryId,
-        PreparedExecutionWorkspace workspace,
         string baseCommitSha,
+        string resultCommitSha,
         CancellationToken ct);
 }
 
