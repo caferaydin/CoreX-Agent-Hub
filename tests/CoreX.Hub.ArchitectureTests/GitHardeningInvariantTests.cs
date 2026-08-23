@@ -116,6 +116,68 @@ public sealed class GitHardeningInvariantTests
             Assert.Contains("RepositoryLockKey(", l, StringComparison.Ordinal));
     }
 
+    [Fact]
+    public void Exact_commit_worktrees_are_created_only_by_the_workspace_module()
+    {
+        // Workspace owns worktree creation and removal. Application and Verification ask
+        // for a snapshot; they never build the git command themselves.
+        var snapshots = RepoLayout.ProductionSourceFiles
+            .Single(f => string.Equals(Path.GetFileName(f), "WorkspaceManager.Snapshots.cs", StringComparison.Ordinal));
+
+        Assert.Contains(
+            Path.DirectorySeparatorChar + "CoreX.Hub.Workspace" + Path.DirectorySeparatorChar,
+            snapshots,
+            StringComparison.Ordinal);
+
+        var snapshotCode = File.ReadAllText(snapshots);
+        Assert.Contains("[\"worktree\", \"add\", \"--detach\"", snapshotCode, StringComparison.Ordinal);
+
+        // Nowhere else in src builds a worktree command.
+        foreach (var file in RepoLayout.ProductionSourceFiles)
+        {
+            if (file.Contains(
+                    Path.DirectorySeparatorChar + "CoreX.Hub.Workspace" + Path.DirectorySeparatorChar,
+                    StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            var code = File.ReadAllText(file);
+            var name = RepoLayout.Relative(file);
+
+            Assert.False(code.Contains("\"worktree\"", StringComparison.Ordinal), $"{name} builds a worktree command");
+            Assert.False(code.Contains("rev-parse", StringComparison.Ordinal), $"{name} builds a rev-parse command");
+        }
+    }
+
+    [Fact]
+    public void A_pinned_snapshot_resolves_nothing_and_reaches_no_network()
+    {
+        // Comments are stripped: naming a thing in order to say it does not happen is
+        // documentation, not the behaviour.
+        var code = string.Join(
+            "\n",
+            ReadProductionFile("WorkspaceManager.Snapshots.cs")
+                .Split('\n')
+                .Where(l => !l.TrimStart().StartsWith("//", StringComparison.Ordinal)));
+
+        // The caller's commit is used as given. Resolving a branch here would be the exact
+        // bug the seam exists to prevent.
+        foreach (var forbidden in new[] { "DefaultBranch", "origin/", "refs/heads", "fetch", "pull", "remote" })
+        {
+            Assert.DoesNotContain(forbidden, code, StringComparison.OrdinalIgnoreCase);
+        }
+
+        // It uses the shared lock and the shared hardening rather than a second copy.
+        Assert.Contains("RepositoryLocks.GetOrAdd(RepositoryLockKey(", code, StringComparison.Ordinal);
+        Assert.Contains("HardenAsync(", code, StringComparison.Ordinal);
+        Assert.DoesNotContain("extensions.worktreeConfig", code, StringComparison.Ordinal);
+
+        // And it verifies what git actually reports rather than trusting the request.
+        Assert.Contains("rev-parse", code, StringComparison.Ordinal);
+        Assert.Contains("HeadMismatch", code, StringComparison.Ordinal);
+    }
+
     private static string ReadProductionFile(string fileName)
     {
         var path = RepoLayout.ProductionSourceFiles

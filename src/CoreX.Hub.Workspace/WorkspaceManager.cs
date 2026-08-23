@@ -21,7 +21,7 @@ namespace CoreX.Hub.Workspace;
 /// There is no push, merge, pull, fetch, publish or deploy path, and no history repair
 /// path: no reset, no rebase, no amend, no forced branch update (E.1 #9).
 /// </summary>
-public sealed class WorkspaceManager
+public sealed partial class WorkspaceManager
 {
     /// <summary>Never let a repository choose the program that renders evidence.</summary>
     private const string NoExternalDiff = "--no-ext-diff";
@@ -520,7 +520,30 @@ public sealed class WorkspaceManager
             };
         }
 
-        var gate = RepositoryLocks.GetOrAdd(RepositoryLockKey(workspace.RepositoryPath), _ => new SemaphoreSlim(1, 1));
+        // No forcing here: git's refusal to remove a worktree holding uncommitted work is
+        // the D6 protection, not an obstacle.
+        return await RemoveWorktreeAsync(
+            workspace.RepositoryPath,
+            workspace.WorkspacePath,
+            ["worktree", "remove", workspace.WorkspacePath],
+            cancellationToken);
+    }
+
+    /// <summary>
+    /// Removes one worktree under the repository critical section, with the bounded retry
+    /// a briefly locked directory needs. Shared by execution worktree release and snapshot
+    /// disposal so there is one removal path and one lock, not two.
+    ///
+    /// It never forces: a worktree that will not go away is reported as orphaned rather
+    /// than having its git metadata deleted out from under it.
+    /// </summary>
+    private async Task<WorkspaceReleaseResult> RemoveWorktreeAsync(
+        string repositoryPath,
+        string worktreePath,
+        IReadOnlyList<string> removeArguments,
+        CancellationToken cancellationToken)
+    {
+        var gate = RepositoryLocks.GetOrAdd(RepositoryLockKey(repositoryPath), _ => new SemaphoreSlim(1, 1));
         await gate.WaitAsync(cancellationToken);
 
         try
@@ -529,10 +552,7 @@ public sealed class WorkspaceManager
 
             for (var attempt = 1; attempt <= _options.WorktreeRemovalAttempts; attempt++)
             {
-                var remove = await GitAsync(
-                    workspace.RepositoryPath,
-                    ["worktree", "remove", workspace.WorkspacePath],
-                    cancellationToken);
+                var remove = await GitAsync(repositoryPath, removeArguments, cancellationToken);
 
                 if (remove.Succeeded)
                 {

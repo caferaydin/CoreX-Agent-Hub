@@ -251,3 +251,89 @@ public sealed record ReconcileReport(IReadOnlyList<WorkspaceStatusEntry> Entries
 
 /// <summary>A workspace the Hub already knows about, supplied by the caller.</summary>
 public sealed record KnownWorkspace(string WorktreePath, string? BranchName, bool HasResultCommit);
+
+/// <summary>Why an exact commit snapshot could not be materialised.</summary>
+public enum SnapshotIssueCode
+{
+    RepositoryUnusable,
+    SnapshotPathRejected,
+    SnapshotPathAlreadyExists,
+    CommitNotFound,
+    CommitShaMalformed,
+    WorktreeAddFailed,
+    HeadMismatch,
+    HardeningFailed,
+}
+
+/// <summary>
+/// Materialise a working tree at one exact commit that the caller already knows.
+///
+/// Deliberately a different request from <see cref="WorkspaceRequest"/>: an agent attempt
+/// resolves a branch and creates <c>agent/&lt;task&gt;/&lt;attempt&gt;</c>, while this
+/// resolves nothing at all. The two intentions stay mechanically distinct so no caller can
+/// drift from one into the other.
+///
+/// Nothing about a task, an attempt, an agent, a provider or a verification profile
+/// belongs here: this is a commit oriented primitive.
+/// </summary>
+public sealed record PinnedSnapshotRequest
+{
+    public required string RepositoryPath { get; init; }
+
+    /// <summary>Trust root the repository must live inside.</summary>
+    public required string RepositoryTrustRoot { get; init; }
+
+    /// <summary>Hub owned root the snapshot must live inside; never inside the repository.</summary>
+    public required string SnapshotRoot { get; init; }
+
+    /// <summary>
+    /// The exact commit to materialise. It is used as given: nothing is resolved, fetched
+    /// or substituted, and a newer commit is never accepted in its place.
+    /// </summary>
+    public required string CommitSha { get; init; }
+
+    /// <summary>Collision safe identity for this snapshot directory.</summary>
+    public required string SnapshotId { get; init; }
+
+    /// <summary>Snapshots live beside each other under one folder, apart from execution worktrees.</summary>
+    public string RelativeSnapshotPath => Path.Combine(PinnedSnapshot.DirectoryName, SnapshotId);
+}
+
+/// <summary>A materialised, disposable working tree at one exact commit.</summary>
+public sealed record PinnedSnapshot
+{
+    /// <summary>Folder that separates disposable snapshots from execution worktrees.</summary>
+    public const string DirectoryName = "_snapshots";
+
+    public required string RepositoryPath { get; init; }
+
+    public required string SnapshotPath { get; init; }
+
+    /// <summary>The commit the caller asked for.</summary>
+    public required string CommitSha { get; init; }
+
+    /// <summary>What git actually reports at HEAD. Equal to <see cref="CommitSha"/> or the snapshot was refused.</summary>
+    public required string ObservedHeadSha { get; init; }
+
+    public required DateTimeOffset CreatedAtUtc { get; init; }
+}
+
+public sealed record PinnedSnapshotResult
+{
+    public required bool Succeeded { get; init; }
+
+    public PinnedSnapshot? Snapshot { get; init; }
+
+    public IReadOnlyList<SnapshotIssue> Issues { get; init; } = [];
+
+    public string Describe() =>
+        Succeeded ? "snapshot at " + Snapshot!.CommitSha[..12] : string.Join("; ", Issues.Select(i => i.ToString()));
+}
+
+public sealed record SnapshotIssue(SnapshotIssueCode Code, string Detail)
+{
+    public override string ToString() => $"{Code}: {Detail}";
+}
+
+/// <summary>Whether a snapshot is still pinned to the commit it was created at.</summary>
+public sealed record PinnedSnapshotCheck(bool StillPinned, string? ObservedHeadSha, string? Detail);

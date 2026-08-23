@@ -16,6 +16,8 @@ public sealed class ForbiddenConstructTests
     private const string ShellPolicyFileName = "ShellExecutablePolicy.cs";
     private const string WorkspaceManagerFileName = "WorkspaceManager.cs";
 
+    private const string SnapshotFileName = "WorkspaceManager.Snapshots.cs";
+
     /// <summary>
     /// Modules on the managed execution filesystem trust boundary. Later execution
     /// facing projects are added here as their phases land.
@@ -163,6 +165,32 @@ public sealed class ForbiddenConstructTests
     }
 
     [Fact]
+    public void The_only_git_protection_exemption_is_snapshot_disposal()
+    {
+        // A non vacuous exemption: the exempt file really does contain exactly one forcing
+        // flag, it really is a worktree removal, and it is nothing else.
+        var snapshots = RepoLayout.ProductionSourceFiles
+            .Single(f => string.Equals(Path.GetFileName(f), SnapshotFileName, StringComparison.Ordinal));
+
+        var text = File.ReadAllText(snapshots);
+
+        var forcing = Assert.Single(
+            text.Split('\n'),
+            l => l.Contains("--force", StringComparison.Ordinal));
+
+        Assert.Contains("\"worktree\", \"remove\", \"--force\"", forcing, StringComparison.Ordinal);
+
+        Assert.DoesNotContain("--no-verify", text, StringComparison.Ordinal);
+        Assert.DoesNotContain("--force-with-lease", text, StringComparison.Ordinal);
+
+        // Execution worktree release is deliberately not exempt and still never forces.
+        var manager = RepoLayout.ProductionSourceFiles
+            .Single(f => string.Equals(Path.GetFileName(f), WorkspaceManagerFileName, StringComparison.Ordinal));
+
+        Assert.DoesNotContain("--force", File.ReadAllText(manager), StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void The_publishing_guard_scans_production_only()
     {
         // The guard would be meaningless if the tests that prove push is blocked were
@@ -180,7 +208,7 @@ public sealed class ForbiddenConstructTests
             new Regex(
                 @"--no-verify|core\.hooksPath\s*=|--force\b|--force-with-lease",
                 RegexOptions.CultureInvariant),
-            allowedFileName: null,
+            allowedFileName: SnapshotFileName,
             because: "E.1 #8: the Hub must never bypass its own protection mechanism.");
     }
 

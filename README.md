@@ -633,6 +633,42 @@ grupta test edilir: bugün geçerli olan **ACTIVE** guard'lar ve ilgili üretim 
 konusu yokken bile kendi dedektörünü sentetik bir pozitif kontrolle doğrular; yani
 "bakacak bir şey olmadığı için geçti" durumuna düşemez.
 
+## Commit'e sabitlenmiş snapshot'lar
+
+`WorkspaceManager.PrepareSnapshotAsync` çağıranın **elinde tuttuğu tam commit'te**
+tek kullanımlık bir çalışma ağacı materyalize eder. Normal `PrepareAsync`'ten kasıtla
+**ayrı bir işlemdir**: o `DefaultBranch`'i çözer ve `agent/<task>/<attempt>` branch'i
+yaratır, bu ise **hiçbir şey çözmez**.
+
+- `PinnedSnapshotRequest.CommitSha` **40 haneli tam object id** olmak zorundadır. `main`,
+  `HEAD`, `origin/main` ve kısaltılmış id **reddedilir** — aksi hâlde çağıran sabitlemediği
+  bir şeyi sabitlediğini sanırdı.
+- Branch, HEAD, remote çözümü **yok**; `fetch`/`pull`/ağ **yok**. Commit yerelde yoksa
+  fail-closed.
+- Worktree **detached** eklenir (`git worktree add --detach`): baseline'ın branch ref'ine
+  ihtiyacı yoktur ve repository ad alanı kirletilmez.
+- `worktree add` sonrası HEAD **yeniden okunur** ve istenen commit'e eşit değilse snapshot
+  reddedilir (`HeadMismatch`). Sonradan `VerifySnapshotPinAsync` ile tekrar doğrulanabilir —
+  üretilen build çıktısı drift değildir, **HEAD'in kayması** driftir.
+- Aynı repository kritik bölümü ve aynı Faz 3 sertleştirmesi kullanılır (ikinci bir kopya
+  yok): Hub hook'ları, kapalı push hedefi, etkisiz credential helper.
+- Snapshot `<workspace-root>/_snapshots/<id>` altındadır — kaynak reponun ve agent
+  worktree'sinin **dışında**, execution worktree'lerinden ayırt edilebilir.
+
+**Neden baseline agent worktree'sinde koşmuyor:** doğrulama `bin/`, `obj/`, test sonuçları
+ve üretilmiş dosyalar bırakır. Bunlar agent'ın başlangıç dosya sistemini, sonraki
+`GitWorktreeDiff`'i, `FileInventory`'yi, K2 kapsam ve K3 sır değerlendirmesini ve dolayısıyla
+result commit uygunluğunu **kirletirdi**. Bunu `reset`/`clean` cambazlığıyla çözmeyi
+reddediyoruz; izolasyon hem ucuz hem güvenilir.
+
+**Yaşam döngüsü:** snapshot tek kullanımlıktır. "Result commit'i olmayan worktree korunur"
+kuralı ona **uygulanmaz** — o kural agent'ın yazdığı, insanın hâlâ ihtiyaç duyabileceği işi
+korur; snapshot'ta öyle bir iş yoktur. `ReleaseSnapshotAsync` bu yüzden üretilmiş dosyaları
+atarak kaldırır. Bu, kod tabanındaki **tek bilinçli E.1 #8 istisnasıdır**, yalnızca
+tek kullanımlık snapshot'lara kapsanmıştır, Hub'ın kendi yarattığı bir worktree'yi kaldırır
+ve **hiçbir ref'e, branch'e veya history'ye dokunmaz**. Mimari test istisnanın tekliğini ve
+execution worktree release'inin **hâlâ zorlamadığını** kilitler.
+
 ## Açık denetim kapıları
 
 | Kapı | Kapsam | Ne zaman kapanmalı |
