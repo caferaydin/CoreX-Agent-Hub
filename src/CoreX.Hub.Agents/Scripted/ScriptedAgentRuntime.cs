@@ -38,20 +38,23 @@ public sealed class ScriptedAgentRuntime : IAgentRuntime
     public ScriptedAgentMode Mode => _options.Mode;
 
     /// <summary>
-    /// Declared honestly, capability by capability, because a test runtime that claimed
+    /// Declared honestly, capability by capability, because a runtime that claimed
     /// everything would hide exactly the gaps the Unsupported result exists to surface.
     ///
-    /// StructuredSchema: yes, it writes a deterministic result document when asked.
+    /// StructuredSchema: no. It writes a fixed result document when a path is given, but it
+    ///   never reads AgentRunRequest.StructuredOutputSchema and never checks its output
+    ///   against one. Writing to a path is not schema support, and declaring it as such
+    ///   would let a caller believe a schema had been honoured when nothing looked at it.
     /// SessionResume: no, there is no session and nothing to resume.
     /// ToolAllowlist: no, it uses no tools, so restricting them would mean nothing.
     /// CostCap: no, nothing here costs anything, so a cap could not be honoured or refused.
     /// Streaming: no, output is captured and reported at the end, not incrementally.
     /// ReadOnlyMode: no, it cannot be constrained to change nothing; that is what NoOp is.
+    ///
+    /// A caller needing a schema honoured therefore gets Unsupported rather than a
+    /// plausible looking document nothing validated.
     /// </summary>
-    public AgentCapabilities Describe() => AgentCapabilities.None with
-    {
-        SupportsStructuredSchema = true,
-    };
+    public AgentCapabilities Describe() => AgentCapabilities.None;
 
     /// <summary>
     /// Deterministic and offline. It checks only what this runtime genuinely needs - that

@@ -27,21 +27,26 @@ public sealed record ContextDecisionDocument
     public required string Markdown { get; init; }
 }
 
-/// <summary>Live git facts the agent is allowed to know. No credentials, no environment.</summary>
+/// <summary>
+/// Live git facts the agent is allowed to know. No credentials, no environment - and no
+/// execution identity.
+///
+/// The generated agent branch and the physical workspace path are deliberately absent.
+/// They belong to one attempt rather than to the work, and putting them here would make
+/// two attempts at the same task produce different context packs, which frozen Loop Zero
+/// acceptance criterion 6 forbids. The agent already learns where it is running from
+/// AgentRunRequest.WorkingDirectory.
+/// </summary>
 public sealed record ContextRepositoryState
 {
     public required Guid RepositoryId { get; init; }
 
     public required string BaseCommitSha { get; init; }
 
-    public required string BranchName { get; init; }
-
+    /// <summary>The stable source branch of the repository, not the branch of this attempt.</summary>
     public required string DefaultBranch { get; init; }
 
     public IReadOnlyList<string> ProtectedBranches { get; init; } = [];
-
-    /// <summary>Where the agent may work, relative to the workspace it was given.</summary>
-    public string WorkspaceRelativePath { get; init; } = ".";
 }
 
 /// <summary>
@@ -65,6 +70,10 @@ public sealed record ContextBuildRequest
     /// <summary>Already accepted acceptance truth, serialised as declared.</summary>
     public IReadOnlyList<ContextAcceptanceCriterion> AcceptanceCriteria { get; init; } = [];
 
+    /// <summary>
+    /// Recorded in the manifest as provenance. It is deliberately not semantic input: the
+    /// pack hash must not move between attempt 1 and attempt 2 of the same work.
+    /// </summary>
     public int AttemptNo { get; init; } = 1;
 
     public ContextRuleDocument? OrganizationRules { get; init; }

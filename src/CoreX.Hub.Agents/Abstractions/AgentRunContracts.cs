@@ -31,7 +31,11 @@ public sealed record AgentRunRequest
 
     public string? EffortHint { get; init; }
 
-    /// <summary>Requested only when the runtime declares SupportsStructuredSchema.</summary>
+    /// <summary>
+    /// Only meaningful to a runtime that declares SupportsStructuredSchema. A runtime that
+    /// does not must leave it alone rather than pretend: the caller is entitled to
+    /// Unsupported instead of an unvalidated document.
+    /// </summary>
     public string? StructuredOutputSchema { get; init; }
 
     /// <summary>Where a structured result should be written, when one is requested.</summary>

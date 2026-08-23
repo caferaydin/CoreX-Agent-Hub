@@ -376,6 +376,15 @@ belleği **yoktur**.
 **Bütçe 64 KB'dir ve serttir.** Aşılırsa `ContextBuildFailed` döner: sessiz kırpma yok,
 son dosyaları atma yok, otomatik özetleme yok, sıkıştırmak için LLM çağırma yok.
 
+**Execution kimliği context semantiği değildir.** `ExecutionId`, `AttemptNo`, üretilen
+agent branch'i (`agent/HUB-001/1`), fiziksel worktree yolu ve materyalizasyon kökü
+anlamsal dosyalara **hiç girmez** — aynı işin ikinci denemesi aynı pack'i üretmek
+zorundadır (Loop Zero kabul kriteri #6). `repo-state.json` yalnızca kararlı repository
+gerçeklerini taşır: `RepositoryId`, `BaseCommitSha`, `DefaultBranch`, `ProtectedBranches`.
+Agent nerede çalıştığını zaten `AgentRunRequest.WorkingDirectory`'den öğrenir.
+`AttemptNo` yalnızca `manifest.json`'da provenance olarak durur ve manifest hash'in
+**dışındadır**.
+
 **ContextPackHash** anlamdan türer. Algoritma açıktır: anlamsal dosyalar yazılır, her biri
 SHA-256'lanır, `manifest.json` **hariç** sıralı envanterden kanonik bir metin kurulur,
 ContextPackHash o metnin SHA-256'sıdır, sonra manifest yazılır. Kendine referans yoktur ve
@@ -418,9 +427,12 @@ Deterministik davranışın tamamı o fixture'dadır — böylece `unexpected-co
 git'i **fixture** çağırır, üretim kodu değil. `ScriptedAgentRuntime` içinde git politikası
 veya history onarımı yoktur (E.1 #5, E.1 #9).
 
-Beyan edilen yetenekler (dürüstçe): `SupportsStructuredSchema` **evet** (deterministik bir
-sonuç belgesi yazabiliyor); diğer beşi **hayır** — oturum yok, araç yok, maliyet yok,
-artımlı akış yok, salt-okunur kısıtlaması yok.
+Beyan edilen yetenekler (dürüstçe): **altısı da `false`**. `SupportsStructuredSchema`
+dahil — runtime istendiğinde bir sonuç belgesi yazar, ama `StructuredOutputSchema`'yı
+**ne okur ne doğrular**. Bir yola dosya yazmak şema desteği değildir; öyle beyan etmek
+çağıranın doğrulanmamış bir belgeyi şemaya uygun sanmasına yol açardı. Şema gereken
+çağıran `Unsupported` alır. Diğerleri: oturum yok, araç yok, maliyet yok, artımlı akış
+yok, salt-okunur kısıtlaması yok.
 
 ## Katkı kuralları
 

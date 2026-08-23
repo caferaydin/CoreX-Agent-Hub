@@ -110,19 +110,20 @@ public sealed class AgentContractTests
 
         var capabilities = fixture.Runtime(ScriptedAgentMode.NoOp).Describe();
 
-        // It can write a deterministic structured result, and genuinely does nothing else.
-        Assert.True(capabilities.SupportsStructuredSchema);
+        // It supports none of them, and says so. Writing a fixed document to a requested
+        // path is not schema support: the runtime never reads StructuredOutputSchema and
+        // never checks its output against one, so claiming the capability would let a
+        // caller believe a schema had been honoured when nothing looked at it.
+        Assert.False(capabilities.SupportsStructuredSchema);
         Assert.False(capabilities.SupportsSessionResume);
         Assert.False(capabilities.SupportsToolAllowlist);
         Assert.False(capabilities.SupportsCostCap);
         Assert.False(capabilities.SupportsStreaming);
         Assert.False(capabilities.SupportsReadOnlyMode);
 
-        // A test runtime that claimed everything would hide exactly the gaps that
-        // Unsupported exists to make visible.
-        Assert.Contains(
-            CapabilityProperties(),
-            p => (bool)p.GetValue(capabilities)! == false);
+        // A runtime that claimed a capability it does not have would hide exactly the gaps
+        // that Unsupported exists to make visible.
+        Assert.All(CapabilityProperties(), p => Assert.False((bool)p.GetValue(capabilities)!));
     }
 
     [Fact]

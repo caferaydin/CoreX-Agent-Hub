@@ -92,8 +92,10 @@ public sealed partial class ContextPackBuilder
     private static string RenderTask(ContextBuildRequest request)
     {
         var builder = new StringBuilder();
+        // No attempt number: a second attempt at the same work is the same instructions,
+        // and a pack that changed between attempts would break the Loop Zero criterion
+        // that two executions of one task context hash identically.
         builder.Append("# Task ").Append(request.TaskKey).Append("\n\n");
-        builder.Append("Attempt: ").Append(request.AttemptNo.ToString(CultureInfo.InvariantCulture)).Append("\n\n");
         builder.Append("## Objective\n\n").Append(Normalize(request.Objective)).Append('\n');
 
         AppendScope(builder, "Allowed scope", request.AllowedScope,
@@ -167,8 +169,9 @@ public sealed partial class ContextPackBuilder
 
     /// <summary>
     /// Live git facts only. No credentials, no provider authentication, no billing, no
-    /// developer home directory, no unrelated environment, and no timestamp: a pack built
-    /// twice from the same state has to hash the same.
+    /// developer home directory, no unrelated environment, no timestamp - and no execution
+    /// identity: the generated agent branch and the physical workspace path belong to one
+    /// attempt, not to the work, so they never reach the pack.
     /// </summary>
     private static string RenderRepositoryState(ContextBuildRequest request)
     {
@@ -179,10 +182,8 @@ public sealed partial class ContextPackBuilder
             Format = ManifestFormat,
             RepositoryId = state.RepositoryId.ToString("D"),
             BaseCommitSha = state.BaseCommitSha,
-            BranchName = state.BranchName,
             DefaultBranch = state.DefaultBranch,
             ProtectedBranches = [.. state.ProtectedBranches.OrderBy(b => b, StringComparer.Ordinal)],
-            WorkspaceRelativePath = state.WorkspaceRelativePath,
         };
 
         return JsonSerializer.Serialize(payload, JsonOptions);
@@ -196,12 +197,8 @@ public sealed partial class ContextPackBuilder
 
         public string BaseCommitSha { get; init; } = string.Empty;
 
-        public string BranchName { get; init; } = string.Empty;
-
         public string DefaultBranch { get; init; } = string.Empty;
 
         public string[] ProtectedBranches { get; init; } = [];
-
-        public string WorkspaceRelativePath { get; init; } = string.Empty;
     }
 }

@@ -115,10 +115,15 @@ public sealed class ContextPackHashTests
             }
         },
         {
-            "branch",
-            r => r with { RepositoryState = r.RepositoryState with { BranchName = "agent/HUB-001/2" } }
+            // The stable source branch is a genuine semantic fact; the generated agent
+            // branch of one attempt is not, and no longer reaches the pack at all.
+            "default branch",
+            r => r with { RepositoryState = r.RepositoryState with { DefaultBranch = "trunk" } }
         },
-        { "attempt", r => r with { AttemptNo = 2 } },
+        {
+            "protected branches",
+            r => r with { RepositoryState = r.RepositoryState with { ProtectedBranches = ["main"] } }
+        },
         { "task key", r => r with { TaskKey = "HUB-002" } },
     };
 }

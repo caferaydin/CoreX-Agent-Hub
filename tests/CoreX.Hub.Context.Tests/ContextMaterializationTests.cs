@@ -101,7 +101,6 @@ public sealed class ContextMaterializationTests
         var json = fixture.Read(result.Pack!, ContextPackBuilder.RepositoryStateFileName);
 
         Assert.Contains(ContextFixture.BaseCommit, json, StringComparison.Ordinal);
-        Assert.Contains("agent/HUB-001/1", json, StringComparison.Ordinal);
         Assert.Contains("main", json, StringComparison.Ordinal);
 
         // No credentials, no authentication, no billing, no absolute machine paths and no

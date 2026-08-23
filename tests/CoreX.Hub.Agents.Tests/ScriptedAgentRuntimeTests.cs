@@ -136,8 +136,13 @@ public sealed class ScriptedAgentRuntimeTests
         Assert.True(result.Duration < TimeSpan.FromSeconds(30));
     }
 
+    /// <summary>
+    /// Writing to a requested path is a real behaviour and stays. It is deliberately not
+    /// declared as SupportsStructuredSchema, because nothing here reads or enforces the
+    /// requested schema.
+    /// </summary>
     [Fact]
-    public async Task A_structured_result_is_produced_when_one_is_requested()
+    public async Task A_result_document_is_written_when_a_path_is_requested()
     {
         using var fixture = ScriptedFixture.Create();
         var path = Path.Combine(fixture.WorkspaceRoot, "result.json");
@@ -150,5 +155,30 @@ public sealed class ScriptedAgentRuntimeTests
         Assert.NotNull(result.StructuredOutput);
         Assert.Contains("\"runtime\":\"scripted\"", result.StructuredOutput!, StringComparison.Ordinal);
         Assert.Contains(sink.Events, e => e.Kind == AgentEventKind.StructuredOutputAvailable);
+    }
+
+    [Fact]
+    public async Task A_requested_schema_is_neither_read_nor_enforced()
+    {
+        using var fixture = ScriptedFixture.Create();
+        var path = Path.Combine(fixture.WorkspaceRoot, "result.json");
+
+        var request = fixture.Request(structuredOutputPath: path) with
+        {
+            StructuredOutputSchema = "{\"type\":\"object\",\"required\":[\"summary\",\"filesChanged\"]}",
+        };
+
+        var result = await fixture.Runtime(ScriptedAgentMode.NoOp)
+            .RunAsync(request, new EventCollector(), CancellationToken.None);
+
+        Assert.Equal(AgentRunOutcome.Completed, result.Outcome);
+        Assert.NotNull(result.StructuredOutput);
+
+        // The document ignores the schema entirely - it has neither required field - which
+        // is exactly why the runtime declares SupportsStructuredSchema false rather than
+        // reporting an unvalidated document as schema compliant.
+        Assert.DoesNotContain("summary", result.StructuredOutput!, StringComparison.Ordinal);
+        Assert.DoesNotContain("filesChanged", result.StructuredOutput!, StringComparison.Ordinal);
+        Assert.False(fixture.Runtime(ScriptedAgentMode.NoOp).Describe().SupportsStructuredSchema);
     }
 }

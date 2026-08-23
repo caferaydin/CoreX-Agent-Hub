@@ -90,10 +90,8 @@ public sealed class ContextFixture : IDisposable
         {
             RepositoryId = RepositoryId,
             BaseCommitSha = BaseCommit,
-            BranchName = "agent/HUB-001/1",
             DefaultBranch = "main",
             ProtectedBranches = ["main", "release"],
-            WorkspaceRelativePath = ".",
         },
     };
 
