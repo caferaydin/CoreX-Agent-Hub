@@ -417,6 +417,64 @@ gateway soyutlaması yok, LiteLLM klonu yok, genel sağlayıcı SDK'sı yok, mod
 Faz 5 hiçbir vLLM/Ollama/model HTTP istemcisi uygulamaz — `src/` altında bugün
 `HttpClient` dahil hiçbir çıkarım istemcisi yüzeyi yoktur ve bu da test edilir.
 
+### Erişim, kimlik doğrulama ve faturalama
+
+Sağlayıcı bağımsızlığı bir adım daha ileri gider: **bir runtime, birbirinden bağımsız
+faturalanan birden çok erişim yöntemini destekleyebilir.** Dört kavram ayrı tutulur ve
+tek bir şeye katlanmaz:
+
+```
+Provider  ·  Runtime  ·  Authentication method  ·  Billing source
+```
+
+Gelecekte desteklenmesi gereken örnekler: `claude-code` hem plan doğrulamalı hesap
+oturumu hem Anthropic API anahtarı ile; `codex` hem ChatGPT ile oturum açarak hem OpenAI
+API faturalamasıyla; `gemini-cli` Google hesabı, Gemini API anahtarı veya Vertex AI kimlik
+bilgisiyle; `qwen-code` Coding Plan, token/API planı, üçüncü taraf ya da yerel sağlayıcı
+ile. Yerel/özel runtime'lar **hiçbir dış kimlik doğrulaması veya faturalama
+gerektirmeyebilir.**
+
+Varsayılmayanlar (hepsi test edilir):
+
+- bir sağlayıcının tek bir kimlik doğrulama yöntemi olduğu,
+- bir runtime'ın tek bir faturalama modeli olduğu,
+- abonelik erişimi ile API erişiminin denk olduğu,
+- var diye bir API anahtarının kullanılması gerektiği,
+- abonelik/hesap erişiminden ücretli API erişimine **otomatik geçilebileceği.**
+
+**Ücretli fallback asla sessizce olmaz.** Hesap oturumu yoksa bu raporlanacak bir
+sonuçtur, para harcamaya başlamak için bir gerekçe değil. Erişim profilini kullanıcı
+açıkça seçer.
+
+Kavramsal ayrım (dikiş korunur, **Faz 5'te uygulanmaz**):
+
+```
+AgentProfile           Role · Provider · RuntimeKey · Model · Permissions · Limits
+RuntimeAccessProfile   RuntimeKey · AccessMode · CredentialBinding? · hesap/bulut bağı?
+                       · faturalama sınıflandırma meta verisi?
+```
+
+Örnek (yalnızca uyumluluk örneği, bugün şema **yok**):
+
+```yaml
+runtimeKey: claude-code   accessMode: account-session
+runtimeKey: claude-code   accessMode: api-key         credentialRef: anthropic-production
+runtimeKey: codex         accessMode: account-session
+runtimeKey: gemini-cli    accessMode: google-account | api-key | vertex-ai
+runtimeKey: local-agent   accessMode: local
+```
+
+**Sırlar `AgentProfile`'da veya normal yapılandırmada asla saklanmaz.** Bugün
+yapılandırma grafiğindeki *hiçbir* tipte `ApiKey`/`Secret`/`Password`/`Token` adlı bir
+alan yoktur ve bu test edilir. Gelecekteki bir kimlik bilgisi bağı bir **kaynağa referans
+verir**, anahtarın kendisini taşımaz.
+
+Orchestrator sağlayıcıya özgü kimlik doğrulamaya da kördür: `if provider == Claude &&
+accessMode == ApiKey` gibi yollar yasaktır. Erişim profilini sağlayıcının gerçek
+çağrısına çevirmek **adapter'ın işidir**. Yetenekler ileride erişim-modu bilgisini
+taşıyabilir, ama `IAgentRuntime` bunun için şişirilmez — üç üyeli sözleşme guard ile
+kilitlidir. Genel faturalama motoru yoktur.
+
 Bu kısıtlar `tests/CoreX.Hub.ArchitectureTests/ProviderNeutralityTests.cs` içinde iki
 grupta test edilir: bugün geçerli olan **ACTIVE** guard'lar ve ilgili üretim tipi ortaya
 çıktığı anda gerçekten denetim yapmaya başlayan **ARMED** guard'lar. Bir ARMED guard,

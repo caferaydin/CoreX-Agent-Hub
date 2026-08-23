@@ -274,6 +274,90 @@ public sealed class ProviderNeutralityTests
         Assert.DoesNotContain("HttpClient", catalogCode, StringComparison.Ordinal);
     }
 
+    // ------------------------- ACTIVE NOW: access, authentication and billing --------
+
+    [Fact]
+    public void Active_the_agent_profile_carries_no_access_or_billing_concept()
+    {
+        // One runtime may be reachable through several independently billed access
+        // methods - a plan authenticated session, an API key, a cloud credential - so how
+        // an execution is paid for is a separate identity from which agent it is. Folding
+        // it into AgentProfile would make "provider" mean four things at once.
+        string[] forbidden =
+        [
+            "AccessMode", "Access", "Credential", "Account", "Session",
+            "Billing", "Subscription", "Plan", "Quota", "Tier", "Usage",
+        ];
+
+        foreach (var property in typeof(AgentProfile).GetProperties())
+        {
+            foreach (var word in forbidden)
+            {
+                Assert.False(
+                    property.Name.Contains(word, StringComparison.OrdinalIgnoreCase),
+                    $"AgentProfile.{property.Name} couples access or billing into the agent identity");
+            }
+        }
+    }
+
+    [Fact]
+    public void Active_no_configuration_type_can_hold_a_secret()
+    {
+        // A credential binding names a source; it never carries the value. Nothing in the
+        // configuration graph may be a place to paste an API key.
+        string[] secretish = ["ApiKey", "Secret", "Password", "Token", "Bearer", "PrivateKey"];
+
+        var configurationTypes = typeof(Application.Configuration.HubConfig).Assembly
+            .GetTypes()
+            .Where(t => t.Namespace?.EndsWith(".Configuration", StringComparison.Ordinal) == true)
+            .ToList();
+
+        Assert.NotEmpty(configurationTypes);
+
+        foreach (var type in configurationTypes)
+        {
+            foreach (var property in type.GetProperties())
+            {
+                foreach (var word in secretish)
+                {
+                    Assert.False(
+                        property.Name.Contains(word, StringComparison.OrdinalIgnoreCase),
+                        $"{type.Name}.{property.Name} would be a place to persist a secret");
+                }
+            }
+        }
+    }
+
+    [Fact]
+    public void Active_no_production_code_reasons_about_access_or_billing_modes()
+    {
+        // Nothing today decides between a subscription session and a paid API call, and
+        // nothing may start to outside a provider adapter.
+        var offenders = new List<string>();
+
+        foreach (var file in RepoLayout.ProductionSourceFiles.Where(f => !IsProviderAdapter(f)))
+        {
+            var code = CodeOnly(File.ReadAllText(file));
+            var found = FindAccessConcepts(code);
+
+            offenders.AddRange(found.Select(f2 => $"{RepoLayout.Relative(file)}: {f2}"));
+        }
+
+        Assert.Empty(offenders);
+    }
+
+    [Fact]
+    public void Active_the_access_concept_detector_is_not_fooled_by_unrelated_names()
+    {
+        // PropertyAccessMode is an EF Core member, not an access mode decision, so the
+        // detector matches whole identifiers rather than substrings.
+        Assert.Empty(FindAccessConcepts("e.Navigation(x).UsePropertyAccessMode(PropertyAccessMode.Field);"));
+
+        Assert.NotEmpty(FindAccessConcepts("if (profile.AccessMode == AccessMode.ApiKey) { }"));
+        Assert.NotEmpty(FindAccessConcepts("var key = credentials.ApiKey;"));
+        Assert.NotEmpty(FindAccessConcepts("if (!session.IsValid) { UseApiKeyBilling(); }"));
+    }
+
     // ------------------------------------------------------- ARMED FOR PHASE 5 --------
 
     [Fact]
@@ -400,6 +484,85 @@ public sealed class ProviderNeutralityTests
         }
     }
 
+    [Fact]
+    public void Armed_orchestration_does_not_branch_on_access_or_billing_mode()
+    {
+        // Translating an access profile into a provider's actual invocation is adapter
+        // work. The orchestrator must not know that Claude has a plan session and an API
+        // key, or that Gemini has three ways in.
+        Assert.NotEmpty(FindAccessConcepts(
+            "if (provider == Provider.Claude && accessMode == AccessMode.ApiKey) { }"));
+        Assert.NotEmpty(FindAccessConcepts("switch (profile.AccessMode) { }"));
+        Assert.Empty(FindAccessConcepts("var runtime = registry.Resolve(profile.RuntimeKey);"));
+
+        foreach (var file in OrchestrationSourceFiles())
+        {
+            var offenders = FindAccessConcepts(CodeOnly(File.ReadAllText(file)));
+            Assert.Empty(offenders.Select(o => $"{RepoLayout.Relative(file)}: {o}"));
+        }
+    }
+
+    [Fact]
+    public void Armed_nothing_ever_falls_back_from_account_access_to_paid_api_access()
+    {
+        // A paid fallback must never happen silently: if an account session is
+        // unavailable, that is a result to report, not a reason to start spending money.
+        Assert.NotEmpty(FindSilentFallback(
+            "if (session is null) { return UseApiKey(profile); } // silent paid fallback"));
+        Assert.NotEmpty(FindSilentFallback("var mode = accountSession ?? apiKeyAccess;"));
+        Assert.Empty(FindSilentFallback("var runtime = registry.Resolve(profile.RuntimeKey);"));
+
+        foreach (var file in RepoLayout.ProductionSourceFiles)
+        {
+            var offenders = FindSilentFallback(CodeOnly(File.ReadAllText(file)));
+            Assert.Empty(offenders.Select(o => $"{RepoLayout.Relative(file)}: {o}"));
+        }
+    }
+
+    [Fact]
+    public void Armed_an_access_profile_stays_separable_from_the_agent_profile()
+    {
+        if (FindTypeDeclaration("RuntimeAccessProfile") is null)
+        {
+            // ARMED: the seam is reserved, not built. Phase 5 implements no access
+            // profile and no credential storage.
+            return;
+        }
+
+        // The two identities stay apart: adding an access profile must not quietly add
+        // access fields to the agent profile as well.
+        foreach (var property in typeof(AgentProfile).GetProperties())
+        {
+            Assert.False(
+                property.Name.Contains("Access", StringComparison.OrdinalIgnoreCase),
+                $"AgentProfile.{property.Name} absorbed the access identity");
+        }
+    }
+
+    [Fact]
+    public void Armed_a_credential_binding_references_a_source_and_never_holds_one()
+    {
+        var declaration = FindTypeDeclaration("RuntimeAccessProfile")
+                          ?? FindTypeDeclaration("CredentialBinding");
+
+        if (declaration is null)
+        {
+            // ARMED alongside the seam above.
+            return;
+        }
+
+        // Whatever the shape turns out to be, it may name a credential source and may not
+        // become a container for the credential.
+        var code = CodeOnly(File.ReadAllText(declaration));
+
+        foreach (var value in new[] { "ApiKey ", "ApiKey;", "Secret ", "Secret;", "Password" })
+        {
+            Assert.False(
+                code.Contains(value, StringComparison.Ordinal),
+                $"{RepoLayout.Relative(declaration)} looks like it stores a credential value");
+        }
+    }
+
     // ------------------------------------------------------------------ helpers -------
 
     private const string SecretCatalogFileName = "SecretPatternCatalog.cs";
@@ -445,6 +608,46 @@ public sealed class ProviderNeutralityTests
 
         return ProviderWords.Any(w =>
             path.Contains($"{separator}{w}", StringComparison.OrdinalIgnoreCase));
+    }
+
+    /// <summary>
+    /// Reasoning about how access is authenticated or billed. Matched as whole
+    /// identifiers, so an unrelated framework member such as PropertyAccessMode is not a
+    /// finding.
+    /// </summary>
+    private static IReadOnlyList<string> FindAccessConcepts(string code)
+    {
+        string[] concepts =
+        [
+            "AccessMode", "AccessProfile", "CredentialRef", "CredentialBinding",
+            "ApiKey", "AccountSession", "Subscription", "Billing", "Quota",
+            "UseApiKey", "ApiKeyBilling",
+        ];
+
+        return
+        [
+            .. concepts.Where(c => Regex.IsMatch(
+                code,
+                @"(?<![A-Za-z0-9_])" + Regex.Escape(c),
+                RegexOptions.IgnoreCase)),
+        ];
+    }
+
+    /// <summary>
+    /// A path that would quietly turn missing account access into paid API access. The
+    /// shapes are narrow on purpose: a null coalesce onto an api key, or a branch that
+    /// reaches for one when a session is absent.
+    /// </summary>
+    private static IReadOnlyList<string> FindSilentFallback(string code)
+    {
+        string[] patterns =
+        [
+            @"\?\?\s*[A-Za-z_.]*apiKey",
+            @"(session|account)[A-Za-z]*\s*(is\s+null|==\s*null)[^;]{0,120}?(apiKey|UseApiKey)",
+            @"(fallback|fall\s?back)[^;\r\n]{0,60}(apiKey|api\s?key|billing)",
+        ];
+
+        return [.. patterns.Where(p => Regex.IsMatch(code, p, RegexOptions.IgnoreCase | RegexOptions.Singleline))];
     }
 
     private static IReadOnlyList<string> FindBackendConcepts(string code)
