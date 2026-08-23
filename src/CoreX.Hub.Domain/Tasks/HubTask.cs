@@ -170,9 +170,15 @@ public sealed class HubTask
         UpdatedAtUtc = nowUtc;
     }
 
+    /// <summary>
+    /// Scope entries are parsed by the domain value object, so a malformed one cannot
+    /// exist on a task at all - let alone survive until a gate discovers, after an agent
+    /// has run, that the task's own policy was unreadable. The stored representation stays
+    /// textual; ScopeGlob owns what that text means.
+    /// </summary>
     private static List<string> NormalizeScope(IEnumerable<string> values) =>
         [.. (values ?? [])
             .Where(v => !string.IsNullOrWhiteSpace(v))
-            .Select(v => v.Trim())
+            .Select(v => ScopeGlob.Parse(v).Value)
             .Distinct(StringComparer.Ordinal)];
 }

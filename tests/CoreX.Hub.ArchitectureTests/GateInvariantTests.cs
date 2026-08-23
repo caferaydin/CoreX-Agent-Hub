@@ -95,8 +95,8 @@ public sealed class GateInvariantTests
         Assert.Equal(SecretPatternCatalog.Names, scanner.PatternNames);
         Assert.Equal(SecretPatternCatalog.Names, new SecretGuard(scanner).PatternNames);
 
-        // The secret side of the gate layer owns no expression of its own. ScopePattern is
-        // deliberately not in scope here: its expressions describe globs, not secrets.
+        // The gate layer owns no expression of its own at all now that scope matching
+        // belongs to the domain value object.
         foreach (var fileName in new[] { "SecretGuard.cs", "ISecretScanner.cs" })
         {
             var file = GateSourceFiles().Single(f => string.Equals(Path.GetFileName(f), fileName, StringComparison.Ordinal));
@@ -192,6 +192,59 @@ public sealed class GateInvariantTests
                 }
             }
         }
+    }
+
+    [Fact]
+    public void Task_scope_matching_lives_only_in_the_domain_value_object()
+    {
+        // Architecture D.4 names ScopeGlob a domain value object. One authority decides
+        // what a scope entry may be, canonically is and matches; a second matcher
+        // elsewhere would let a task be judged by rules other than the ones it was
+        // validated against.
+        var authority = RepoLayout.ProductionSourceFiles
+            .Single(f => string.Equals(Path.GetFileName(f), "ScopeGlob.cs", StringComparison.Ordinal));
+
+        Assert.Contains(
+            Path.DirectorySeparatorChar + "CoreX.Hub.Domain" + Path.DirectorySeparatorChar,
+            authority,
+            StringComparison.Ordinal);
+
+        // Non vacuous: the authority really is the thing that translates a glob.
+        var authorityCode = File.ReadAllText(authority);
+        Assert.Contains("Regex", authorityCode, StringComparison.Ordinal);
+        Assert.Contains("Matches", authorityCode, StringComparison.Ordinal);
+
+        // Names that would be a second task scope matcher. Deliberately narrow: this bans
+        // Hub task scope semantics elsewhere, not glob functionality in general.
+        string[] rivals = ["ScopePattern", "GlobMatcher", "ScopeRegexMatcher", "ScopeMatcher", "GlobToRegex"];
+
+        foreach (var file in RepoLayout.ProductionSourceFiles.Where(f => f != authority))
+        {
+            var code = CodeOnly(File.ReadAllText(file));
+            var name = RepoLayout.Relative(file);
+
+            foreach (var rival in rivals)
+            {
+                Assert.False(code.Contains(rival, StringComparison.Ordinal), $"{name}: {rival}");
+            }
+        }
+    }
+
+    [Fact]
+    public void The_scope_gate_delegates_rather_than_translating_globs_itself()
+    {
+        var guard = RepoLayout.ProductionSourceFiles
+            .Single(f => string.Equals(Path.GetFileName(f), "ScopeGuard.cs", StringComparison.Ordinal));
+
+        var code = CodeOnly(File.ReadAllText(guard));
+
+        Assert.Contains("ScopeGlob.Parse", code, StringComparison.Ordinal);
+        Assert.Contains("ScopeGlob.NormalizePath", code, StringComparison.Ordinal);
+
+        // No glob translation of its own: no expression, no wildcard handling.
+        Assert.DoesNotContain("Regex", code, StringComparison.Ordinal);
+        Assert.DoesNotContain("Translate", code, StringComparison.Ordinal);
+        Assert.DoesNotContain("StringBuilder", code, StringComparison.Ordinal);
     }
 
     private static string CodeOnly(string source) =>

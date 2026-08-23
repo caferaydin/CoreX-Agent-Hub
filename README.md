@@ -449,7 +449,19 @@ amend, rebase, force push yok. Agent'ın commit'i bıraktığı yerde erişilebi
 (ADR-0005, errata E1). Commit grafiği raporu zenginleştirir, kararı **vermez**: boş bir
 grafik HEAD uyuşmazlığını geçişe çeviremez, sahte SHA da uydurulmaz.
 
-**K2 ScopeGuard** — dokunulan her yol önce `AllowedScope`'a uymalı, sonra **hiçbir**
+**K2 ScopeGuard** — eşleştirme semantiğinin tamamı `Domain.Common.ScopeGlob` value
+object'inindir (mimari § D.4). Bir scope girdisinin ne olabileceği, kanonik olarak ne
+olduğu ve neyi eşlediği **tek yerde** tanımlıdır; Application'da ikinci bir glob dili
+yoktur ve mimari test bunu kilitler. Dil dar: `*` segment içi, `?` tek karakter, `**`
+segmentler arası, sonda `/` dizin öneki.
+
+Geçersiz bir scope ifadesi **görev oluşturulurken** reddedilir (`DomainException`), yani
+mutlak, sürücü nitelikli, UNC veya `..` içeren bir kapsam bildirimi hiçbir zaman Ready
+bir göreve ulaşamaz — agent çalıştıktan sonra "görevin kendi politikası okunaksızmış"
+diye keşfedilmez. Depolama düz metin kalır (`string[]`, migration yok); metnin **anlamı**
+`ScopeGlob`'undur.
+
+Dokunulan her yol önce `AllowedScope`'a uymalı, sonra **hiçbir**
 `ForbiddenScope`'a uymamalıdır. **Deny kazanır**: `src/**` izinli + `src/generated/**`
 yasaklı ise `src/orders/Order.cs` geçer, `src/generated/Client.cs` bloklanır. Değiştirilen,
 eklenen, silinen ve rename'in **her iki ucu** aynı listeden gelir, dolayısıyla tek yüzü
@@ -458,8 +470,10 @@ kontrol ederek kaçış saklanamaz. Mutlak, sürücü nitelikli, UNC veya `..` i
 ve zaten çalıştı; K2 yalnızca "bu değişiklik görevin bildirdiği kaynak kapsamında mıydı"
 sorusunu yanıtlar.
 
-**K3 SecretGuard** — yalnızca **eklenen** diff satırlarını tarar. Tüm repo, dokunulmamış
-geçmiş ve silinen satırlar kapsam dışıdır. Entropi, ML, vault, rotasyon **yok**.
+**K3 SecretGuard** — yalnızca **eklenen metin** diff satırlarını tarar. Tüm repo,
+dokunulmamış geçmiş ve silinen satırlar kapsam dışıdır. **İkili/metin-dışı içerikte sır
+tespiti MVP kapsamı dışındadır** ve öyle kalır: `FileInventory` bir ikili tarayıcıya
+dönüştürülmez, yeni sır ailesi eklenmez, ikili çıkarım ve entropi taraması yapılmaz. Entropi, ML, vault, rotasyon **yok**.
 Desenler **Faz 4'ün tek kataloğundan** bir port üzerinden gelir; ikinci bir regex kümesi
 yoktur ve mimari test bunu kilitler — kapı ile redaksiyonun "sır neye benzer" konusunda
 ayrışması iki eksikten de kötüdür. Tarama dosya başına **blok** üzerinde yapılır, çünkü PEM

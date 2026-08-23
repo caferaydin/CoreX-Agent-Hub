@@ -1,3 +1,5 @@
+using CoreX.Hub.Domain.Common;
+
 namespace CoreX.Hub.Application.Gates;
 
 /// <summary>
@@ -36,7 +38,7 @@ public sealed class SecretGuard
         // a PEM private key block above all - and a scanner that looked at one line at a
         // time would miss those while appearing to work.
         var byFile = changes.AddedLines
-            .GroupBy(l => ScopePattern.Normalize(l.RelativePath), StringComparer.Ordinal)
+            .GroupBy(l => ScopeGlob.NormalizePath(l.RelativePath), StringComparer.Ordinal)
             .OrderBy(g => g.Key, StringComparer.Ordinal);
 
         foreach (var file in byFile)

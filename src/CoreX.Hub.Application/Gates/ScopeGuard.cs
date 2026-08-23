@@ -1,3 +1,5 @@
+using CoreX.Hub.Domain.Common;
+
 namespace CoreX.Hub.Application.Gates;
 
 /// <summary>
@@ -6,6 +8,10 @@ namespace CoreX.Hub.Application.Gates;
 /// Two rules, in order: a path must match the allowed scope, and it must match no
 /// forbidden scope. Deny wins, so "src/**" allowed together with "src/generated/**"
 /// forbidden means exactly what a reader expects.
+///
+/// Every matching decision belongs to the domain value object: what a scope entry means,
+/// what it canonically is and what it matches are ScopeGlob's, so a task cannot be judged
+/// by rules other than the ones it was validated against.
 ///
 /// This is not a filesystem sandbox - FileSystemGuard is, and it already ran. This gate
 /// answers one narrower question: was the change inside the source scope the task asked
@@ -36,11 +42,11 @@ public static class ScopeGuard
                 continue;
             }
 
-            var normalised = ScopePattern.Normalize(path);
+            var normalised = ScopeGlob.NormalizePath(path);
 
             if (forbidden.FirstOrDefault(p => p.Matches(normalised)) is { } denied)
             {
-                escapes.Add(new ScopeEscape(normalised, $"matches forbidden scope '{denied.Original}'"));
+                escapes.Add(new ScopeEscape(normalised, $"matches forbidden scope '{denied.Value}'"));
                 continue;
             }
 
@@ -72,7 +78,7 @@ public static class ScopeGuard
             return "the path is empty";
         }
 
-        var normalised = ScopePattern.Normalize(path);
+        var normalised = ScopeGlob.NormalizePath(path);
 
         if (normalised.Length == 0)
         {
@@ -109,6 +115,6 @@ public static class ScopeGuard
         return null;
     }
 
-    private static IReadOnlyList<ScopePattern> Compile(IReadOnlyList<string> globs) =>
-        [.. globs.Where(g => !string.IsNullOrWhiteSpace(g)).Select(ScopePattern.Parse)];
+    private static IReadOnlyList<ScopeGlob> Compile(IReadOnlyList<string> globs) =>
+        [.. globs.Where(g => !string.IsNullOrWhiteSpace(g)).Select(ScopeGlob.Parse)];
 }
