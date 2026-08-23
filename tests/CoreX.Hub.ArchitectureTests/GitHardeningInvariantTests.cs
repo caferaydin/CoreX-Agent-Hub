@@ -57,6 +57,21 @@ public sealed class GitHardeningInvariantTests
     }
 
     [Fact]
+    public void The_overload_that_creates_the_worktree_resolves_nothing_of_its_own()
+    {
+        var source = ReadProductionFile(WorkspaceManagerFileName);
+
+        // Two overloads on purpose: one resolves and materialises in a breath, the other
+        // materialises a commit the caller already resolved and acted on. The second must
+        // not preflight again, because a second resolution is a second answer - and by then
+        // the branch may have moved, which is exactly the drift being ruled out.
+        var materialise = ExtractOverload(source, "PrepareAsync", "[\"worktree\", \"add\"");
+
+        Assert.DoesNotContain("await PreflightAsync(", materialise, StringComparison.Ordinal);
+        Assert.Contains("preflight.BaseCommitSha", materialise, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Staging_never_happens_before_the_safety_revalidation()
     {
         var source = ReadProductionFile(WorkspaceManagerFileName);
@@ -82,7 +97,8 @@ public sealed class GitHardeningInvariantTests
     [Fact]
     public void Worktree_creation_and_hardening_share_one_repository_critical_section()
     {
-        var method = ExtractMethod(ReadProductionFile(WorkspaceManagerFileName), "PrepareAsync");
+        var method = ExtractOverload(
+            ReadProductionFile(WorkspaceManagerFileName), "PrepareAsync", "[\"worktree\", \"add\"");
 
         var acquire = method.IndexOf("gate.WaitAsync(", StringComparison.Ordinal);
         var add = method.IndexOf("[\"worktree\", \"add\"", StringComparison.Ordinal);
@@ -197,19 +213,58 @@ public sealed class GitHardeningInvariantTests
     /// Crude but sufficient: everything between a method signature and the next method
     /// signature at the same indentation.
     /// </summary>
-    private static string ExtractMethod(string source, string methodName)
+    private static string ExtractMethod(string source, string methodName) =>
+        ExtractOverloads(source, methodName).First();
+
+    /// <summary>
+    /// The overload of <paramref name="methodName"/> whose body contains
+    /// <paramref name="marker"/>.
+    ///
+    /// Overloads are how "resolve then materialise" stays separable from "resolve and
+    /// materialise", so a guard about one of them has to be able to say which.
+    /// </summary>
+    private static string ExtractOverload(string source, string methodName, string marker)
     {
-        var start = source.IndexOf(methodName + "(", StringComparison.Ordinal);
-        Assert.True(start >= 0, $"{methodName} was not found");
+        var match = ExtractOverloads(source, methodName)
+            .FirstOrDefault(body => body.Contains(marker, StringComparison.Ordinal));
 
-        var next = source.IndexOf("\n    public ", start + 1, StringComparison.Ordinal);
-        var privateNext = source.IndexOf("\n    private ", start + 1, StringComparison.Ordinal);
+        Assert.True(match is not null, $"no {methodName} overload contains {marker}");
+        return match!;
+    }
 
-        if (privateNext >= 0 && (next < 0 || privateNext < next))
+    private static IEnumerable<string> ExtractOverloads(string source, string methodName)
+    {
+        var found = false;
+        var from = 0;
+
+        while (true)
         {
-            next = privateNext;
-        }
+            var start = source.IndexOf(methodName + "(", from, StringComparison.Ordinal);
 
-        return next < 0 ? source[start..] : source[start..next];
+            if (start < 0)
+            {
+                Assert.True(found, $"{methodName} was not found");
+                yield break;
+            }
+
+            found = true;
+
+            var next = source.IndexOf("\n    public ", start + 1, StringComparison.Ordinal);
+            var privateNext = source.IndexOf("\n    private ", start + 1, StringComparison.Ordinal);
+
+            if (privateNext >= 0 && (next < 0 || privateNext < next))
+            {
+                next = privateNext;
+            }
+
+            yield return next < 0 ? source[start..] : source[start..next];
+
+            if (next < 0)
+            {
+                yield break;
+            }
+
+            from = next;
+        }
     }
 }

@@ -48,7 +48,14 @@ public sealed partial class Execution
 
     public int AttemptNo { get; private set; }
 
-    /// <summary>ADR-0003: the pinned commit the worktree was created from.</summary>
+    /// <summary>
+    /// ADR-0003: the pinned commit the worktree was created from.
+    ///
+    /// Provenance, not workspace bookkeeping. It is resolved before this row exists and
+    /// never changes afterwards, because the baseline cache, the context pack and every
+    /// captured diff are all keyed on it: a value that could be rewritten later would make
+    /// all three claim to describe a commit they never measured.
+    /// </summary>
     public string BaseCommitSha { get; private set; } = null!;
 
     public string BranchName { get; private set; } = null!;
@@ -94,12 +101,31 @@ public sealed partial class Execution
     /// <summary>ADR-0016 invariant: no result commit means the worktree still holds the work.</summary>
     public bool WorktreeMustBePreserved => ResultCommitSha is null;
 
+    /// <summary>
+    /// The one place an execution decides whether a string is a commit id.
+    ///
+    /// The frozen model lists <c>CommitSha</c> as a value object and it is not a type yet;
+    /// until it is, this method is that concept's only implementation, and no second parser
+    /// exists beside it.
+    ///
+    /// Shape alone is not the invariant. The all zero object id is git's "no object" value
+    /// and is exactly what an orchestrator reaches for when it wants a row to exist before
+    /// it has resolved a commit, so it is refused here: what an execution records has to be
+    /// a commit the repository actually answered with, not a placeholder standing in for
+    /// one.
+    /// </summary>
     private static string NormalizeSha(string? value, string name)
     {
         var sha = Guard.NotBlankMax(value, name, 40);
         if (sha.Length != 40 || !sha.All(Uri.IsHexDigit))
         {
             throw new DomainException($"{name} must be a full 40 character hexadecimal git object id.");
+        }
+
+        if (sha.All(c => c == '0'))
+        {
+            throw new DomainException(
+                $"{name} must be a commit resolved from the repository; the null object id names none.");
         }
 
         return sha.ToLowerInvariant();

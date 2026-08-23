@@ -14,6 +14,14 @@ public sealed record ExecutionOrchestratorOptions
 
     /// <summary>How long an execution may say nothing before it is considered abandoned.</summary>
     public TimeSpan MaximumLeaseSilence { get; init; } = TimeSpan.FromMinutes(2);
+
+    /// <summary>
+    /// How long the sections that must run after the agent - capturing the changes, storing
+    /// the evidence, writing the row that closes the execution - may take once the caller
+    /// has already cancelled. Being immune to the caller's token is not being immune to
+    /// time.
+    /// </summary>
+    public TimeSpan MandatoryWorkBudget { get; init; } = TimeSpan.FromMinutes(2);
 }
 
 /// <summary>What one orchestrated execution produced, for the caller to report.</summary>

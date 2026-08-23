@@ -17,6 +17,7 @@ using CoreX.Hub.Domain.Tasks;
 using CoreX.Hub.Infrastructure.Evidence;
 using CoreX.Hub.Infrastructure.Persistence;
 using CoreX.Hub.Verification;
+using CoreX.Hub.Verification.Abstractions;
 using CoreX.Hub.Verification.Baseline;
 using CoreX.Hub.Verification.Profiles;
 using CoreX.Hub.Workspace;
@@ -88,6 +89,15 @@ public sealed class OrchestrationHarness : IAsyncDisposable
 
     public VerificationProfile? VerificationProfile { get; set; }
 
+    /// <summary>
+    /// Wraps the production workspace port so a test can watch the handoff or interrupt it.
+    /// The inner port is the real one, so what is being observed is the real sequence.
+    /// </summary>
+    public Func<IExecutionWorkspace, IExecutionWorkspace>? DecorateWorkspace { get; set; }
+
+    /// <summary>Wraps the production verification port, for the same reason.</summary>
+    public Func<IExecutionVerifier, IExecutionVerifier>? DecorateVerifier { get; set; }
+
     public Guid OrganizationId { get; private set; }
 
     public Guid RepositoryId { get; private set; }
@@ -126,30 +136,21 @@ public sealed class OrchestrationHarness : IAsyncDisposable
                 new ProcessAgentRunner(WorkspaceRoot)),
         };
 
+        IExecutionWorkspace workspace = new WorkspaceGateway(
+            WorkspaceManager,
+            _ => new RepositoryLocation(RepositoryPath, Root, WorkspaceRoot, "hub-dev", "hub-sample", "main"));
+
+        IExecutionVerifier verifier = CreateVerificationGateway();
+
         return new ExecutionOrchestrator(
             Store,
-            new WorkspaceGateway(WorkspaceManager, _ => new RepositoryLocation(
-                RepositoryPath, Root, WorkspaceRoot, "hub-dev", "hub-sample", "main")),
+            DecorateWorkspace is { } decorateWorkspace ? decorateWorkspace(workspace) : workspace,
             new ContextGateway(
                 new ContextPackBuilder(new FileSystemGuardContextPathGuard()),
                 ContextRoot,
                 _ => new ContextRepositoryFacts("main", ["main"])),
             new AgentGateway(runtimes),
-            new VerificationGateway(
-                WorkspaceManager,
-                new VerificationBaselineService(
-                    new FileVerificationBaselineCache(DataDirectory), Clock),
-                root => new VerificationEngine(
-                    new ProcessVerificationCommandExecutor(root),
-                    new FileSystemGuardVerificationFileReader(),
-                    new BlobEvidenceSink(EvidenceStore),
-                    ExecutableAllowlist.Create(
-                        new Dictionary<string, string> { ["fixture"] = FixtureExecutable }, out _),
-                    Clock),
-                _ => VerificationProfile is null
-                    ? null
-                    : new VerificationSetup(
-                        VerificationProfile, ["SystemRoot", "TEMP", "TMP"], RepositoryPath, Root, WorkspaceRoot)),
+            DecorateVerifier is { } decorateVerifier ? decorateVerifier(verifier) : verifier,
             new EvidenceGateway(EvidenceStore),
             GateFixtures.Gates,
             new LeaseWriter(OpenStore),
@@ -161,6 +162,43 @@ public sealed class OrchestrationHarness : IAsyncDisposable
                 MaximumLeaseSilence = TimeSpan.FromMinutes(2),
             });
     }
+
+    /// <summary>
+    /// The production verification gateway, wired exactly as composition wires it.
+    ///
+    /// <paramref name="engineFor"/> exists so a test can decide what runs in a particular
+    /// tree - the execution worktree and a disposable baseline snapshot are different roots
+    /// - without replacing the gateway whose behaviour is the thing under test.
+    /// </summary>
+    public VerificationGateway CreateVerificationGateway(Func<string, VerificationEngine>? engineFor = null) =>
+        new(
+            WorkspaceManager,
+            new VerificationBaselineService(new FileVerificationBaselineCache(DataDirectory), Clock),
+            engineFor ?? CreateVerificationEngine,
+            _ => VerificationProfile is null
+                ? null
+                : new VerificationSetup(
+                    VerificationProfile, ["SystemRoot", "TEMP", "TMP"], RepositoryPath, Root, WorkspaceRoot));
+
+    /// <summary>The real engine: real processes, real reports, real evidence blobs.</summary>
+    public VerificationEngine CreateVerificationEngine(string root) =>
+        new(
+            new ProcessVerificationCommandExecutor(root),
+            new FileSystemGuardVerificationFileReader(),
+            new BlobEvidenceSink(EvidenceStore),
+            ExecutableAllowlist.Create(
+                new Dictionary<string, string> { ["fixture"] = FixtureExecutable }, out _),
+            Clock);
+
+    /// <summary>An engine whose commands come from the caller, for cancellation scenarios.</summary>
+    public VerificationEngine CreateVerificationEngine(IVerificationCommandExecutor executor) =>
+        new(
+            executor,
+            new FileSystemGuardVerificationFileReader(),
+            new BlobEvidenceSink(EvidenceStore),
+            ExecutableAllowlist.Create(
+                new Dictionary<string, string> { ["fixture"] = FixtureExecutable }, out _),
+            Clock);
 
     /// <summary>A second, short lived store so the heartbeat never shares a context.</summary>
     public IHubStore OpenStore()
@@ -186,12 +224,14 @@ public sealed class OrchestrationHarness : IAsyncDisposable
         await Store.FindTaskAsync(TaskId, CancellationToken.None)
         ?? throw new InvalidOperationException("task vanished");
 
-    public string RunGit(params string[] arguments)
+    public string RunGit(params string[] arguments) => RunGitIn(RepositoryPath, arguments);
+
+    public string RunGitIn(string workingDirectory, params string[] arguments)
     {
         var startInfo = new ProcessStartInfo
         {
             FileName = Git,
-            WorkingDirectory = RepositoryPath,
+            WorkingDirectory = workingDirectory,
             UseShellExecute = false,
             RedirectStandardOutput = true,
             RedirectStandardError = true,

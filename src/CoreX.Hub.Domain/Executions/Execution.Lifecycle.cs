@@ -31,16 +31,31 @@ public sealed partial class Execution
     }
 
     /// <summary>
-    /// Records what the workspace actually pinned.
+    /// Records where the workspace was materialised, and refuses to let it rewrite what
+    /// this execution is based on.
     ///
-    /// The execution exists before its worktree does, so it is created with a placeholder
-    /// commit. This is where the real one arrives, and from here it is immutable
-    /// provenance: a branch that moves later never changes what this execution was based
-    /// on, which is exactly what a baseline keyed on it depends upon.
+    /// The base commit is resolved before this row exists and arrives through the
+    /// constructor; a prepared workspace can only ever confirm it. So the commit is an
+    /// argument here in order to be checked, not in order to be stored: a workspace built
+    /// from a different commit is not this execution's workspace, and adopting its answer
+    /// would silently move the provenance a baseline and a context pack are keyed on. The
+    /// mismatch fails closed instead.
     /// </summary>
-    public void RecordWorkspace(string baseCommitSha, string branchName, string worktreePath, DateTimeOffset nowUtc)
+    public void RecordWorkspace(
+        string preparedBaseCommitSha,
+        string branchName,
+        string worktreePath,
+        DateTimeOffset nowUtc)
     {
-        BaseCommitSha = NormalizeSha(baseCommitSha, nameof(baseCommitSha));
+        var prepared = NormalizeSha(preparedBaseCommitSha, nameof(preparedBaseCommitSha));
+
+        if (!string.Equals(prepared, BaseCommitSha, StringComparison.Ordinal))
+        {
+            throw new DomainException(
+                $"Execution {Id} is based on {BaseCommitSha}, but the prepared workspace reports {prepared}. "
+                + "An execution's base commit is provenance and is never moved to match a workspace.");
+        }
+
         BranchName = Guard.NotBlankMax(branchName, nameof(branchName), 200);
         WorktreePath = Guard.NotBlankMax(worktreePath, nameof(worktreePath), 400);
         UpdatedAtUtc = nowUtc;
@@ -127,6 +142,18 @@ public sealed partial class Execution
         if (IsTerminal)
         {
             throw new DomainException($"Execution {Id} is already {State}.");
+        }
+
+        // A cancelled execution is defined as one that produced no result commit, so an
+        // execution that already made one cannot be turned into a cancellation. Interrupted
+        // deliberately stays legal: a host that died after the commit was created really
+        // does hold one, and pretending otherwise would hide it. Nothing here removes,
+        // rewrites or disowns a commit to make a state fit.
+        if (terminalState == ExecutionState.Cancelled && ResultCommitSha is not null)
+        {
+            throw new DomainException(
+                $"Execution {Id} already recorded result commit {ResultCommitSha}, so it cannot end as "
+                + "Cancelled: that state means no commit was produced.");
         }
 
         State = terminalState;

@@ -7,7 +7,25 @@ public sealed partial class ExecutionOrchestrator
 {
     private async Task<ExecutionRunReport> RunOnceAsync(Guid taskId, string agentProfileName, CancellationToken ct)
     {
-        var start = await StartAsync(taskId, agentProfileName, ct);
+        var validated = await ValidateStartAsync(taskId, agentProfileName, ct);
+
+        // Provenance -----------------------------------------------------------------
+        // The commit is resolved before the execution row exists. An execution that named a
+        // commit nobody had resolved would still be measured against it - by the baseline
+        // key, by the context pack, by every captured diff - so there is deliberately no
+        // moment at which this row holds a placeholder waiting to be corrected.
+        //
+        // A repository that cannot answer therefore produces no execution at all: the task
+        // never leaves Ready, and there is no half started attempt for anyone to reconcile.
+        var preflight = await _workspace.PreflightAsync(validated.RepositoryId, ct);
+
+        if (preflight.BaseCommitSha is not { } baseCommitSha)
+        {
+            throw new ExecutionStartException(
+                $"No base commit could be pinned for task '{validated.Task.TaskKey}': {preflight.Detail}");
+        }
+
+        var start = await PersistStartAsync(validated, baseCommitSha, ct);
         var execution = start.Execution;
         var task = start.Task;
 
@@ -16,8 +34,11 @@ public sealed partial class ExecutionOrchestrator
         // Workspace ------------------------------------------------------------------
         await AdvanceAsync(execution, ExecutionState.PreparingWorkspace, ExecutionStepKind.PrepareWorkspace, ct);
 
+        // The same pinned commit is handed back, so the worktree is materialised from what
+        // this execution already claims to be based on. The branch is free to move in this
+        // window; it simply stops being the authority the moment the commit was captured.
         var workspace = await _workspace.PrepareAsync(
-            start.RepositoryId, task.TaskKey.Value, execution.AttemptNo, ct);
+            start.RepositoryId, preflight, task.TaskKey.Value, execution.AttemptNo, ct);
 
         if (workspace is null)
         {
@@ -27,8 +48,9 @@ public sealed partial class ExecutionOrchestrator
             return await TerminateAsync(execution, task, ExecutionState.Failed, "workspace preparation failed", ct);
         }
 
-        // The pinned commit becomes this execution's provenance now, before anything else
-        // can be measured against it.
+        // Confirmation, not assignment: the aggregate refuses a workspace built from any
+        // commit other than the one it was created with, so a drifted preparation fails
+        // closed here rather than quietly becoming this execution's new provenance.
         await PersistAsync(ct, () =>
         {
             execution.RecordWorkspace(
@@ -44,7 +66,7 @@ public sealed partial class ExecutionOrchestrator
         await AdvanceAsync(execution, ExecutionState.BuildingContext, ExecutionStepKind.BuildContext, ct);
 
         var context = await _context.BuildAsync(
-            execution.Id, start.RepositoryId, task, execution.AttemptNo, workspace.BaseCommitSha, ct);
+            execution.Id, start.RepositoryId, task, execution.AttemptNo, execution.BaseCommitSha, ct);
 
         if (context is null)
         {
@@ -70,25 +92,31 @@ public sealed partial class ExecutionOrchestrator
         var agentResult = await _agent.RunAsync(
             start.AgentProfile, workspace, context, task, execution.Id.ToString("D"), ct);
 
-        // From here on the caller's token is deliberately not used. It has already done its
-        // job - it stopped the agent - and reusing it would make a cancelled run destroy
-        // the record of what that run did. Evidence is not optional work.
-        var evidenceToken = CancellationToken.None;
+        // From here the run owes a record of itself whatever the caller decided. The
+        // caller's token has already done its job - it stopped the agent - and reusing it
+        // for the evidence would let a cancelled run destroy the only account of what it
+        // did. So the mandatory sections below run on their own token.
+        //
+        // It is bounded rather than absolute: the sections that must finish get a budget,
+        // not a blank cheque, and everything that is still real forward work below keeps
+        // honouring the caller.
+        using var mandatory = new MandatoryWorkScope(_options.MandatoryWorkBudget, _clock);
+        var record = mandatory.Token;
 
-        await WriteAgentEvidenceAsync(execution, agentResult, evidenceToken);
+        await WriteAgentEvidenceAsync(execution, agentResult, record);
         await FinishStepAsync(execution.Id, ExecutionStepKind.Agent, StepFateFor(agentResult.Outcome),
-            agentResult.Diagnostic, evidenceToken);
+            agentResult.Diagnostic, record);
 
         // Capture --------------------------------------------------------------------
         // Deliberately reached whatever the agent did. A crashed or cancelled run still
         // leaves work on disk, and refusing to look at it would destroy the only record
         // of what happened. Cancellation is honoured for the agent, not for the evidence.
-        await AdvanceAsync(execution, ExecutionState.CapturingChanges, ExecutionStepKind.CaptureChanges, evidenceToken);
+        await AdvanceAsync(execution, ExecutionState.CapturingChanges, ExecutionStepKind.CaptureChanges, record);
 
-        var capture = await _workspace.CaptureAsync(workspace, evidenceToken);
-        await WriteCaptureEvidenceAsync(execution, capture, evidenceToken);
-        await RecordUnexpectedCommitsAsync(execution, capture, evidenceToken);
-        await FinishStepAsync(execution.Id, ExecutionStepKind.CaptureChanges, StepFate.Succeeded, null, evidenceToken);
+        var capture = await _workspace.CaptureAsync(workspace, record);
+        await WriteCaptureEvidenceAsync(execution, capture, record);
+        await RecordUnexpectedCommitsAsync(execution, capture, record);
+        await FinishStepAsync(execution.Id, ExecutionStepKind.CaptureChanges, StepFate.Succeeded, null, record);
 
         // K0 ------------------------------------------------------------------------
         if (TerminalStateFor(agentResult.Outcome) is { } terminal)
@@ -97,9 +125,9 @@ public sealed partial class ExecutionOrchestrator
             // also committed. The unexpected commit is recorded as diagnosis, not promoted
             // to a policy violation, and nothing repairs it.
             return await TerminateAsync(
-                execution, task, terminal, agentResult.Diagnostic ?? agentResult.Outcome, evidenceToken);
+                execution, task, terminal, agentResult.Diagnostic ?? agentResult.Outcome, record);
         }
 
-        return await EvaluateAndFinishAsync(execution, task, workspace, capture, start.RepositoryId, ct);
+        return await EvaluateAndFinishAsync(execution, task, workspace, capture, start.RepositoryId, ct, record);
     }
 }

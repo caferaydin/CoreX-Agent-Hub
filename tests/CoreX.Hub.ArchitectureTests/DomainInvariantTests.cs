@@ -100,6 +100,49 @@ public sealed class DomainInvariantTests
     }
 
     [Fact]
+    public void A_terminal_cancelled_execution_can_never_carry_a_result_commit()
+    {
+        // Cancelled means "no commit was produced", so the aggregate refuses to be told
+        // otherwise. The invariant lives in the model rather than in the caller, because a
+        // pipeline that reached for Cancelled after committing would otherwise produce a row
+        // that contradicts itself and no reader could resolve.
+        var execution = NewExecution();
+        execution.RecordResultCommit("9876543210fedcba9876543210fedcba98765432", Now);
+
+        Assert.ThrowsAny<Exception>(() => execution.Terminate(ExecutionState.Cancelled, Now));
+        Assert.False(execution.IsTerminal);
+
+        // The other terminal states stay reachable: a host that died after committing really
+        // does hold a commit, and hiding it would be the worse lie.
+        execution.Terminate(ExecutionState.Interrupted, Now);
+        Assert.Equal(ExecutionState.Interrupted, execution.State);
+    }
+
+    [Fact]
+    public void An_execution_cannot_be_based_on_a_commit_that_names_no_object()
+    {
+        // The null object id is what a placeholder looks like when a row has to exist before
+        // a commit has been resolved. Everything downstream - the baseline key, the context
+        // pack, the captured diff - would then be keyed on nothing.
+        Assert.ThrowsAny<Exception>(() => NewExecution("0000000000000000000000000000000000000000"));
+    }
+
+    private static DateTimeOffset Now { get; } = new(2026, 8, 22, 12, 0, 0, TimeSpan.Zero);
+
+    private static DomainExecution NewExecution(
+        string baseCommitSha = "1f0c2b9a4d6e8f10325476981badc0ffee1234ab") =>
+        new(
+            Guid.CreateVersion7(),
+            Guid.CreateVersion7(),
+            Guid.CreateVersion7(),
+            1,
+            baseCommitSha,
+            "agent/HUB-001/1",
+            "(not created yet)",
+            null,
+            Now);
+
+    [Fact]
     public void The_accepted_execution_outcome_vocabulary_is_complete()
     {
         string[] expected =

@@ -16,6 +16,24 @@ public sealed class OrchestratorInvariantTests
                 + "Orchestration" + Path.DirectorySeparatorChar,
                 StringComparison.Ordinal));
 
+    /// <summary>Everything in the Application layer, not only the orchestrator's own folder.</summary>
+    private static IEnumerable<string> ApplicationSourceFiles() =>
+        RepoLayout.ProductionSourceFiles.Where(f =>
+            f.Contains(
+                Path.DirectorySeparatorChar + "CoreX.Hub.Application" + Path.DirectorySeparatorChar,
+                StringComparison.Ordinal));
+
+    /// <summary>
+    /// The orchestrator plus the composition adapters that sit directly under it. Together
+    /// these are the code that decides which token a stage runs on.
+    /// </summary>
+    private static IEnumerable<string> SequencingSourceFiles() =>
+        OrchestrationSourceFiles().Concat(RepoLayout.ProductionSourceFiles.Where(f =>
+            f.Contains(
+                Path.DirectorySeparatorChar + "CoreX.Hub.Cli" + Path.DirectorySeparatorChar
+                + "Orchestration" + Path.DirectorySeparatorChar,
+                StringComparison.Ordinal)));
+
     [Fact]
     public void The_orchestrator_exists_so_these_guards_inspect_something()
     {
@@ -146,6 +164,103 @@ public sealed class OrchestratorInvariantTests
             foreach (var forbidden in new[] { "\"push\"", "\"merge\"", "\"pull\"", "\"fetch\"", "deploy" })
             {
                 Assert.False(code.Contains(forbidden, StringComparison.OrdinalIgnoreCase), $"{name}: {forbidden}");
+            }
+        }
+    }
+
+    [Fact]
+    public void No_production_code_carries_a_stand_in_for_a_base_commit()
+    {
+        // The null object id is the shape a placeholder takes when a row has to exist before
+        // a commit has been resolved: right length, hexadecimal, and naming nothing. Every
+        // spelling of "we will fill this in later" is refused, because the value ends up in
+        // a baseline key and a context pack long before anyone notices it was never real.
+        string[] forbidden =
+        [
+            "0000000000000000000000000000000000000000",
+            "PlaceholderBaseCommit",
+            "PendingBaseCommit",
+            "BaseCommitPending",
+            "UnknownBaseCommit",
+        ];
+
+        foreach (var file in RepoLayout.ProductionSourceFiles)
+        {
+            var code = CodeOnly(File.ReadAllText(file));
+            var name = RepoLayout.Relative(file);
+
+            foreach (var construct in forbidden)
+            {
+                Assert.False(code.Contains(construct, StringComparison.OrdinalIgnoreCase), $"{name}: {construct}");
+            }
+        }
+    }
+
+    [Fact]
+    public void Only_the_execution_constructor_writes_the_base_commit()
+    {
+        // Provenance arrives once, through the constructor. Anything else that assigned it
+        // would be a second authority over what an execution was based on.
+        var executionSources = RepoLayout.ProductionSourceFiles.Where(f =>
+            f.Contains(
+                Path.DirectorySeparatorChar + "CoreX.Hub.Domain" + Path.DirectorySeparatorChar
+                + "Executions" + Path.DirectorySeparatorChar,
+                StringComparison.Ordinal));
+
+        var writers = executionSources
+            .Where(f => CodeOnly(File.ReadAllText(f)).Contains("BaseCommitSha =", StringComparison.Ordinal))
+            .Select(f => Path.GetFileName(f))
+            .Order(StringComparer.Ordinal)
+            .ToList();
+
+        Assert.Equal(["Execution.cs"], writers);
+    }
+
+    [Fact]
+    public void Cancellation_immunity_is_bounded_rather_than_absolute()
+    {
+        // CancellationToken.None is immunity with no end to it. The mandatory sections do
+        // need a token the caller cannot cancel - evidence is not optional work - but they
+        // need one that expires, so a stuck command cannot hold a cancelled run open for
+        // ever by being the very thing that was supposed to close it.
+        foreach (var file in SequencingSourceFiles())
+        {
+            var code = CodeOnly(File.ReadAllText(file));
+            var name = RepoLayout.Relative(file);
+
+            Assert.False(code.Contains("CancellationToken.None", StringComparison.Ordinal), $"{name}");
+        }
+
+        // And the bounded alternative exists, with a budget behind it.
+        Assert.Contains(
+            nameof(MandatoryWorkScope),
+            File.ReadAllText(RepoLayout.ProductionSourceFiles.Single(f =>
+                string.Equals(
+                    Path.GetFileName(f), "ExecutionOrchestrator.Pipeline.cs", StringComparison.Ordinal))),
+            StringComparison.Ordinal);
+
+        Assert.Throws<ArgumentOutOfRangeException>(() => new MandatoryWorkScope(TimeSpan.Zero));
+    }
+
+    [Fact]
+    public void The_application_layer_builds_no_git_command_anywhere()
+    {
+        // Not just the orchestrator's folder: nothing in the Application layer may reach for
+        // git, because the moment it does, "the workspace module owns git" stops being true.
+        string[] forbidden =
+        [
+            "Process.Start", "ProcessStartInfo", "\"worktree\"", "rev-parse", "\"commit\"",
+            "GitCommand", "IGitCommandExecutor", "\"rev-list\"", "\"status\"", "\"diff\"",
+        ];
+
+        foreach (var file in ApplicationSourceFiles())
+        {
+            var code = CodeOnly(File.ReadAllText(file));
+            var name = RepoLayout.Relative(file);
+
+            foreach (var construct in forbidden)
+            {
+                Assert.False(code.Contains(construct, StringComparison.Ordinal), $"{name}: {construct}");
             }
         }
     }

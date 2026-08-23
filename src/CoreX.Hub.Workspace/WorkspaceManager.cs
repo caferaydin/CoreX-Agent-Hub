@@ -190,11 +190,13 @@ public sealed partial class WorkspaceManager
     }
 
     /// <summary>
-    /// Creates the pinned, hardened agent worktree.
+    /// Inspects the repository and then creates the worktree from whatever that inspection
+    /// pinned. Convenience for callers that have no reason to hold the two apart.
     ///
-    /// The first checkout capable command already runs under Hub controlled hooks
-    /// configuration, because git worktree add itself invokes post-checkout and a
-    /// repository is free to point core.hooksPath at its own directory.
+    /// A caller that has to record the pinned commit somewhere before the worktree exists -
+    /// an execution's provenance, for instance - must not use this: it would pin twice, and
+    /// the second answer is the one that reaches the worktree. Preflight once and hand the
+    /// result to the overload below.
     /// </summary>
     public async Task<WorkspacePreparationResult> PrepareAsync(
         WorkspaceRequest request,
@@ -208,7 +210,35 @@ public sealed partial class WorkspaceManager
             request.DefaultBranch,
             cancellationToken);
 
-        if (!preflight.IsUsable || preflight.BaseCommitSha is null)
+        return await PrepareAsync(request, preflight, cancellationToken);
+    }
+
+    /// <summary>
+    /// Creates the pinned, hardened agent worktree from a commit a preflight already
+    /// resolved.
+    ///
+    /// The default branch is deliberately not resolved again. A caller that pinned a
+    /// commit and acted on it - recorded it, keyed something on it - has to get that exact
+    /// commit here, so a branch that advanced in between is simply not the authority any
+    /// more. The captured commit is.
+    ///
+    /// The preflight has to be one this module produced, for this repository, so there is
+    /// no way in to a commit the repository never answered with: what is handed back is
+    /// checked against the repository the request names before anything is created.
+    ///
+    /// The first checkout capable command already runs under Hub controlled hooks
+    /// configuration, because git worktree add itself invokes post-checkout and a
+    /// repository is free to point core.hooksPath at its own directory.
+    /// </summary>
+    public async Task<WorkspacePreparationResult> PrepareAsync(
+        WorkspaceRequest request,
+        RepositoryPreflightResult preflight,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        ArgumentNullException.ThrowIfNull(preflight);
+
+        if (!preflight.IsUsable || preflight.BaseCommitSha is null || preflight.CanonicalRepositoryPath is null)
         {
             return new WorkspacePreparationResult
             {
@@ -218,7 +248,31 @@ public sealed partial class WorkspaceManager
             };
         }
 
-        var repository = preflight.CanonicalRepositoryPath!;
+        if (!string.Equals(preflight.DefaultBranch, request.DefaultBranch, StringComparison.Ordinal))
+        {
+            return Failed(
+                preflight,
+                WorkspaceIssueCode.RepositoryUnusable,
+                $"the preflight pinned '{preflight.DefaultBranch}' but '{request.DefaultBranch}' was requested");
+        }
+
+        var repositoryDecision = _paths.Validate(request.RepositoryTrustRoot, request.RepositoryPath, mustExist: true);
+
+        if (!repositoryDecision.IsAllowed)
+        {
+            return Failed(
+                preflight, WorkspaceIssueCode.RepositoryUnusable, repositoryDecision.Reason ?? "path refused");
+        }
+
+        if (!PathsLookEqual(repositoryDecision.CanonicalPath!, preflight.CanonicalRepositoryPath))
+        {
+            return Failed(
+                preflight,
+                WorkspaceIssueCode.RepositoryUnusable,
+                $"the preflight belongs to '{preflight.CanonicalRepositoryPath}', not to '{request.RepositoryPath}'");
+        }
+
+        var repository = preflight.CanonicalRepositoryPath;
 
         var workspaceDecision = _paths.Validate(
             request.WorkspaceRoot,
@@ -261,8 +315,9 @@ public sealed partial class WorkspaceManager
         {
             Directory.CreateDirectory(Path.GetDirectoryName(workspacePath)!);
 
-            // The worktree is created from the pinned commit, not from the branch, so a
-            // dirty source working tree and a moving branch are both irrelevant.
+            // The worktree is created from the commit the preflight pinned, never from the
+            // branch name, so a dirty source working tree and a branch that has since moved
+            // are both irrelevant: this materialises the commit the caller already acted on.
             var add = await GitAsync(
                 repository,
                 ["worktree", "add", "--no-track", "-b", request.BranchName, workspacePath, preflight.BaseCommitSha],

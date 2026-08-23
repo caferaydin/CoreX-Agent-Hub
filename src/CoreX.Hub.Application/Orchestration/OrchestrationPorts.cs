@@ -10,6 +10,27 @@ public sealed record PreparedExecutionWorkspace(
     string BranchName,
     string BaseCommitSha);
 
+/// <summary>
+/// A commit the workspace resolved, held between deciding it and materialising it.
+///
+/// It exists because those two things cannot happen at once. The commit has to be decided
+/// and written down as the execution's provenance before a worktree is built from it, and
+/// the worktree then has to be built from that same commit rather than from wherever the
+/// branch has got to by then. Carrying the answer across that gap is the whole job.
+///
+/// Only the workspace port produces one, and it is handed straight back to that port
+/// unmodified. The orchestrator can read the commit but has no way to make one up, which
+/// is what makes the second half provably about the commit the first half pinned.
+/// </summary>
+public interface IExecutionWorkspacePreflight
+{
+    /// <summary>The commit resolved from the repository, or null when it could not be.</summary>
+    string? BaseCommitSha { get; }
+
+    /// <summary>What the inspection found. The reason, whenever there is no commit.</summary>
+    string Detail { get; }
+}
+
 /// <summary>Everything the workspace observed after the agent finished.</summary>
 public sealed record ExecutionCapture
 {
@@ -44,8 +65,24 @@ public sealed record ResultCommitOutcomeView(bool Created, string? CommitSha, st
 /// </summary>
 public interface IExecutionWorkspace
 {
+    /// <summary>
+    /// Resolves the commit an execution will be based on. Nothing is created and nothing is
+    /// written: this only looks.
+    ///
+    /// It runs before the execution row exists, because a row that names a commit nobody
+    /// resolved is a claim the rest of the pipeline would then measure against. A
+    /// repository that cannot answer therefore produces no execution at all.
+    /// </summary>
+    Task<IExecutionWorkspacePreflight> PreflightAsync(Guid repositoryId, CancellationToken ct);
+
+    /// <summary>
+    /// Materialises the agent worktree at the commit <paramref name="preflight"/> pinned.
+    /// The default branch is not resolved again: if it moved in between, it is no longer
+    /// the authority - the captured commit is.
+    /// </summary>
     Task<PreparedExecutionWorkspace?> PrepareAsync(
         Guid repositoryId,
+        IExecutionWorkspacePreflight preflight,
         string taskKey,
         int attemptNo,
         CancellationToken ct);

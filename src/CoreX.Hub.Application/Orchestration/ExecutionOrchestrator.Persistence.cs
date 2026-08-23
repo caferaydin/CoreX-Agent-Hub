@@ -17,6 +17,13 @@ public sealed partial class ExecutionOrchestrator
         Cancelled,
     }
 
+    private sealed record ValidatedStart(
+        HubTask Task,
+        Guid RepositoryId,
+        AgentProfile AgentProfile,
+        int AttemptNo,
+        Guid? PreviousExecutionId);
+
     private sealed record StartedExecution(
         Execution Execution,
         HubTask Task,
@@ -24,10 +31,14 @@ public sealed partial class ExecutionOrchestrator
         AgentProfile AgentProfile);
 
     /// <summary>
-    /// Validates what must be true before anything external happens, then claims the
-    /// execution in one transaction with its audit row.
+    /// Validates what must be true before anything external happens, and decides which
+    /// attempt this is.
+    ///
+    /// Nothing is written here. The execution cannot be created yet: it needs the commit it
+    /// will be based on, and that answer belongs to the repository, which has not been
+    /// asked at this point.
     /// </summary>
-    private async Task<StartedExecution> StartAsync(Guid taskId, string agentProfileName, CancellationToken ct)
+    private async Task<ValidatedStart> ValidateStartAsync(Guid taskId, string agentProfileName, CancellationToken ct)
     {
         var task = await _store.FindTaskAsync(taskId, ct)
                    ?? throw new ExecutionStartException($"Task {taskId} does not exist.");
@@ -61,22 +72,42 @@ public sealed partial class ExecutionOrchestrator
             throw new ExecutionStartException($"Task '{task.TaskKey}' already has a non terminal execution.");
         }
 
-        var now = _clock.GetUtcNow();
         var attempt = existing.Count == 0 ? 1 : existing.Max(e => e.AttemptNo) + 1;
 
-        // The workspace is created later, but the execution has to exist first so the
-        // attempt number and the branch name are decided in one place.
-        var branchName = $"agent/{task.TaskKey}/{attempt}";
+        return new ValidatedStart(task, repository.Id, profile, attempt, existing.FirstOrDefault()?.Id);
+    }
+
+    /// <summary>
+    /// Claims the execution in one transaction with its audit row, against the commit the
+    /// repository already answered with.
+    ///
+    /// The base commit arrives as an argument rather than being filled in afterwards, and
+    /// that is the point: from the first row written, this execution's provenance is a real
+    /// resolved commit. There is no window in which it is a placeholder, so there is no
+    /// crash that can leave one behind.
+    /// </summary>
+    private async Task<StartedExecution> PersistStartAsync(
+        ValidatedStart validated,
+        string baseCommitSha,
+        CancellationToken ct)
+    {
+        var task = validated.Task;
+        var now = _clock.GetUtcNow();
+
+        // The worktree is created later, so its path is the one thing here still unknown.
+        // The branch name is not: it follows from the attempt, and deciding it in one place
+        // is what stops the workspace and the record from disagreeing about it.
+        var branchName = $"agent/{task.TaskKey}/{validated.AttemptNo}";
 
         var execution = new Execution(
             Guid.CreateVersion7(),
             task.OrganizationId,
             task.Id,
-            attempt,
-            PlaceholderBaseCommit,
+            validated.AttemptNo,
+            baseCommitSha,
             branchName,
-            "(pending)",
-            existing.FirstOrDefault()?.Id,
+            PendingWorktreePath,
+            validated.PreviousExecutionId,
             now);
 
         execution.ClaimLease(_liveness.CurrentProcessId, _liveness.CurrentHostStartedAtUtc, now);
@@ -90,18 +121,22 @@ public sealed partial class ExecutionOrchestrator
                 Guid.CreateVersion7(), task.OrganizationId, execution.Id, order, kind, now));
         }
 
-        _store.AddAuditEvent(AuditFor(execution, "ExecutionStarted", $"attempt {attempt} of {task.TaskKey}"));
+        _store.AddAuditEvent(AuditFor(
+            execution,
+            "ExecutionStarted",
+            $"attempt {validated.AttemptNo} of {task.TaskKey} on {baseCommitSha[..12]}"));
+
         await _store.SaveChangesAsync(ct);
 
-        return new StartedExecution(execution, task, repository.Id, profile);
+        return new StartedExecution(execution, task, validated.RepositoryId, validated.AgentProfile);
     }
 
     /// <summary>
-    /// The base commit is not known until the workspace pins it, but the aggregate demands
-    /// a valid object id at construction. This placeholder is replaced the moment the
-    /// workspace answers, and never reaches a gate or a baseline key.
+    /// Said in words rather than as a fake path, because it describes a directory that does
+    /// not exist yet. Nothing measures it, nothing resolves it, and the workspace replaces
+    /// it with the real path the moment there is one.
     /// </summary>
-    private const string PlaceholderBaseCommit = "0000000000000000000000000000000000000000";
+    private const string PendingWorktreePath = "(not created yet)";
 
     private static readonly (ExecutionStepKind Kind, int Order)[] PipelineSteps =
     [
