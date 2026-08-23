@@ -26,7 +26,20 @@ public sealed class DomainInvariantTests
             .Select(m => m.Name)
             .ToList();
 
-        Assert.Equal(["AddAcceptanceCriterion", "MarkReady", "SetBlockReason"], mutators.Order(StringComparer.Ordinal));
+        // Phase 5C added the lifecycle edges an orchestrator drives. None of them is a path
+        // to Accepted, and the list stays closed so a new one cannot appear unnoticed.
+        Assert.Equal(
+            [
+                "AddAcceptanceCriterion", "MarkAwaitingAcceptance", "MarkReady", "MarkRunning",
+                "ReturnToReady", "SetBlockReason",
+            ],
+            mutators.Order(StringComparer.Ordinal));
+
+        // Whatever the list contains, nothing in it transitions the task to a human's
+        // decision: acceptance and rejection remain unreachable from the domain surface.
+        Assert.DoesNotContain(mutators, m => m.StartsWith("Accept", StringComparison.Ordinal));
+        Assert.DoesNotContain(mutators, m => m.StartsWith("Reject", StringComparison.Ordinal));
+        Assert.DoesNotContain(mutators, m => m.Contains("MarkAccepted", StringComparison.Ordinal));
 
         var stateSetter = typeof(HubTask).GetProperty(nameof(HubTask.State))!.SetMethod;
         Assert.True(stateSetter is null || !stateSetter.IsPublic);

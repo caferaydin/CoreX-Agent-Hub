@@ -172,6 +172,7 @@ public sealed class ScriptedAgentRuntime : IAgentRuntime
         ScriptedAgentMode.Hang => "hang",
         ScriptedAgentMode.Crash => "crash",
         ScriptedAgentMode.UnexpectedCommit => "unexpected-commit",
+        ScriptedAgentMode.UnexpectedCommitThenCrash => "unexpected-commit-then-crash",
         _ => throw new ArgumentOutOfRangeException(nameof(mode), mode, "unknown scripted mode"),
     };
 }

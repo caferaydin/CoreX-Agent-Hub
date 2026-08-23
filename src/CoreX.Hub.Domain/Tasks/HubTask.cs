@@ -164,6 +164,50 @@ public sealed class HubTask
         Touch(nowUtc);
     }
 
+    /// <summary>An execution has taken this task. Only a Ready task can be taken.</summary>
+    public void MarkRunning(DateTimeOffset nowUtc) => Transition(TaskState.Running, nowUtc);
+
+    /// <summary>
+    /// The execution passed and a human now has to decide. This is the only edge out of
+    /// Running that means success, and it stops here: Accepted belongs to a person.
+    /// </summary>
+    public void MarkAwaitingAcceptance(DateTimeOffset nowUtc)
+    {
+        if (State != TaskState.Running)
+        {
+            throw new DomainException($"Task '{TaskKey}' is {State}, so no execution can be awaiting acceptance.");
+        }
+
+        Transition(TaskState.AwaitingAcceptance, nowUtc);
+    }
+
+    /// <summary>
+    /// The execution ended without passing, so the task becomes available again. Failure
+    /// lives on the execution: there is deliberately no failed task.
+    /// </summary>
+    public void ReturnToReady(string? blockReason, DateTimeOffset nowUtc)
+    {
+        Transition(TaskState.Ready, nowUtc);
+        BlockReason = Guard.OptionalMax(blockReason, nameof(blockReason), 1000);
+    }
+
+    private void Transition(TaskState next, DateTimeOffset nowUtc)
+    {
+        if (!TaskStateRules.CanTransition(State, next))
+        {
+            throw new DomainException($"Task '{TaskKey}' cannot move from {State} to {next}.");
+        }
+
+        if (TaskStateRules.RequiresReviewOverride(State, next))
+        {
+            throw new DomainException(
+                $"Task '{TaskKey}' may only reach {next} from {State} through a review override acceptance.");
+        }
+
+        State = next;
+        Touch(nowUtc);
+    }
+
     private void Touch(DateTimeOffset nowUtc)
     {
         Version++;

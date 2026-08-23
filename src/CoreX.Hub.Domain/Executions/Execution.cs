@@ -8,7 +8,7 @@ namespace CoreX.Hub.Domain.Executions;
 /// Phase 1 establishes the persisted shape only. The pipeline that drives state,
 /// gates, commits and evidence is Phase 5 and is intentionally absent here.
 /// </summary>
-public sealed class Execution
+public sealed partial class Execution
 {
     private Execution()
     {

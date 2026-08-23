@@ -1,6 +1,7 @@
 using CoreX.Hub.Application.Abstractions;
 using CoreX.Hub.Domain.Audit;
 using CoreX.Hub.Domain.Catalog;
+using CoreX.Hub.Domain.Executions;
 using CoreX.Hub.Domain.Common;
 using CoreX.Hub.Domain.Tasks;
 using Microsoft.EntityFrameworkCore;
@@ -165,6 +166,64 @@ public sealed class EfHubStore(HubDbContext db) : IHubStore
     public void AddAgentProfile(AgentProfile profile) => _db.AgentProfiles.Add(profile);
 
     public void AddTask(HubTask task) => _db.Tasks.Add(task);
+
+    public async Task<Execution?> FindExecutionAsync(Guid id, CancellationToken ct) =>
+        await db.Executions.FirstOrDefaultAsync(e => e.Id == id, ct);
+
+    public async Task<IReadOnlyList<Execution>> ListExecutionsForTaskAsync(Guid taskId, CancellationToken ct) =>
+        await db.Executions
+            .Where(e => e.TaskId == taskId)
+            .OrderByDescending(e => e.AttemptNo)
+            .ToListAsync(ct);
+
+    public async Task<IReadOnlyList<Execution>> ListNonTerminalExecutionsAsync(CancellationToken ct)
+    {
+        // SQLite cannot order by DateTimeOffset, so the ordering happens here rather than
+        // in SQL. These lists are per execution and small.
+        var executions = await db.Executions
+            .Where(e => ExecutionStateRules.NonTerminalStates.Contains(e.State))
+            .ToListAsync(ct);
+
+        return [.. executions.OrderBy(e => e.CreatedAtUtc)];
+    }
+
+    public async Task<IReadOnlyList<ExecutionStep>> ListExecutionStepsAsync(Guid executionId, CancellationToken ct) =>
+        await db.ExecutionSteps
+            .Where(s => s.ExecutionId == executionId)
+            .OrderBy(s => s.Order)
+            .ToListAsync(ct);
+
+    public async Task<IReadOnlyList<EvidenceArtifact>> ListEvidenceAsync(Guid executionId, CancellationToken ct)
+    {
+        var artifacts = await db.EvidenceArtifacts
+            .Where(a => a.ExecutionId == executionId)
+            .ToListAsync(ct);
+
+        return [.. artifacts.OrderBy(a => a.CreatedAtUtc)];
+    }
+
+    public async Task<IReadOnlyList<OrchestrationEvent>> ListOrchestrationEventsAsync(
+        Guid executionId,
+        CancellationToken ct)
+    {
+        var events = await db.OrchestrationEvents
+            .Where(e => e.ExecutionId == executionId)
+            .ToListAsync(ct);
+
+        return [.. events.OrderBy(e => e.OccurredAtUtc)];
+    }
+
+    public async Task<int> CountAcceptanceDecisionsAsync(Guid executionId, CancellationToken ct) =>
+        await db.AcceptanceDecisions.CountAsync(d => d.ExecutionId == executionId, ct);
+
+    public void AddExecution(Execution execution) => db.Executions.Add(execution);
+
+    public void AddExecutionStep(ExecutionStep step) => db.ExecutionSteps.Add(step);
+
+    public void AddEvidenceArtifact(EvidenceArtifact artifact) => db.EvidenceArtifacts.Add(artifact);
+
+    public void AddOrchestrationEvent(OrchestrationEvent orchestrationEvent) =>
+        db.OrchestrationEvents.Add(orchestrationEvent);
 
     public void AddAuditEvent(AuditEvent auditEvent) => _db.AuditEvents.Add(auditEvent);
 

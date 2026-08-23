@@ -7,7 +7,7 @@ namespace CoreX.Hub.Domain.Executions;
 /// Review into this single typed step so there is one timeline and one retry semantic.
 /// Phase 1 persists the shape only.
 /// </summary>
-public sealed class ExecutionStep
+public sealed partial class ExecutionStep
 {
     private ExecutionStep()
     {

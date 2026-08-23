@@ -566,6 +566,7 @@ static async Task<int> AgentAsync(string[] args)
         "hang" => await HangAsync(),
         "crash" => Crash(),
         "unexpected-commit" => UnexpectedCommit(),
+        "unexpected-commit-then-crash" => UnexpectedCommitThenCrash(),
         _ => Unknown(mode),
     };
 }
@@ -678,6 +679,22 @@ static int UnexpectedCommit()
         "-c", "user.name=Scripted Agent",
         "-c", "user.email=scripted@corex.local",
         "commit", "-q", "-m", "agent: unexpected commit");
+}
+
+static int UnexpectedCommitThenCrash()
+{
+    var committed = UnexpectedCommit();
+
+    if (committed != 0)
+    {
+        return committed;
+    }
+
+    Console.Out.Flush();
+
+    // Dies after committing, so the collision between a terminal agent failure and an
+    // unexpected commit can be exercised.
+    throw new InvalidOperationException("scripted crash after committing");
 }
 
 static int RunGit(string git, params string[] arguments)

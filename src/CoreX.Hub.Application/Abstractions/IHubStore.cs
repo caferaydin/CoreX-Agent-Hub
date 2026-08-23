@@ -1,5 +1,6 @@
 using CoreX.Hub.Domain.Audit;
 using CoreX.Hub.Domain.Catalog;
+using CoreX.Hub.Domain.Executions;
 using CoreX.Hub.Domain.Tasks;
 
 namespace CoreX.Hub.Application.Abstractions;
@@ -61,6 +62,33 @@ public interface IHubStore
     void AddAgentProfile(AgentProfile profile);
 
     void AddTask(HubTask task);
+
+    Task<Execution?> FindExecutionAsync(Guid id, CancellationToken ct);
+
+    /// <summary>Executions for one task, newest attempt first.</summary>
+    Task<IReadOnlyList<Execution>> ListExecutionsForTaskAsync(Guid taskId, CancellationToken ct);
+
+    /// <summary>
+    /// Every execution that has not reached a terminal state, whichever task it belongs to.
+    /// Used by the reconciler and by the single concurrent execution rule.
+    /// </summary>
+    Task<IReadOnlyList<Execution>> ListNonTerminalExecutionsAsync(CancellationToken ct);
+
+    Task<IReadOnlyList<ExecutionStep>> ListExecutionStepsAsync(Guid executionId, CancellationToken ct);
+
+    Task<IReadOnlyList<EvidenceArtifact>> ListEvidenceAsync(Guid executionId, CancellationToken ct);
+
+    Task<IReadOnlyList<OrchestrationEvent>> ListOrchestrationEventsAsync(Guid executionId, CancellationToken ct);
+
+    Task<int> CountAcceptanceDecisionsAsync(Guid executionId, CancellationToken ct);
+
+    void AddExecution(Execution execution);
+
+    void AddExecutionStep(ExecutionStep step);
+
+    void AddEvidenceArtifact(EvidenceArtifact artifact);
+
+    void AddOrchestrationEvent(OrchestrationEvent orchestrationEvent);
 
     void AddAuditEvent(AuditEvent auditEvent);
 

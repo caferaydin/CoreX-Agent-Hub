@@ -32,6 +32,12 @@ public enum ScriptedAgentMode
 
     /// <summary>Commits in the workspace, which the Hub never asked it to do.</summary>
     UnexpectedCommit,
+
+    /// <summary>
+    /// Commits and then dies. Exists so the collision can be tested: a terminal agent
+    /// failure owns the outcome even when the agent also committed.
+    /// </summary>
+    UnexpectedCommitThenCrash,
 }
 
 /// <summary>

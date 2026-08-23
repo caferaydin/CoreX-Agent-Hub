@@ -18,7 +18,8 @@ Kabul edilmiş kararlar: [`docs/adr/`](docs/adr/) (ADR-0001 … ADR-0017).
 | Faz 4 | Doğrulama motoru + kanıt deposu | **TAMAM** |
 | Faz 5A | Context Pack + agent runtime sözleşmesi + ScriptedAgentRuntime | **TAMAM** |
 | Faz 5B | K1 RuntimePolicyGate + K2 ScopeGuard + K3 SecretGuard | **TAMAM** |
-| Faz 5C-D | Orchestrator + K0 + AcceptanceService + `hub run` | uygulanmadı |
+| Faz 5C | ExecutionOrchestrator + K0 + result commit + doğrulama + lease | **TAMAM** |
+| Faz 5D | AcceptanceService + `hub run` / `hub accept` | uygulanmadı |
 | Faz 6 | ClaudeCodeRuntime | uygulanmadı |
 | Faz 7 | İnceleme adımı + inceleme override kabulü | uygulanmadı |
 | Faz 8 | CodexRuntime | uygulanmadı |
@@ -490,6 +491,64 @@ Yaşam döngüsü Faz 5C'nindir ve bu tip bilinçli olarak orchestrator diye adl
 
 **`SecretGuardBlocked` geçersiz kılınamaz.** `ignoreSecretGuard`, `forceCommit`,
 `overrideSecret` gibi bir mekanizma yoktur ve test bunu isim düzeyinde de kilitler.
+
+## Execution orchestrator (Faz 5C)
+
+`CoreX.Hub.Application.ExecutionOrchestrator` yürütme sıralamasının **tek sahibidir**.
+Workspace'i, Context Pack'i, agent runtime'ını, kanıtı, dört kapıyı, Hub sonuç commit'ini
+ve doğrulamayı dar port'lar üzerinden koordine eder; hiçbirini **kendisi uygulamaz**.
+Süreç başlatmaz, git komutu kurmaz, sır deseni bilmez, test raporu ayrıştırmaz ve
+sağlayıcı adı **taşımaz** — yerel bir harness ile barındırılan bir asistan aynı koda
+gelir, çünkü içinde onları ayırt edecek hiçbir şey yoktur.
+
+```
+Task Ready → Execution Created → Task Running
+  PreparingWorkspace → BuildingContext → RunningAgent → CapturingChanges
+  K0 → K1 → K2 → K3 → CreateResultCommit → Verifying → Reviewing(Skipped) → Completed
+Passed → Task AwaitingAcceptance      ·      diğer her şey → Task Ready
+```
+
+**Kanıt önce.** Agent çökse, zaman aşımına uğrasa veya iptal edilse bile `CapturingChanges`
+adımına **girilir**: HEAD, GitStatus, GitCommitGraph, GitWorktreeDiff, FileInventory ve
+beklenmeyen commit'ler toplanır, sonra terminal sonuç yazılır. Çağıranın iptal token'ı
+agent'ı durdurur; **kanıt toplamayı durdurmaz** — aksi hâlde iptal edilen bir koşu, o
+koşunun ne yaptığının tek kaydını yok ederdi.
+
+**M4 çarpışması.** Agent terminal olarak başarısızsa **ve** HEAD taban commit'ten farklıysa,
+sonucu **agent'ın hatası** belirler: `Failed`, `RuntimePolicyViolation` değil. Beklenmeyen
+commit `UnexpectedAgentCommitDetected` + `UnexpectedCommitShas` olarak **teşhis** kaydedilir,
+bıraktığı yerde erişilebilir kalır, hiçbir şey onarılmaz.
+
+**Sonuç commit'i** yalnızca K0–K3'ün dördü de geçtiğinde ve yalnızca
+`WorkspaceManager.CreateResultCommitAsync` üzerinden atılır — ikinci bir commit yolu yoktur.
+Doğrulama `ResultCommitSha` var olmadan **başlamaz**.
+
+**Baseline provenance.** Güncel sonuç execution worktree'sinde ölçülür; baseline
+execution'ın **kendi taban commit'ine** sabitlenmiş tek kullanımlık bir snapshot'ta.
+Pin ölçümden **önce ve sonra** doğrulanır; HEAD kaydıysa sonuç önbelleğe **girmez**.
+Snapshot her hâlükârda bırakılır; bırakılamazsa artık (residual) olarak raporlanır ve
+ölçümün ne olduğunu değiştirmez. `BaselineKey` üçlüsü değişmedi:
+`RepositoryId + BaseCommitSha + ProfileHash`.
+
+**Review Faz 7'dir.** Yaşam döngüsündeki `Reviewing` durumu korunur ama Review adımı
+`Skipped` + `ReviewNotConfiguredInPhase5` olarak kaydedilir. "Kimse bakmadı", "biri
+onayladı" demek **değildir**: sahte `Clean` review, sahte bulgu ve override yoktur.
+
+**Lease.** Sahip, süreç kimliği **ve** host başlangıç zamanının çiftidir — işletim
+sistemleri süreç kimliğini yeniden kullanır, geri dönüşmüş bir numara özgün sahip değildir.
+Heartbeat uzun aşamalar boyunca kendi kısa ömürlü bağlantısında atar (EF `DbContext` iki
+yerden kullanılamaz) ve execution terminal olunca durur. Sahibi ölmüş veya susmuş bir
+execution `StaleExecutionReconciler` tarafından `Interrupted` yapılır, görev `Ready`'ye
+döner ve **worktree korunur**.
+
+**Worktree tutma.** `ResultCommitSha == null` olan hiçbir execution'ın worktree'si otomatik
+silinmez (D6) — aggregate bunu `MarkWorkspaceReleased` içinde reddeder.
+
+**Eşzamanlılık.** `MaxConcurrentExecutions = 1`, süreç içi tek semafor. Dağıtık kilit,
+kuyruk, worker cluster yok. Aynı görevin iki terminal-olmayan execution'ı olamaz.
+
+**İşlem sınırı.** Her durum geçişi kendi AuditEvent'iyle **tek işlemde** yazılır; hiçbir
+veritabanı işlemi agent, git, context veya doğrulama çalışırken açık tutulmaz.
 
 ## Katkı kuralları
 
