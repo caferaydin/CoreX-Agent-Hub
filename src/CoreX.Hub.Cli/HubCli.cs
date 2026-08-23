@@ -1,5 +1,6 @@
 using CoreX.Hub.Application.Acceptance;
 using CoreX.Hub.Application.Catalog;
+using CoreX.Hub.Application.Orchestration;
 using CoreX.Hub.Application.Tasks;
 using CoreX.Hub.Cli.Commands;
 using CoreX.Hub.Domain.Common;
@@ -38,6 +39,9 @@ public static class HubCli
           hub task show <TASKKEY> [--org <slug>]
           hub task ready <TASKKEY> [--org <slug>] [--actor <name>]
 
+          hub run    <TASKKEY> [--org <slug>] [--agent <name>]
+          hub cancel <TASKKEY> [--org <slug>] [--reason "<text>"]
+
           hub accept          <TASKKEY>#<attempt> [--org <slug>] [--actor <name>]
                               [--verdict <order>=met|notmet|na[:note]]...
           hub accept          <TASKKEY>#<attempt> --override --reason "<text>"
@@ -59,8 +63,11 @@ public static class HubCli
         A decision names the attempt it is about (HUB-001#1); the newest is never chosen
         for you. Machine criteria are shown from recorded evidence and cannot be answered by hand. Accepting records a decision - it does not merge, push or release.
 
-        Later phase commands are intentionally not implemented yet:
-        run, cancel, doctor.
+        A run stops at AwaitingAcceptance and never accepts anything itself. Cancelling a
+        running task stops the work first and only then records the decision, so a cancelled
+        task never means "still running".
+
+        Later phase commands are intentionally not implemented yet: doctor.
         """;
 
     public static async Task<int> RunAsync(
@@ -97,6 +104,20 @@ public static class HubCli
                 args.GetOption("config"),
                 error,
                 ct);
+
+            if (group is "run" or "cancel")
+            {
+                // Both drive real git and a real process tree through ProcessRunner, which is
+                // Windows only by design (Job Object based process tree termination).
+                if (!OperatingSystem.IsWindows())
+                {
+                    throw new UsageException($"hub {group} requires Windows.");
+                }
+
+                return group == "run"
+                    ? await RunCommands.RunAsync(session, args, output, error, ct)
+                    : await RunCommands.CancelAsync(session, args, output, ct);
+            }
 
             if (group == "workspace")
             {
@@ -158,6 +179,13 @@ public static class HubCli
         catch (DomainException ex)
         {
             error.WriteLine($"domain error: {ex.Message}");
+            return ExitCodes.OperationFailed;
+        }
+        catch (ExecutionStartException ex)
+        {
+            // The gates that refuse before an execution row exists - a blocked organization,
+            // a task that is not Ready, a repository that cannot pin a commit - report here.
+            error.WriteLine($"error: {ex.Message}");
             return ExitCodes.OperationFailed;
         }
     }

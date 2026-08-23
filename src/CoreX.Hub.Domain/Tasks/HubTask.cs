@@ -244,6 +244,30 @@ public sealed class HubTask
         BlockReason = Guard.OptionalMax(reason, nameof(reason), 1000);
     }
 
+    /// <summary>
+    /// A person abandoned the task. Terminal, and deliberately not the same thing as an
+    /// execution ending Cancelled.
+    ///
+    /// An execution is cancelled when its caller stopped it; that is a fact about one
+    /// attempt, and the task normally becomes available again afterwards so somebody can
+    /// try once more. This is the other decision - the work itself is not wanted - and only
+    /// an operator makes it. Nothing in orchestration reaches this method, which is why a
+    /// stopped attempt cannot quietly end the task.
+    ///
+    /// Whatever the executions produced keeps whatever it earned: nothing here rewrites an
+    /// execution, drops a commit or touches a worktree.
+    /// </summary>
+    public void CancelByOperator(string? reason, DateTimeOffset nowUtc)
+    {
+        if (TaskStateRules.IsTerminal(State))
+        {
+            throw new DomainException($"Task '{TaskKey}' is already {State}, so it cannot be cancelled.");
+        }
+
+        Transition(TaskState.Cancelled, nowUtc);
+        BlockReason = Guard.OptionalMax(reason, nameof(reason), 1000);
+    }
+
     private void Transition(TaskState next, DateTimeOffset nowUtc)
     {
         if (!TaskStateRules.CanTransition(State, next))

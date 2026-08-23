@@ -18,6 +18,7 @@
     <Project Path="tests/CoreX.Hub.Domain.Tests/CoreX.Hub.Domain.Tests.csproj" />
     <Project Path="tests/CoreX.Hub.Execution.Tests/CoreX.Hub.Execution.Tests.csproj" />
     <Project Path="tests/CoreX.Hub.Integration.Tests/CoreX.Hub.Integration.Tests.csproj" />
+    <Project Path="tests/CoreX.Hub.LoopZero.Tests/CoreX.Hub.LoopZero.Tests.csproj" />
     <Project Path="tests/CoreX.Hub.ProcessFixture/CoreX.Hub.ProcessFixture.csproj" />
     <Project Path="tests/CoreX.Hub.Verification.Tests/CoreX.Hub.Verification.Tests.csproj" />
     <Project Path="tests/CoreX.Hub.Workspace.Tests/CoreX.Hub.Workspace.Tests.csproj" />

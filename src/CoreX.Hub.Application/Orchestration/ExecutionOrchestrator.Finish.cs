@@ -19,16 +19,7 @@ public sealed partial class ExecutionOrchestrator
     {
         var now = _clock.GetUtcNow();
 
-        execution.Complete(outcome, now);
-
-        if (outcome == ExecutionOutcome.Passed)
-        {
-            task.MarkAwaitingAcceptance(now);
-        }
-        else
-        {
-            task.ReturnToReady(Bounded(detail), now);
-        }
+        ExecutionCompletion.Apply(execution, task, outcome, detail, now);
 
         _store.AddOrchestrationEvent(EventFor(execution, "Completed", outcome + ": " + detail));
         _store.AddAuditEvent(AuditFor(execution, "ExecutionCompleted", outcome + ": " + Bounded(detail)));

@@ -214,6 +214,26 @@ ayrıca `resultPath` bildirmek zorundadır:
 Yapılandırma dosyası aranma sırası: `--config` → veri dizini → çalışma dizininden
 yukarı doğru.
 
+### Agent runtime ayarları
+
+Katalogdaki agent profili bir `runtimeKey` adlandırır; o anahtarın **bu makinede** ne
+olduğunu yapılandırma söyler. Kataloğa değil yapılandırmaya ait olması bilinçlidir: hiçbir
+şey veritabanına seed edilmez, dolayısıyla aynı katalog başka bir kurulumda migration'sız
+çalışır.
+
+```yaml
+agents:
+  scriptedRuntimes:
+    - key: scripted
+      fixturePath: 'D:\cx	ools\corex-fixture.exe'
+      mode: apply-patch
+```
+
+Faz 5'te tek bir runtime türü vardır ve bölümün adı bunu açıkça söyler. Bildirilmemiş bir
+anahtarı adlandıran profil, elde ne varsa onu almaz — "bu anahtar altında runtime kayıtlı
+değil" cevabını alır. `mode`, fixture'ın kendi fiillerinin yazıldığı gibi yazılır
+(`apply-patch`, `out-of-scope-write`, `hang`, ...).
+
 ### Kronos onboarding kapısı (ADR-0017)
 
 `requiresHardIsolation: true` **ve** `isolationLevel: Logical` olan bir organizasyon
@@ -251,10 +271,10 @@ src/CoreX.Hub.Context         Faz 5A context pack üreticisi. Yalnızca Domain'e
                               yol güveni dar port üzerinden gelir.
 src/CoreX.Hub.Agents          Faz 5A ince agent runtime sözleşmesi + ScriptedAgentRuntime.
                               Yalnızca Domain'e bağımlı; süreç dar port üzerinden gelir.
-src/CoreX.Hub.Cli             Faz 1'in tek arayüzü ve composition root'u.
-tests/                        Domain / Integration / Execution / Workspace /
-                              Verification / Architecture testleri + corex-fixture
-                              (deterministik test yardımcı exe'si).
+src/CoreX.Hub.Cli             Tek arayüz ve composition root'u.
+tests/                        Domain / Application / Integration / Execution / Workspace /
+                              Verification / Architecture / LoopZero testleri +
+                              corex-fixture (deterministik test yardımcı exe'si).
 docs/architecture             Otoriter mimari doküman + tarihçe.
 docs/adr                      ADR-0001 … ADR-0019.
 ```
@@ -685,6 +705,93 @@ hangisinin gösterildiği açıkça yazılır. Eksik artefakt **yeniden üretilm
 çalışma ağacından diff üretmek aynı kelimelerle başka bir soruyu cevaplamak olurdu.
 Redaksiyon yazma zamanında olduğu için bu yolda ham tampon yoktur ve `--raw` gibi bir
 seçenek bilerek eklenmemiştir.
+
+## Loop Zero: çalıştır, incele, karar ver (Faz 5E)
+
+Faz 5 iki komutla kapanır. `hub run <TASKKEY>` bir denemeyi baştan sona yürütür ve
+`AwaitingAcceptance`'ta **durur**; `hub cancel <TASKKEY>` işi bırakır. Aradaki her şey —
+kanıtı okumak, kararı vermek — zaten var olan komutlardır ve hepsi **ayrı süreçlerde**
+çalışır: iki komut arasında bellekte hiçbir şey taşınmaz, taşınan tek şey SQLite'a ve blob
+deposuna yazılmış olandır.
+
+```
+hub run HUB-001                          # Task -> AwaitingAcceptance
+hub evidence show HUB-001#1 --diff       # kalıcı makine kanıtı
+hub accept HUB-001#1                     # insan kararı -> Accepted, worktree release
+```
+
+`hub run` ayrı bir boru hattı **değildir**. Faz 5C'de kanıtlanmış `ExecutionOrchestrator`'ı
+kurar ve çağırır; kendi git komutu, kendi agent'ı, kendi kapısı yoktur. Özetini de agent'ın
+söylediğinden değil, kalıcılaşmış satırlardan üretir: base/result commit, ContextPackHash,
+adım durumları, doğrulama komutları ve kabul kriterleri. Geçen bir koşuda sıradaki iki
+komutu yazar; kabul **etmez**.
+
+**Runtime yapılandırmadan gelir.** `agents.scriptedRuntimes` bir `runtimeKey`'in arkasında
+neyin durduğunu söyler — fixture yolu ve deterministik senaryo. Katalogda profil hangi
+anahtarı adlandırdığını, yapılandırma o anahtarın bu makinede ne olduğunu söyler; ikisi
+ayrı olduğu için aynı katalog başka bir kurulumda migration'sız çalışır. Faz 5'te tek bir
+runtime türü vardır ve yapılandırma bunu açıkça söyler: sağlayıcı seçimi, fallback veya
+keşif yoktur.
+
+**M5 uyarısı.** Yeni bir deneme başlamadan önce, commit üretmemiş önceki denemelerin
+worktree'leri için **tek satır** uyarı basılır. Silmez, engellemez: o ağaç yapılanların tek
+kopyasıdır.
+
+**Aynı anda tek execution.** Orchestrator'ın semafor kuralı süreç içidir ve ikinci bir CLI
+çağrısı hakkında hiçbir şey söylemez. Kurulum başına bir dosya kilidi (`execution.lock`)
+kuralı süreçlerin birbirini görebildiği yerde tutar. Mutex değil — mutex thread'e bağlıdır,
+async komut ise thread değiştirir; isimli semafor da değil — sahibi öldürülürse sayacı geri
+gelmez. Dosya tanıtıcısını işletim sistemi her koşulda serbest bırakır.
+
+### `hub cancel` — istemekle durdurmuş olmak aynı şey değil
+
+Operatörün iptali, bir execution'ın `Cancelled` bitmesiyle **aynı olay değildir**. İkincisi
+bir denemenin durdurulduğunu söyler ve task normalde tekrar denenebilir hâle döner;
+birincisi işin kendisinin istenmediğini söyler ve terminaldir. `TaskState.Cancelled`'ı
+yazan tek yer budur.
+
+Çalışan bir task için sıra kesindir: execution'ı sahibine **sordur**, veritabanı durduğunu
+**söyleyene kadar** izle, ve ancak ondan sonra kararı yaz. Sinyal iletildi diye "iptal
+edildi" demek, hâlâ worktree'ye yazan bir sürecin üstüne terminal bir kayıt koymak olurdu.
+Durmazsa `CancellationRequested` raporlanır ve **hiçbir şey yazılmaz**. Dinleyen yoksa —
+host ölmüşse — istek reddedilir; o execution'ı bir sonraki komutun yeniden uzlaştırması
+sahiplenir.
+
+Sinyal **yerel makineye ait**, execution kimliğiyle adlandırılmış bir isimli olaydır: ağ
+yok, servis yok, kuyruk yok. Eski bir denemenin sinyali yenisine ulaşamaz, çünkü nesne onu
+oluşturan süreçle birlikte yok olur ve yeni denemenin kimliği başkadır. Application katmanı
+bir port görür; işletim sistemi tipi o portu geçmez.
+
+Execution gerçeği hiçbir zaman task'a uydurulmaz. Result commit'i olan bir deneme onu
+korur: doğrulama sırasında gelen iptal frozen davranışı izler — Verify adımı `Cancelled`,
+execution `VerificationFailed`, commit yerinde. Task terminal `Cancelled` olabilir; makine
+gerçeği `VerificationFailed` kalır ve `AcceptanceDecision` yazılmaz.
+
+### Çökmeden sonra
+
+Her yeni CLI süreci açılırken sahipsiz kalmış execution'ları uzlaştırır. Result commit'i
+**olmayan** bir execution `Interrupted` olur, task `Ready`'ye döner, worktree korunur, git
+geçmişine dokunulmaz. Sahiplik pid değil, **pid + host başlangıç zamanı** çiftidir; geri
+dönüştürülmüş bir pid orijinal sahip değildir.
+
+Result commit'i **olan** bir execution Faz 5C'de kapatılamıyordu: her terminal hata durumu
+"bu deneme hiçbir şey üretmedi" der, bu deneme ise depoda gerçekten duran bir commit
+üretmişti. Faz 5E bunu **ileriye doğru** kapatır. Eksik olan tek şey "bu commit nasıl
+ölçüldü" sorusunun cevabıdır ve onun iki dürüst kaynağı vardır: zaten kalıcılaşmış gerçek,
+ya da commit'in yeniden ölçülmesi. Adım ile komut satırları tek işlemde yazıldığı için
+okunabilir bir kayıt vardır; çelişkili bir kayıt (komutsuz bitmiş adım, adımsız komut)
+yorumlanmaz, **fail-closed** raporlanır.
+
+İkinci bir result commit yapmak dikkat meselesi değildir: kurtarma servisinde workspace
+portu **yoktur**, dolayısıyla oradan bir commit'e giden yol yoktur. Agent yeniden
+çalıştırılmaz, ref'e dokunulmaz, dosya silinmez.
+
+### Loop Zero kabul takımı
+
+`tests/CoreX.Hub.LoopZero.Tests` gerçek `hub.exe`'yi gerçek bir git deposuna karşı
+çalıştırır: gerçek süreç ağacı, gerçek doğrulama komutları, gerçek öldürme ve yeniden
+başlatma. Hub'ı öldüren test bir uzlaştırıcı metodu çağırmaz — süreci dışarıdan öldürür ve
+bir sonraki sürecin ne yaptığına bakar. Ağ yok, AI yok, sağlayıcı yok.
 
 ## Katkı kuralları
 

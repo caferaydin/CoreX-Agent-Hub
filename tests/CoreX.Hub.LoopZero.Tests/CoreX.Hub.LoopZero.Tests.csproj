@@ -1,0 +1,31 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Loop Zero: the end to end acceptance suite for Phase 5. It drives the shipped hub
+    executable against a real git repository and a real process tree, including tests that
+    kill the Hub and start it again, so it targets Windows like the other execution facing
+    suites.
+  -->
+  <PropertyGroup>
+    <TargetFramework>net10.0-windows</TargetFramework>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+    <PackageReference Include="xunit" Version="2.9.3" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="3.1.4" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\CoreX.Hub.Domain\CoreX.Hub.Domain.csproj" />
+    <ProjectReference Include="..\..\src\CoreX.Hub.Application\CoreX.Hub.Application.csproj" />
+    <ProjectReference Include="..\..\src\CoreX.Hub.Infrastructure\CoreX.Hub.Infrastructure.csproj" />
+    <ProjectReference Include="..\..\src\CoreX.Hub.Cli\CoreX.Hub.Cli.csproj" />
+    <ProjectReference Include="..\CoreX.Hub.ProcessFixture\CoreX.Hub.ProcessFixture.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Using Include="Xunit" />
+  </ItemGroup>
+
+</Project>

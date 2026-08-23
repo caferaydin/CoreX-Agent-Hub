@@ -19,9 +19,10 @@ public sealed class DomainInvariantTests
     public void The_task_surface_is_closed_and_names_the_human_decisions_explicitly()
     {
         // E.1 #6: only AcceptanceService may write Accepted. Phase 5D gives the aggregate
-        // the edges a decision needs, so this guard changes shape rather than relaxing: the
-        // list stays closed, and the human decisions are named in it on purpose - a new
-        // mutator, or a second way to reach Accepted, has to be argued for here first.
+        // the edges a decision needs and Phase 5E adds the operator's abandon, so this guard
+        // changes shape rather than relaxing: the list stays closed, and the human decisions
+        // are named in it on purpose - a new mutator, or a second way to reach Accepted, has
+        // to be argued for here first.
         var mutators = typeof(HubTask)
             .GetMethods(BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly)
             .Where(m => !m.IsSpecialName)
@@ -30,8 +31,9 @@ public sealed class DomainInvariantTests
 
         Assert.Equal(
             [
-                "Accept", "AcceptByReviewOverride", "AddAcceptanceCriterion", "MarkAwaitingAcceptance",
-                "MarkReady", "MarkRunning", "Reject", "ReturnToReady", "SetBlockReason",
+                "Accept", "AcceptByReviewOverride", "AddAcceptanceCriterion", "CancelByOperator",
+                "MarkAwaitingAcceptance", "MarkReady", "MarkRunning", "Reject", "ReturnToReady",
+                "SetBlockReason",
             ],
             mutators.Order(StringComparer.Ordinal));
 

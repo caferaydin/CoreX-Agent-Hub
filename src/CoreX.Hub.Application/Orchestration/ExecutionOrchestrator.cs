@@ -62,8 +62,21 @@ public sealed partial class ExecutionOrchestrator
         _concurrency = new SemaphoreSlim(options.MaxConcurrentExecutions, options.MaxConcurrentExecutions);
     }
 
-    /// <summary>Runs one attempt at one task, start to finish.</summary>
-    public async Task<ExecutionRunReport> RunAsync(Guid taskId, string agentProfileName, CancellationToken ct)
+    /// <summary>
+    /// Runs one attempt at one task, start to finish.
+    ///
+    /// <paramref name="onExecutionStarted"/> is called once, with this attempt's id, as soon
+    /// as the execution row exists and before any external work begins. It exists so a host
+    /// can start listening for a request to stop this particular attempt - which it cannot do
+    /// earlier, because until the row is written the attempt has no identity to name. The
+    /// orchestrator itself learns nothing from it: cancellation still arrives as an ordinary
+    /// token, and everything it does about it is the same as if a person had pressed Ctrl-C.
+    /// </summary>
+    public async Task<ExecutionRunReport> RunAsync(
+        Guid taskId,
+        string agentProfileName,
+        CancellationToken ct,
+        Action<Guid>? onExecutionStarted = null)
     {
         // MaxConcurrentExecutions is a local rule for a local-first tool: one semaphore in
         // this process, no queue and no distributed lock. The database's own "one
@@ -72,7 +85,7 @@ public sealed partial class ExecutionOrchestrator
 
         try
         {
-            return await RunOnceAsync(taskId, agentProfileName, ct);
+            return await RunOnceAsync(taskId, agentProfileName, onExecutionStarted, ct);
         }
         finally
         {

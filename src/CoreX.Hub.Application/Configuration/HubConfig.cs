@@ -15,7 +15,42 @@ public sealed class HubConfig
 
     public HubVerificationConfig Verification { get; set; } = new();
 
+    public HubAgentsConfig Agents { get; set; } = new();
+
     public List<OrganizationConfig> Organizations { get; set; } = [];
+}
+
+/// <summary>
+/// How the runtimes an agent profile can name are actually built. Configuration, not
+/// catalog: nothing here is seeded into the database, and no execution row ever refers to
+/// it.
+///
+/// The catalog says which runtime key a profile uses; this says what stands behind that
+/// key on this machine. Keeping the two apart is what lets the same seeded catalog run
+/// against a different local installation without a migration.
+/// </summary>
+public sealed class HubAgentsConfig
+{
+    /// <summary>
+    /// The deterministic offline runtimes available here.
+    ///
+    /// Named for what they are rather than as a generic runtime list, because Phase 5 has
+    /// exactly one kind of runtime and pretending otherwise would invite a provider switch
+    /// into configuration.
+    /// </summary>
+    public List<ScriptedRuntimeConfig> ScriptedRuntimes { get; set; } = [];
+}
+
+public sealed class ScriptedRuntimeConfig
+{
+    /// <summary>The <c>runtimeKey</c> an agent profile names to reach this runtime.</summary>
+    public string Key { get; set; } = string.Empty;
+
+    /// <summary>Absolute path to the fixture executable it drives. Never discovered on PATH.</summary>
+    public string FixturePath { get; set; } = string.Empty;
+
+    /// <summary>Which deterministic scenario the fixture plays, by name.</summary>
+    public string Mode { get; set; } = string.Empty;
 }
 
 /// <summary>

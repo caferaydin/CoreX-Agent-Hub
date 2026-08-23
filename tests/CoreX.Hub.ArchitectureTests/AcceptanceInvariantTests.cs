@@ -226,7 +226,7 @@ public sealed class AcceptanceInvariantTests
     }
 
     [Fact]
-    public void The_command_line_offers_no_reviewer_and_no_way_to_run_anything_yet()
+    public void The_command_line_offers_no_reviewer_and_no_way_to_commit_on_a_persons_behalf()
     {
         var usage = Cli.HubCli.UsageText;
 
@@ -234,8 +234,9 @@ public sealed class AcceptanceInvariantTests
         Assert.Contains("hub reject", usage, StringComparison.Ordinal);
         Assert.Contains("hub evidence show", usage, StringComparison.Ordinal);
 
-        // Phase 5D adds decisions, not execution or review.
-        foreach (var later in new[] { "hub run", "hub cancel", "hub review", "commit-result" })
+        // Phase 5E adds running and stopping work. Review is still nobody's job here, and
+        // there is still no command that would make a commit or a decision for a person.
+        foreach (var later in new[] { "hub review", "commit-result", "hub merge", "hub push" })
         {
             Assert.DoesNotContain(later + " ", usage, StringComparison.Ordinal);
         }

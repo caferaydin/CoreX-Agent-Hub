@@ -5,7 +5,11 @@ namespace CoreX.Hub.Application.Orchestration;
 
 public sealed partial class ExecutionOrchestrator
 {
-    private async Task<ExecutionRunReport> RunOnceAsync(Guid taskId, string agentProfileName, CancellationToken ct)
+    private async Task<ExecutionRunReport> RunOnceAsync(
+        Guid taskId,
+        string agentProfileName,
+        Action<Guid>? onExecutionStarted,
+        CancellationToken ct)
     {
         var validated = await ValidateStartAsync(taskId, agentProfileName, ct);
 
@@ -30,6 +34,11 @@ public sealed partial class ExecutionOrchestrator
         var task = start.Task;
 
         using var heartbeat = new LeaseHeartbeat(this, execution.Id, _options.HeartbeatInterval, _clock);
+
+        // The attempt now has an identity, and nothing external has happened yet. A host that
+        // wants to be able to stop this particular run has to be told here: earlier there was
+        // no id to name, and later the agent would already be running.
+        onExecutionStarted?.Invoke(execution.Id);
 
         // Workspace ------------------------------------------------------------------
         await AdvanceAsync(execution, ExecutionState.PreparingWorkspace, ExecutionStepKind.PrepareWorkspace, ct);
