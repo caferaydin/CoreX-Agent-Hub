@@ -16,6 +16,7 @@ using CoreX.Hub.Domain.Executions;
 using CoreX.Hub.Domain.Tasks;
 using CoreX.Hub.Infrastructure.Evidence;
 using CoreX.Hub.Infrastructure.Persistence;
+using Microsoft.EntityFrameworkCore;
 using CoreX.Hub.Verification;
 using CoreX.Hub.Verification.Abstractions;
 using CoreX.Hub.Verification.Baseline;
@@ -90,6 +91,15 @@ public sealed class OrchestrationHarness : IAsyncDisposable
     public VerificationProfile? VerificationProfile { get; set; }
 
     /// <summary>
+    /// Builds the repository's verification profile during the seed.
+    ///
+    /// It has to exist before the task becomes Ready, because the ready gate refuses a
+    /// Machine criterion whose verification reference names no step - which is exactly the
+    /// guard that stops a task declaring machine truth nobody will ever produce.
+    /// </summary>
+    private Func<Guid, Guid, DateTimeOffset, VerificationProfile>? ProfileFactory { get; init; }
+
+    /// <summary>
     /// Wraps the production workspace port so a test can watch the handoff or interrupt it.
     /// The inner port is the real one, so what is being observed is the real sequence.
     /// </summary>
@@ -109,7 +119,10 @@ public sealed class OrchestrationHarness : IAsyncDisposable
 
     public static async Task<OrchestrationHarness> CreateAsync(
         IReadOnlyList<string>? allowedScope = null,
-        IReadOnlyList<string>? forbiddenScope = null)
+        IReadOnlyList<string>? forbiddenScope = null,
+        IReadOnlyList<string>? humanCriteria = null,
+        IReadOnlyList<(string Ref, string Text)>? machineCriteria = null,
+        Func<Guid, Guid, DateTimeOffset, VerificationProfile>? verificationProfile = null)
     {
         Assert.True(GitToolchain.TryResolve(out var git, out var diagnostic), diagnostic);
 
@@ -119,9 +132,10 @@ public sealed class OrchestrationHarness : IAsyncDisposable
         var db = HubDatabase.CreateContext(Path.Combine(root, "hub.db"), new OrganizationScope());
         await HubDatabase.MigrateAsync(db, CancellationToken.None);
 
-        var harness = new OrchestrationHarness(root, git!, db);
+        var harness = new OrchestrationHarness(root, git!, db) { ProfileFactory = verificationProfile };
         harness.InitialiseRepository();
-        await harness.SeedAsync(allowedScope ?? ["src/**"], forbiddenScope ?? []);
+        await harness.SeedAsync(
+            allowedScope ?? ["src/**"], forbiddenScope ?? [], humanCriteria ?? [], machineCriteria ?? []);
 
         return harness;
     }
@@ -242,6 +256,10 @@ public sealed class OrchestrationHarness : IAsyncDisposable
         await Store.FindExecutionAsync(id, CancellationToken.None)
         ?? throw new InvalidOperationException("execution vanished");
 
+    /// <summary>The audit trail for one execution, read straight from the table.</summary>
+    public async Task<IReadOnlyList<Domain.Audit.AuditEvent>> AuditEventsAsync(Guid executionId) =>
+        await _db.AuditEvents.Where(a => a.ExecutionId == executionId).ToListAsync();
+
     public async Task<HubTask> TaskAsync() =>
         await Store.FindTaskAsync(TaskId, CancellationToken.None)
         ?? throw new InvalidOperationException("task vanished");
@@ -315,7 +333,11 @@ public sealed class OrchestrationHarness : IAsyncDisposable
         RunGit("commit", "-q", "-m", "base");
     }
 
-    private async Task SeedAsync(IReadOnlyList<string> allowedScope, IReadOnlyList<string> forbiddenScope)
+    private async Task SeedAsync(
+        IReadOnlyList<string> allowedScope,
+        IReadOnlyList<string> forbiddenScope,
+        IReadOnlyList<string> humanCriteria,
+        IReadOnlyList<(string Ref, string Text)> machineCriteria)
     {
         var now = Clock.GetUtcNow();
 
@@ -329,7 +351,8 @@ public sealed class OrchestrationHarness : IAsyncDisposable
             Guid.CreateVersion7(), organization.Id, project.Id, Slug.Parse("hub-repo"), "Repo",
             RepositoryPath, "main", ["main"], now);
 
-        VerificationProfile ??= BuildVerificationProfile(organization.Id, repository.Id, "trx-fixed", 0, now);
+        VerificationProfile ??= ProfileFactory?.Invoke(organization.Id, repository.Id, now)
+            ?? BuildVerificationProfile(organization.Id, repository.Id, "trx-fixed", 0, now);
 
         var profile = new AgentProfile(
             Guid.CreateVersion7(), organization.Id, ScriptedProfileName, AgentRole.Implementer,
@@ -341,6 +364,20 @@ public sealed class OrchestrationHarness : IAsyncDisposable
 
         task.AddAcceptanceCriterion(AcceptanceCriterion.Machine(
             Guid.CreateVersion7(), organization.Id, task.Id, 1, "The suite passes.", "test"));
+
+        foreach (var machine in machineCriteria)
+        {
+            task.AddAcceptanceCriterion(AcceptanceCriterion.Machine(
+                Guid.CreateVersion7(), organization.Id, task.Id, task.NextCriterionOrder,
+                machine.Text, machine.Ref));
+        }
+
+        foreach (var human in humanCriteria)
+        {
+            task.AddAcceptanceCriterion(AcceptanceCriterion.Human(
+                Guid.CreateVersion7(), organization.Id, task.Id, task.NextCriterionOrder, human,
+                "Look at it and say."));
+        }
 
         task.MarkReady(ReadyGate.Evaluate(task, organization, project, repository, VerificationProfile), now);
 

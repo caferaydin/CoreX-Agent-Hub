@@ -19,7 +19,7 @@ Kabul edilmiş kararlar: [`docs/adr/`](docs/adr/) (ADR-0001 … ADR-0017).
 | Faz 5A | Context Pack + agent runtime sözleşmesi + ScriptedAgentRuntime | **TAMAM** |
 | Faz 5B | K1 RuntimePolicyGate + K2 ScopeGuard + K3 SecretGuard | **TAMAM** |
 | Faz 5C | ExecutionOrchestrator + K0 + result commit + doğrulama + lease | **TAMAM** |
-| Faz 5D | AcceptanceService + `hub run` / `hub accept` | uygulanmadı |
+| Faz 5D | AcceptanceService + insan kararları + `hub accept` / `request-changes` / `reject` / `evidence show` | **TAMAM** |
 | Faz 6 | ClaudeCodeRuntime | uygulanmadı |
 | Faz 7 | İnceleme adımı + inceleme override kabulü | uygulanmadı |
 | Faz 8 | CodexRuntime | uygulanmadı |
@@ -101,8 +101,22 @@ Global seçenekler: `--data-dir <yol>`, `--config <yol>`, `--help`, `--version`.
 Çıkış kodları: `0` başarı · `1` kullanım hatası · `2` işlem reddedildi ·
 `3` Ready kapısı sağlanmadı · `70` beklenmeyen hata.
 
-`run`, `accept`, `reject`, `evidence`, `workspace`, `doctor` komutları **bilinçli olarak
-yoktur**; sonraki fazlara aittir.
+Faz 5D insan kararı komutları:
+
+```
+hub accept          <TASKKEY>#<attempt> [--org <slug>] [--actor <ad>]
+                    [--verdict <sıra>=met|notmet|na[:not]]...
+hub accept          <TASKKEY>#<attempt> --override --reason "<metin>"
+hub request-changes <TASKKEY>#<attempt> [--reason "<metin>"]
+hub reject          <TASKKEY>#<attempt> [--reason "<metin>"]
+
+hub evidence show   <TASKKEY>#<attempt> [--diff] [--org <slug>]
+```
+
+`run`, `cancel`, `doctor` komutları **bilinçli olarak yoktur**; sonraki fazlara aittir.
+Özellikle `hub cancel`: `Running` bir görev başka bir süreçte çalışan bir agent'a karşılık
+gelebilir, ve altındaki runtime'ı durdurmadan durumu çevirmek yalan olurdu — süreçler arası
+iptal Faz 5E'ye aittir.
 
 ### Kabul kriteri türleri (ADR-0015)
 
@@ -582,6 +596,51 @@ tek kullanımlık ağaçta ölçülen baseline bir kriteri asla cevaplayamaz.
 **Belirlenimcilik.** Bir execution içinde bir adım adı tek bir satır demektir —
 `UX_CommandResults_Step_Name` bunu veritabanında zorlar; çözümleyici sıfır eşleşmede
 "kayıt yok", birden fazla eşleşmede "çelişkili" der ve hiçbir zaman satır seçmez.
+
+## İnsan kararı (Faz 5D)
+
+`AcceptanceService` bir execution hakkındaki insan kararının kaydedildiği **tek** yerdir.
+Üç şey yazar ve başka hiçbir şey yazmaz: Task'ın yeni durumu, tek ve değişmez bir
+`AcceptanceDecision`, ve bir `AuditEvent` — üçü **aynı işlemde**. Execution'a, bulgulara,
+doğrulama satırlarına ve git'e dokunmaz. Kabul, birinin sorumluluğu üstlendiği anlamına
+gelir; merge, push veya release anlamına **gelmez** (ADR-0014).
+
+**İki yol.** Normal kabul `AwaitingAcceptance` + `Completed(Passed)` ister; `--override`
+verilirse reddedilir, çünkü aşılacak bir kapı yoktur. Override kabulü `Ready` +
+`Completed(ReviewBlocked)` ister ve altı ön koşulun tamamını arar: agent adımı `Succeeded`,
+beklenmeyen agent commit'i yok, `ResultCommitSha` var, kayıtlı `required` doğrulama
+komutlarının tamamı `Passed`, en az bir bloklayıcı `Finding`, ve boş olmayan `Reason`.
+Kapalı küme varsayılan olarak reddeder — `ScopeViolation`/`SecretGuardBlocked` kendi
+outcome'larıyla bloklandığı için, `ReviewBlocked`'a ulaşmış olmak o kapıların geçtiğinin
+yapısal kanıtıdır.
+
+**MACHINE kriterlerinin üç sınıfı vardır.** `Passed` → `Met`. Çalışmış ama geçmemiş her
+yapısal durum (`Failed`, `TimedOut`, `Cancelled`, `StartFailed`, `ParseFailed`, `Skipped`)
+→ `NotMet`, ve orijinal durum gizlenmeden taşınır. Üçüncüsü bir verdict değildir: kayıt
+yoksa, çift kayıt varsa veya durum `Unavailable` ise Hub makine gerçeğini kuramıyor
+demektir ve kabul **fail-closed** durur. Eksik kanıtı `NotMet`'e çevirmek, cevaplanamayan
+bir soruyu cevaplanmış göstermek olurdu.
+
+**İsteğe bağlı başarısızlık geçerli bir sonuçtur.** `Passed` bir execution içinde
+`required: false` bir adım `Failed` olabilir; ona işaret eden kriter dürüstçe `NotMet`'tir
+ve insana gösterilir. "Bütün MACHINE kriterleri `Met` olmalı" diye bir kural **yoktur**;
+otomatik kapı zaten execution outcome'udur.
+
+**HUMAN kriterleri.** Her biri tam olarak bir kez sorulur ve bir kez cevaplanır.
+`Met` / `NotMet` / `NotApplicable` üçü de geçerli cevaptır — hepsinin `Met` olması
+istenmez, yoksa liste okunmayan bir formaliteye dönerdi. Machine kriteri elle
+cevaplanamaz; ne serviste ne CLI'da böyle bir alan vardır.
+
+**Karar hedefi açıktır.** `hub accept HUB-001#1` — attempt adı verilir, en yenisi
+tahmin edilmez. `LatestExecution` en yüksek `AttemptNo`'dur; daha yeni bir attempt varsa
+eskisi ne kabul edilebilir ne override edilebilir.
+
+**`hub evidence show`** yalnızca kayıtlı `EvidenceArtifact` meta verisini ve blob deposunu
+okur. Commit'i olan execution `GitCommitDiff`, olmayan `GitWorktreeDiff` ile anlatılır ve
+hangisinin gösterildiği açıkça yazılır. Eksik artefakt **yeniden üretilmez** — mevcut
+çalışma ağacından diff üretmek aynı kelimelerle başka bir soruyu cevaplamak olurdu.
+Redaksiyon yazma zamanında olduğu için bu yolda ham tampon yoktur ve `--raw` gibi bir
+seçenek bilerek eklenmemiştir.
 
 ## Katkı kuralları
 

@@ -1,3 +1,4 @@
+using CoreX.Hub.Application.Acceptance;
 using CoreX.Hub.Application.Catalog;
 using CoreX.Hub.Application.Tasks;
 using CoreX.Hub.Cli.Commands;
@@ -37,6 +38,14 @@ public static class HubCli
           hub task show <TASKKEY> [--org <slug>]
           hub task ready <TASKKEY> [--org <slug>] [--actor <name>]
 
+          hub accept          <TASKKEY>#<attempt> [--org <slug>] [--actor <name>]
+                              [--verdict <order>=met|notmet|na[:note]]...
+          hub accept          <TASKKEY>#<attempt> --override --reason "<text>"
+          hub request-changes <TASKKEY>#<attempt> [--reason "<text>"]
+          hub reject          <TASKKEY>#<attempt> [--reason "<text>"]
+
+          hub evidence show   <TASKKEY>#<attempt> [--diff] [--org <slug>]
+
           hub workspace reconcile     --org <slug> --repo <slug>
           hub workspace release       --org <slug> --repo <slug> --path <dir> --confirm
           hub workspace purge-orphans --org <slug> --repo <slug> --confirm
@@ -47,8 +56,11 @@ public static class HubCli
         Workspace commands never remove anything without --confirm, and an orphaned
         worktree is always reported rather than deleted.
 
+        A decision names the attempt it is about (HUB-001#1); the newest is never chosen
+        for you. Machine criteria are shown from recorded evidence and cannot be answered by hand. Accepting records a decision - it does not merge, push or release.
+
         Later phase commands are intentionally not implemented yet:
-        run, accept, request-changes, reject, evidence, doctor.
+        run, cancel, doctor.
         """;
 
     public static async Task<int> RunAsync(
@@ -112,6 +124,14 @@ public static class HubCli
                 ("task", "show") => await TaskCommands.ShowAsync(session, args, output, ct),
                 ("task", "ready") => await TaskCommands.ReadyAsync(session, args, output, ct),
 
+                ("accept", _) => await AcceptanceCommands.AcceptAsync(
+                    session, args, output, ConsoleInput.Instance, ct),
+
+                ("request-changes", _) => await AcceptanceCommands.RequestChangesAsync(session, args, output, ct),
+                ("reject", _) => await AcceptanceCommands.RejectAsync(session, args, output, ct),
+
+                ("evidence", "show") => await EvidenceCommands.ShowAsync(session, args, output, ct),
+
                 _ => throw new UsageException($"Unknown command '{group} {command}'. Run 'hub --help'."),
             };
         }
@@ -121,6 +141,11 @@ public static class HubCli
             return ExitCodes.Usage;
         }
         catch (TaskOperationException ex)
+        {
+            error.WriteLine($"error: {ex.Message}");
+            return ExitCodes.OperationFailed;
+        }
+        catch (AcceptanceException ex)
         {
             error.WriteLine($"error: {ex.Message}");
             return ExitCodes.OperationFailed;

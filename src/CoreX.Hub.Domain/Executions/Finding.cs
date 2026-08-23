@@ -70,4 +70,15 @@ public sealed class Finding
     public bool OutOfScope { get; private set; }
 
     public DateTimeOffset CreatedAtUtc { get; private set; }
+
+    /// <summary>
+    /// Whether this finding is one a review override is answering for.
+    ///
+    /// Only one rule about this is settled today: a finding anchored outside the diff is an
+    /// observation and never blocks. The severity threshold - which of Critical, Major,
+    /// Minor actually blocks - is G7-1, to be calibrated against real reviewer output when
+    /// a reviewer exists, so it is deliberately not guessed at here. Guessing high would
+    /// silently narrow what a human is accepting responsibility for.
+    /// </summary>
+    public bool IsBlocking => !OutOfScope;
 }

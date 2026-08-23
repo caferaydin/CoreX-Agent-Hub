@@ -191,6 +191,59 @@ public sealed class HubTask
         BlockReason = Guard.OptionalMax(blockReason, nameof(blockReason), 1000);
     }
 
+    /// <summary>
+    /// A person accepted the work after an execution passed.
+    ///
+    /// The only edge into <see cref="TaskState.Accepted"/> that a passing run can take, and
+    /// it is still a person taking it: nothing automatic reaches this method, and acceptance
+    /// means a decision was recorded, never that anything was merged, pushed or released.
+    /// </summary>
+    public void Accept(DateTimeOffset nowUtc)
+    {
+        if (State != TaskState.AwaitingAcceptance)
+        {
+            throw new DomainException($"Task '{TaskKey}' is {State}, so there is nothing awaiting acceptance.");
+        }
+
+        Transition(TaskState.Accepted, nowUtc);
+    }
+
+    /// <summary>
+    /// A person accepted the work although review blocked it (ADR-0014 / errata E2).
+    ///
+    /// This is the one edge <see cref="Transition"/> refuses on purpose, because reaching
+    /// Accepted from Ready is meaningless unless a blocking review is what put the task
+    /// there. Whether that was really the case is decided before this is called; what the
+    /// aggregate insists on is that the edge cannot be taken by accident.
+    /// </summary>
+    public void AcceptByReviewOverride(DateTimeOffset nowUtc)
+    {
+        if (State != TaskState.Ready)
+        {
+            throw new DomainException(
+                $"Task '{TaskKey}' is {State}; a review override acceptance starts from Ready.");
+        }
+
+        State = TaskState.Accepted;
+        BlockReason = null;
+        Touch(nowUtc);
+    }
+
+    /// <summary>
+    /// A person rejected the work. Terminal: the task is finished with, and the execution
+    /// that produced it keeps whatever outcome it earned.
+    /// </summary>
+    public void Reject(string? reason, DateTimeOffset nowUtc)
+    {
+        if (State != TaskState.AwaitingAcceptance)
+        {
+            throw new DomainException($"Task '{TaskKey}' is {State}, so there is nothing awaiting a decision.");
+        }
+
+        Transition(TaskState.Rejected, nowUtc);
+        BlockReason = Guard.OptionalMax(reason, nameof(reason), 1000);
+    }
+
     private void Transition(TaskState next, DateTimeOffset nowUtc)
     {
         if (!TaskStateRules.CanTransition(State, next))

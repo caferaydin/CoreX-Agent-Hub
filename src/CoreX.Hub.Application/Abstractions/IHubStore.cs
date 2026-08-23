@@ -85,17 +85,32 @@ public interface IHubStore
     /// </summary>
     Task<IReadOnlyList<CommandResult>> ListVerificationCommandsAsync(Guid executionId, CancellationToken ct);
 
+    /// <summary>
+    /// Reviewer findings recorded against this execution's steps.
+    ///
+    /// Read for one reason only: a review override has to prove there really was something
+    /// to override. Nothing on this path may change them.
+    /// </summary>
+    Task<IReadOnlyList<Finding>> ListFindingsAsync(Guid executionId, CancellationToken ct);
+
     Task<IReadOnlyList<EvidenceArtifact>> ListEvidenceAsync(Guid executionId, CancellationToken ct);
 
     Task<IReadOnlyList<OrchestrationEvent>> ListOrchestrationEventsAsync(Guid executionId, CancellationToken ct);
 
     Task<int> CountAcceptanceDecisionsAsync(Guid executionId, CancellationToken ct);
 
+    /// <summary>The one immutable human decision on this execution, if it has been made.</summary>
+    Task<AcceptanceDecision?> FindAcceptanceDecisionAsync(Guid executionId, CancellationToken ct);
+
     void AddExecution(Execution execution);
 
     void AddExecutionStep(ExecutionStep step);
 
     void AddCommandResult(CommandResult commandResult);
+
+    void AddFinding(Finding finding);
+
+    void AddAcceptanceDecision(AcceptanceDecision decision);
 
     void AddEvidenceArtifact(EvidenceArtifact artifact);
 

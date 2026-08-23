@@ -221,6 +221,29 @@ public sealed class EfHubStore(HubDbContext db) : IHubStore
         return [.. commands.OrderBy(c => c.Order)];
     }
 
+    /// <summary>
+    /// Execution to its steps to findings. Read-only: a review override answers for these,
+    /// it never edits them.
+    /// </summary>
+    public async Task<IReadOnlyList<Finding>> ListFindingsAsync(Guid executionId, CancellationToken ct)
+    {
+        var stepIds = await db.ExecutionSteps
+            .Where(s => s.ExecutionId == executionId)
+            .Select(s => s.Id)
+            .ToListAsync(ct);
+
+        if (stepIds.Count == 0)
+        {
+            return [];
+        }
+
+        var findings = await db.Findings
+            .Where(f => stepIds.Contains(f.ExecutionStepId))
+            .ToListAsync(ct);
+
+        return [.. findings.OrderBy(f => f.Severity).ThenBy(f => f.CreatedAtUtc)];
+    }
+
     public async Task<IReadOnlyList<EvidenceArtifact>> ListEvidenceAsync(Guid executionId, CancellationToken ct)
     {
         var artifacts = await db.EvidenceArtifacts
@@ -244,11 +267,18 @@ public sealed class EfHubStore(HubDbContext db) : IHubStore
     public async Task<int> CountAcceptanceDecisionsAsync(Guid executionId, CancellationToken ct) =>
         await db.AcceptanceDecisions.CountAsync(d => d.ExecutionId == executionId, ct);
 
+    public async Task<AcceptanceDecision?> FindAcceptanceDecisionAsync(Guid executionId, CancellationToken ct) =>
+        await db.AcceptanceDecisions.FirstOrDefaultAsync(d => d.ExecutionId == executionId, ct);
+
     public void AddExecution(Execution execution) => db.Executions.Add(execution);
 
     public void AddExecutionStep(ExecutionStep step) => db.ExecutionSteps.Add(step);
 
     public void AddCommandResult(CommandResult commandResult) => db.CommandResults.Add(commandResult);
+
+    public void AddFinding(Finding finding) => db.Findings.Add(finding);
+
+    public void AddAcceptanceDecision(AcceptanceDecision decision) => db.AcceptanceDecisions.Add(decision);
 
     public void AddEvidenceArtifact(EvidenceArtifact artifact) => db.EvidenceArtifacts.Add(artifact);
 

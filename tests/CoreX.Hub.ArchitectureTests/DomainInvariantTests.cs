@@ -16,29 +16,33 @@ namespace CoreX.Hub.ArchitectureTests;
 public sealed class DomainInvariantTests
 {
     [Fact]
-    public void No_type_can_move_a_task_into_accepted_yet()
+    public void The_task_surface_is_closed_and_names_the_human_decisions_explicitly()
     {
-        // E.1 #6: only AcceptanceService may write Accepted, and that service is Phase 5.
-        // What is provable today: HubTask exposes no mutator that could reach the state.
+        // E.1 #6: only AcceptanceService may write Accepted. Phase 5D gives the aggregate
+        // the edges a decision needs, so this guard changes shape rather than relaxing: the
+        // list stays closed, and the human decisions are named in it on purpose - a new
+        // mutator, or a second way to reach Accepted, has to be argued for here first.
         var mutators = typeof(HubTask)
             .GetMethods(BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly)
             .Where(m => !m.IsSpecialName)
             .Select(m => m.Name)
             .ToList();
 
-        // Phase 5C added the lifecycle edges an orchestrator drives. None of them is a path
-        // to Accepted, and the list stays closed so a new one cannot appear unnoticed.
         Assert.Equal(
             [
-                "AddAcceptanceCriterion", "MarkAwaitingAcceptance", "MarkReady", "MarkRunning",
-                "ReturnToReady", "SetBlockReason",
+                "Accept", "AcceptByReviewOverride", "AddAcceptanceCriterion", "MarkAwaitingAcceptance",
+                "MarkReady", "MarkRunning", "Reject", "ReturnToReady", "SetBlockReason",
             ],
             mutators.Order(StringComparer.Ordinal));
 
-        // Whatever the list contains, nothing in it transitions the task to a human's
-        // decision: acceptance and rejection remain unreachable from the domain surface.
-        Assert.DoesNotContain(mutators, m => m.StartsWith("Accept", StringComparison.Ordinal));
-        Assert.DoesNotContain(mutators, m => m.StartsWith("Reject", StringComparison.Ordinal));
+        // Exactly two ways into Accepted, and they are the two the frozen model describes:
+        // the ordinary route and the review override. Nothing else may appear.
+        Assert.Equal(
+            ["Accept", "AcceptByReviewOverride"],
+            mutators.Where(m => m.StartsWith("Accept", StringComparison.Ordinal))
+                .Order(StringComparer.Ordinal));
+
+        Assert.Equal(["Reject"], mutators.Where(m => m.StartsWith("Reject", StringComparison.Ordinal)));
         Assert.DoesNotContain(mutators, m => m.Contains("MarkAccepted", StringComparison.Ordinal));
 
         var stateSetter = typeof(HubTask).GetProperty(nameof(HubTask.State))!.SetMethod;

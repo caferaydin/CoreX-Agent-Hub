@@ -1,7 +1,9 @@
 using CoreX.Hub.Application.Abstractions;
+using CoreX.Hub.Application.Acceptance;
 using CoreX.Hub.Application.Catalog;
 using CoreX.Hub.Application.Configuration;
 using CoreX.Hub.Application.Tasks;
+using CoreX.Hub.Application.Verification;
 using CoreX.Hub.Infrastructure.Configuration;
 using CoreX.Hub.Infrastructure.Persistence;
 
@@ -21,6 +23,7 @@ public sealed class HubSession : IAsyncDisposable
         DataDirectory = dataDirectory;
         ConfigPath = configPath;
         Tasks = new TaskService(store);
+        Acceptance = new AcceptanceService(store, new VerificationTruthReader(store));
     }
 
     public HubDbContext Db { get; }
@@ -30,6 +33,9 @@ public sealed class HubSession : IAsyncDisposable
     public IHubStore Store { get; }
 
     public TaskService Tasks { get; }
+
+    /// <summary>The only path a human decision about an execution is recorded through.</summary>
+    public AcceptanceService Acceptance { get; }
 
     public string DataDirectory { get; }
 

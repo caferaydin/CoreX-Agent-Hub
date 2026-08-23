@@ -124,16 +124,26 @@ public sealed class OrchestratorInvariantTests
             Assert.False(code.Contains("AcceptanceDecision", StringComparison.Ordinal), $"{name}");
         }
 
+        // The aggregate does have those transitions now, because a person's decision has to
+        // land somewhere. What matters here is that the orchestrator cannot reach them: it
+        // sequences a pipeline, and the end of that pipeline is a question for a human, not
+        // an answer it may give itself.
         var taskMethods = typeof(Domain.Tasks.HubTask)
             .GetMethods(BindingFlags.Public | BindingFlags.Instance)
             .Select(m => m.Name)
             .ToList();
 
-        // AddAcceptanceCriterion is about declaring criteria, not about accepting: what must
-        // not exist is a transition into a human's decision.
-        Assert.DoesNotContain(taskMethods, m => m.StartsWith("Accept", StringComparison.Ordinal));
-        Assert.DoesNotContain(taskMethods, m => m.StartsWith("Reject", StringComparison.Ordinal));
-        Assert.DoesNotContain(taskMethods, m => m.Contains("MarkAccepted", StringComparison.Ordinal));
+        Assert.Contains("Accept", taskMethods);
+        Assert.Contains("Reject", taskMethods);
+
+        foreach (var file in OrchestrationSourceFiles())
+        {
+            var code = CodeOnly(File.ReadAllText(file));
+            var name = RepoLayout.Relative(file);
+
+            Assert.False(code.Contains("task.Accept", StringComparison.Ordinal), $"{name}");
+            Assert.False(code.Contains("task.Reject", StringComparison.Ordinal), $"{name}");
+        }
     }
 
     [Fact]
