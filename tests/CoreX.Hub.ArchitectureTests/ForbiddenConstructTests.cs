@@ -21,7 +21,10 @@ public sealed class ForbiddenConstructTests
     /// facing projects are added here as their phases land.
     /// </summary>
     private static readonly string[] ExecutionFacingModules =
-        ["CoreX.Hub.Execution", "CoreX.Hub.Workspace", "CoreX.Hub.Verification"];
+        [
+            "CoreX.Hub.Execution", "CoreX.Hub.Workspace", "CoreX.Hub.Verification",
+            "CoreX.Hub.Context", "CoreX.Hub.Agents",
+        ];
 
     private static readonly Regex ProcessLaunchPattern =
         new(@"\bProcess\s*\.\s*Start\b|\bnew\s+ProcessStartInfo\b", RegexOptions.CultureInvariant);

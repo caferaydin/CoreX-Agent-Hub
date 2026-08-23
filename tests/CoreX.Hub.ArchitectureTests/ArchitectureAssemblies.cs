@@ -17,16 +17,21 @@ internal static class ArchitectureAssemblies
 
     public static Assembly Verification { get; } = typeof(global::CoreX.Hub.Verification.VerificationEngine).Assembly;
 
+    public static Assembly Agents { get; } = typeof(global::CoreX.Hub.Agents.Abstractions.IAgentRuntime).Assembly;
+
+    public static Assembly ContextModule { get; } =
+        typeof(global::CoreX.Hub.Context.ContextPackBuilder).Assembly;
+
     public static Assembly Cli { get; } = typeof(Cli.HubCli).Assembly;
 
     /// <summary>Everything, including the composition root.</summary>
     public static IReadOnlyList<Assembly> All { get; } =
-        [Domain, Application, Infrastructure, Execution, Workspace, Verification, Cli];
+        [Domain, Application, Infrastructure, Execution, Workspace, Verification, Agents, ContextModule, Cli];
 
     /// <summary>
     /// The layers that must stay provider blind. The composition root is excluded on
     /// purpose: wiring a concrete adapter is exactly its job.
     /// </summary>
     public static IReadOnlyList<Assembly> Neutral { get; } =
-        [Domain, Application, Infrastructure, Execution, Workspace, Verification];
+        [Domain, Application, Infrastructure, Execution, Workspace, Verification, Agents, ContextModule];
 }

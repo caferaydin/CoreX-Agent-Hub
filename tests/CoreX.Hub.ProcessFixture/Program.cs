@@ -45,6 +45,7 @@ return mode switch
     "stdin-wait" => await StdinWaitAsync(),
     "report" => WriteReport(args),
     "secrets" => WriteSecrets(args),
+    "agent" => await AgentAsync(args),
     _ => Help(),
 };
 
@@ -528,81 +529,200 @@ static int WriteSecrets(string[] args)
 
     return 0;
 }
+// --- Phase 5A scripted agent modes ------------------------------------------------
+//
+//   agent <mode> [--structured-output <path>]
+//
+// Every deterministic behaviour of ScriptedAgentRuntime lives here rather than in the
+// runtime, so the runtime stays a thin driver of an external tool exactly like a real
+// provider adapter, and so git behaviour never becomes workspace management code inside
+// production.
 
-namespace CoreX.Hub.ProcessFixture
+static async Task<int> AgentAsync(string[] args)
 {
-    /// <summary>
-    /// Synthetic credentials used only by the redaction tests. Nothing here is real, and
-    /// nothing here is a credential for any system: the values exist so a test can prove
-    /// they never reach a stored evidence blob.
-    /// </summary>
-    public static class SyntheticSecrets
+    if (args.Length < 2)
     {
-        public const string OpenAiToken = "sk-corexSYNTHETIC0000000000000000abcd";
+        Console.Error.WriteLine("usage: agent <mode> [--structured-output <path>]");
+        return 2;
+    }
 
-        public const string GitHubToken = "ghp_corexSYNTHETIC0000000000000000abcd";
+    var mode = args[1];
+    var structuredOutput = ReadOption(args, "--structured-output");
 
-        public const string AwsAccessKey = "AKIACOREXSYNTHETIC00";
+    Console.Out.WriteLine("scripted agent mode: " + mode);
 
-        public const string Jwt =
-            "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJjb3JleC1zeW50aGV0aWMifQ.c29tZXN5bnRoZXRpY3NpZ25hdHVyZQ";
+    if (structuredOutput is not null)
+    {
+        WriteStructuredOutput(structuredOutput, mode);
+    }
 
-        public const string PasswordValue = "SyntheticCorexPassw0rd";
+    return mode switch
+    {
+        "no-op" => NoOp(),
+        "apply-patch" => ApplyPatch(),
+        "out-of-scope-write" => OutOfScopeWrite(),
+        "secret-write" => SecretWrite(),
+        "partial-write" => PartialWrite(),
+        "hang" => await HangAsync(),
+        "crash" => Crash(),
+        "unexpected-commit" => UnexpectedCommit(),
+        _ => Unknown(mode),
+    };
+}
 
-        public const string ConnectionString =
-            "Server=localhost;Database=corex;User Id=corex;Password=" + PasswordValue + ";";
-
-        public const string AuthorizationHeaderValue = "Bearer synthetic-corex-header-value";
-
-        public const string PrivateKeyBody = "U1lOVEhFVElDLUNPUkVYLUtFWS1NQVRFUklBTA==";
-
-        /// <summary>Text that only looks like a secret and must survive redaction unchanged.</summary>
-        public static readonly string[] NearMisses =
-        [
-            "sketch-book was updated",
-            "skip-this-step",
-            "ghost_writer signed off",
-            "AKIA is a prefix and AKIASHORT is not a key",
-            "the user requested a password reset",
-            "eyJ is not a token on its own",
-            "Authorized: yes",
-        ];
-
-        public static string PrivateKeyBlock() =>
-            "-----BEGIN RSA PRIVATE KEY-----\n"
-            + PrivateKeyBody + "\n"
-            + PrivateKeyBody + "\n"
-            + "-----END RSA PRIVATE KEY-----";
-
-        public static string[] AllSecretValues() =>
-        [
-            OpenAiToken,
-            GitHubToken,
-            AwsAccessKey,
-            Jwt,
-            PasswordValue,
-            AuthorizationHeaderValue,
-            PrivateKeyBody,
-        ];
-
-        public static string Payload()
+static string? ReadOption(string[] args, string name)
+{
+    for (var i = 0; i < args.Length - 1; i++)
+    {
+        if (string.Equals(args[i], name, StringComparison.Ordinal))
         {
-            var builder = new System.Text.StringBuilder();
-            builder.AppendLine("openai=" + OpenAiToken);
-            builder.AppendLine("github=" + GitHubToken);
-            builder.AppendLine("aws=" + AwsAccessKey);
-            builder.AppendLine("jwt=" + Jwt);
-            builder.AppendLine("connection=" + ConnectionString);
-            builder.AppendLine("Authorization: " + AuthorizationHeaderValue);
-            builder.AppendLine("repeated=" + OpenAiToken);
-            builder.AppendLine(PrivateKeyBlock());
-
-            foreach (var line in NearMisses)
-            {
-                builder.AppendLine(line);
-            }
-
-            return builder.ToString();
+            return args[i + 1];
         }
     }
+
+    return null;
+}
+
+static void WriteStructuredOutput(string path, string mode)
+{
+    var full = Path.GetFullPath(path);
+    var directory = Path.GetDirectoryName(full);
+    if (!string.IsNullOrEmpty(directory))
+    {
+        Directory.CreateDirectory(directory);
+    }
+
+    File.WriteAllText(
+        full,
+        "{\"runtime\":\"scripted\",\"mode\":\"" + mode + "\"}",
+        new UTF8Encoding(false));
+}
+
+static int NoOp()
+{
+    Console.Out.WriteLine("no changes were made");
+    return 0;
+}
+
+static int ApplyPatch()
+{
+    WriteAgentFile(Path.Combine("src", "feature.txt"), "the deterministic change the fixture applies\n");
+    Console.Out.WriteLine("applied src/feature.txt");
+    return 0;
+}
+
+static int OutOfScopeWrite()
+{
+    // Inside the workspace, outside any plausible allowed scope. Whether that is a
+    // violation is a gate decision, not this fixture's and not the runtime's.
+    WriteAgentFile(Path.Combine("src", "feature.txt"), "in scope change\n");
+    WriteAgentFile(Path.Combine("infra", "deploy.yaml"), "out of scope change\n");
+    Console.Out.WriteLine("wrote src/feature.txt and infra/deploy.yaml");
+    return 0;
+}
+
+static int SecretWrite()
+{
+    WriteAgentFile(
+        Path.Combine("src", "config.txt"),
+        "token=" + CoreX.Hub.ProcessFixture.SyntheticSecrets.OpenAiToken + "\n");
+
+    Console.Out.WriteLine("wrote src/config.txt");
+    return 0;
+}
+
+static int PartialWrite()
+{
+    // Half the work lands and stays on disk; the run then fails. Nothing is rolled back:
+    // the partial state is exactly what later evidence collection has to observe.
+    WriteAgentFile(Path.Combine("src", "step-one.txt"), "first half completed\n");
+    Console.Error.WriteLine("the second half could not be completed");
+    return 3;
+}
+
+static async Task<int> HangAsync()
+{
+    Console.Out.WriteLine("waiting");
+    Console.Out.Flush();
+
+    // Bounded: the deadline belongs to the caller, and this ceiling only stops a runaway
+    // fixture if every timeout above it were somehow disabled.
+    await Task.Delay(TimeSpan.FromMinutes(5));
+    return 0;
+}
+
+static int Crash()
+{
+    Console.Out.Flush();
+
+    // Dies rather than exiting, so a crash stays distinguishable from a non zero exit.
+    throw new InvalidOperationException("scripted crash");
+}
+
+static int UnexpectedCommit()
+{
+    WriteAgentFile(Path.Combine("src", "feature.txt"), "work the agent then committed itself\n");
+
+    var git = Environment.GetEnvironmentVariable("COREX_FIXTURE_GIT") ?? "git";
+
+    // An external coding agent is perfectly capable of running git itself. Simulating that
+    // belongs here in the harness: production must never gain git policy or repair code.
+    var add = RunGit(git, "add", "-A");
+    if (add != 0)
+    {
+        return add;
+    }
+
+    return RunGit(
+        git,
+        "-c", "user.name=Scripted Agent",
+        "-c", "user.email=scripted@corex.local",
+        "commit", "-q", "-m", "agent: unexpected commit");
+}
+
+static int RunGit(string git, params string[] arguments)
+{
+    var startInfo = new ProcessStartInfo
+    {
+        FileName = git,
+        UseShellExecute = false,
+        RedirectStandardOutput = true,
+        RedirectStandardError = true,
+    };
+
+    foreach (var argument in arguments)
+    {
+        startInfo.ArgumentList.Add(argument);
+    }
+
+    using var process = Process.Start(startInfo);
+    if (process is null)
+    {
+        Console.Error.WriteLine("could not start git");
+        return 9;
+    }
+
+    Console.Out.Write(process.StandardOutput.ReadToEnd());
+    Console.Error.Write(process.StandardError.ReadToEnd());
+    process.WaitForExit();
+
+    return process.ExitCode;
+}
+
+static int Unknown(string mode)
+{
+    Console.Error.WriteLine("unknown scripted agent mode: " + mode);
+    return 2;
+}
+
+static void WriteAgentFile(string relativePath, string content)
+{
+    var full = Path.GetFullPath(relativePath);
+    var directory = Path.GetDirectoryName(full);
+    if (!string.IsNullOrEmpty(directory))
+    {
+        Directory.CreateDirectory(directory);
+    }
+
+    File.WriteAllText(full, content, new UTF8Encoding(false));
 }

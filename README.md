@@ -16,7 +16,8 @@ Kabul edilmiş kararlar: [`docs/adr/`](docs/adr/) (ADR-0001 … ADR-0017).
 | Faz 2 | ProcessRunner (Job Object), FileSystemGuard | **TAMAM** |
 | Faz 3 | Workspace / git / worktree | **TAMAM** |
 | Faz 4 | Doğrulama motoru + kanıt deposu | **TAMAM** |
-| Faz 5 | Orchestrator + Context Pack + ScriptedAgentRuntime (Loop Zero) | uygulanmadı |
+| Faz 5A | Context Pack + agent runtime sözleşmesi + ScriptedAgentRuntime | **TAMAM** |
+| Faz 5B-D | Orchestrator + K0..K3 + AcceptanceService + `hub run` | uygulanmadı |
 | Faz 6 | ClaudeCodeRuntime | uygulanmadı |
 | Faz 7 | İnceleme adımı + inceleme override kabulü | uygulanmadı |
 | Faz 8 | CodexRuntime | uygulanmadı |
@@ -230,6 +231,10 @@ src/CoreX.Hub.Workspace       Faz 3 git/worktree izolasyonu. Execution'a bağım
 src/CoreX.Hub.Verification    Faz 4 doğrulama motoru, TRX/JUnit ayrıştırıcıları, profil
                               hash'i, baseline karşılaştırması. Yalnızca Domain'e bağımlı;
                               süreç, yol, kanıt ve önbellek dar port'lardan gelir.
+src/CoreX.Hub.Context         Faz 5A context pack üreticisi. Yalnızca Domain'e bağımlı;
+                              yol güveni dar port üzerinden gelir.
+src/CoreX.Hub.Agents          Faz 5A ince agent runtime sözleşmesi + ScriptedAgentRuntime.
+                              Yalnızca Domain'e bağımlı; süreç dar port üzerinden gelir.
 src/CoreX.Hub.Cli             Faz 1'in tek arayüzü ve composition root'u.
 tests/                        Domain / Integration / Execution / Workspace /
                               Verification / Architecture testleri + corex-fixture
@@ -338,6 +343,84 @@ demek değildir. Kanıtlanan şey dardır: yukarıda sayılan yüzeyler ya redde
 yönetilen komutlarda etkisizdir ve bu, kaynak taramasıyla değil, gerçek git üzerinde
 çalışan **davranışsal işaret (marker) testleriyle** doğrulanır. Yeni bir git sürümü
 yeni bir yürütme yüzeyi eklerse aynı yöntem tekrar uygulanmalıdır.
+
+## Context Pack ve agent runtime (Faz 5A)
+
+Faz 5A **üç** sınırlı temel getirir: context pack üreticisi, sağlayıcıdan bağımsız ince
+agent runtime sözleşmesi ve deterministik `ScriptedAgentRuntime`. Orchestrator, K0..K3
+kapıları, AcceptanceService, lease/heartbeat ve `hub run` **yoktur** — onlar Faz 5B-D'dir.
+
+### Context Pack
+
+Her execution için Hub'a ait bir kökün altına materyalize edilir; kaynak reponun ve agent
+worktree'sinin **dışındadır**:
+
+```
+<context-root>/<execution-id>/
+  system.md          değiştirilemez Hub yürütme sözleşmesi
+  rules.md           organizasyon + proje + repository kuralları, kabul edilen öncelikle
+  task.md            görev, kapsam, kabul kriterleri (Machine/Human ayrımı korunur)
+  repo-state.json    canlı git gerçekleri
+  decisions/         açıkça seçilmiş kararlar
+  manifest.json      dosya envanteri + ContextPackHash
+```
+
+`system.md` **sağlayıcı adı içermez** ve sağlayıcı CLI bayrağı taşımaz; hangi dosyanın
+hangi CLI argümanına dönüştüğü adapter'ın kararıdır ve Context'e geri sızmaz.
+
+Hedef repository **güvenilmez girdidir**: `CLAUDE.md`, `AGENTS.md`, `GEMINI.md`, `QWEN.md`,
+`.cursorrules` gibi dosyalar okunmaz — pack'in hash'i bile değişmez. Önceki execution'ın
+kanıtı da kendiliğinden girmez. Vector DB, embedding, RAG, semantik chunking ve agent
+belleği **yoktur**.
+
+**Bütçe 64 KB'dir ve serttir.** Aşılırsa `ContextBuildFailed` döner: sessiz kırpma yok,
+son dosyaları atma yok, otomatik özetleme yok, sıkıştırmak için LLM çağırma yok.
+
+**ContextPackHash** anlamdan türer. Algoritma açıktır: anlamsal dosyalar yazılır, her biri
+SHA-256'lanır, `manifest.json` **hariç** sıralı envanterden kanonik bir metin kurulur,
+ContextPackHash o metnin SHA-256'sıdır, sonra manifest yazılır. Kendine referans yoktur ve
+dosya sistemi sıralamasına güvenilmez. Geçici kök, kullanıcı adı, süreç kimliği ve zaman
+hash'i **değiştirmez**; amaç, kapsam, kriter, kural, karar, base commit ve branch
+**değiştirir**.
+
+Yayınlama atomiktir: `_pending/` altında kurulur, doğrulanır, tek bir rename ile yayınlanır.
+Başarısızlıkta geçerli bir pack ortaya çıkmaz.
+
+### Agent runtime sözleşmesi
+
+```csharp
+AgentCapabilities Describe();
+Task<AgentRunResult> RunAsync(AgentRunRequest, IProgress<AgentEvent>, CancellationToken);
+Task<HealthResult>   CheckHealthAsync(CancellationToken);
+```
+
+**Üç üye, o kadar.** `Authenticate`, `GetModels`, `GetBilling`, `GetQuota`, `GetAccount`,
+`SetApiKey`, `CreateSession`, `Commit`, `Push` yoktur ve mimari test bunu artık *gerçek*
+tip üzerinde doğrular. `AgentRunRequest` içinde provider, API anahtarı, access mode,
+abonelik, faturalama, base URL veya endpoint **yoktur**: hangi runtime'ın çalışacağı
+`RunAsync`'ten **önce**, composition'da çözülür.
+
+Yetenekler gerçektir, taklit edilmez: eksik bir yetenek `Unsupported` ile görünür kalır.
+`AgentRunResult` **kanıttır**, execution outcome'u değildir — hangi kapının ne dediğine
+orchestrator karar verir.
+
+### ScriptedAgentRuntime
+
+Ağsız, AI'sız, hesapsız, faturasız, deterministik. Sekiz mod: `no-op` · `apply-patch` ·
+`out-of-scope-write` · `secret-write` · `partial-write` · `hang` · `crash` ·
+`unexpected-commit`. Her mod bir **koşul** üretir; hiçbiri o koşulun ne anlama geldiğine
+karar vermez — `ScopeViolation`, `SecretGuardBlocked` ve `RuntimePolicyViolation` Faz 5B
+kapılarının verdiğidir.
+
+Gerçek bir sağlayıcı adapter'ıyla aynı sözleşmeyi kullanır ve aynı şekilde çalışır:
+yapılandırılmış bir fixture çalıştırılabilirini `ProcessRunner` üzerinden başlatır.
+Deterministik davranışın tamamı o fixture'dadır — böylece `unexpected-commit` senaryosunda
+git'i **fixture** çağırır, üretim kodu değil. `ScriptedAgentRuntime` içinde git politikası
+veya history onarımı yoktur (E.1 #5, E.1 #9).
+
+Beyan edilen yetenekler (dürüstçe): `SupportsStructuredSchema` **evet** (deterministik bir
+sonuç belgesi yazabiliyor); diğer beşi **hayır** — oturum yok, araç yok, maliyet yok,
+artımlı akış yok, salt-okunur kısıtlaması yok.
 
 ## Katkı kuralları
 

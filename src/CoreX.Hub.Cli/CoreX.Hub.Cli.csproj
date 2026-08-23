@@ -11,6 +11,8 @@
     <ProjectReference Include="..\CoreX.Hub.Infrastructure\CoreX.Hub.Infrastructure.csproj" />
     <ProjectReference Include="..\CoreX.Hub.Execution\CoreX.Hub.Execution.csproj" />
     <ProjectReference Include="..\CoreX.Hub.Workspace\CoreX.Hub.Workspace.csproj" />
+    <ProjectReference Include="..\CoreX.Hub.Agents\CoreX.Hub.Agents.csproj" />
+    <ProjectReference Include="..\CoreX.Hub.Context\CoreX.Hub.Context.csproj" />
     <ProjectReference Include="..\CoreX.Hub.Verification\CoreX.Hub.Verification.csproj" />
   </ItemGroup>
 

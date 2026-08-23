@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Phase 5A agent runtime contract and the deterministic scripted runtime.
+
+    E.1 #4: a lower technical module referencing the accepted domain model and nothing
+    else. Operating system processes arrive through an Agents owned port that the
+    composition layer implements with ProcessRunner, so there is still exactly one launch
+    point.
+  -->
+
+  <ItemGroup>
+    <ProjectReference Include="..\CoreX.Hub.Domain\CoreX.Hub.Domain.csproj" />
+  </ItemGroup>
+
+</Project>

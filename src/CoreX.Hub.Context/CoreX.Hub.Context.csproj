@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Phase 5A context pack builder.
+
+    E.1 #4: a lower technical module. It references the accepted domain model and nothing
+    else; managed path trust arrives through a Context owned port that the composition
+    layer implements with FileSystemGuard.
+  -->
+
+  <ItemGroup>
+    <ProjectReference Include="..\CoreX.Hub.Domain\CoreX.Hub.Domain.csproj" />
+  </ItemGroup>
+
+</Project>
