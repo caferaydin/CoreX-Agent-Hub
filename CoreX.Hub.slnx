@@ -11,6 +11,7 @@
     <Project Path="src/CoreX.Hub.Workspace/CoreX.Hub.Workspace.csproj" />
   </Folder>
   <Folder Name="/tests/">
+    <Project Path="tests/CoreX.Hub.Application.Tests/CoreX.Hub.Application.Tests.csproj" />
     <Project Path="tests/CoreX.Hub.ArchitectureTests/CoreX.Hub.ArchitectureTests.csproj" />
     <Project Path="tests/CoreX.Hub.Agents.Tests/CoreX.Hub.Agents.Tests.csproj" />
     <Project Path="tests/CoreX.Hub.Context.Tests/CoreX.Hub.Context.Tests.csproj" />

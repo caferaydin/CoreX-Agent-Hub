@@ -17,7 +17,8 @@ Kabul edilmiş kararlar: [`docs/adr/`](docs/adr/) (ADR-0001 … ADR-0017).
 | Faz 3 | Workspace / git / worktree | **TAMAM** |
 | Faz 4 | Doğrulama motoru + kanıt deposu | **TAMAM** |
 | Faz 5A | Context Pack + agent runtime sözleşmesi + ScriptedAgentRuntime | **TAMAM** |
-| Faz 5B-D | Orchestrator + K0..K3 + AcceptanceService + `hub run` | uygulanmadı |
+| Faz 5B | K1 RuntimePolicyGate + K2 ScopeGuard + K3 SecretGuard | **TAMAM** |
+| Faz 5C-D | Orchestrator + K0 + AcceptanceService + `hub run` | uygulanmadı |
 | Faz 6 | ClaudeCodeRuntime | uygulanmadı |
 | Faz 7 | İnceleme adımı + inceleme override kabulü | uygulanmadı |
 | Faz 8 | CodexRuntime | uygulanmadı |
@@ -433,6 +434,48 @@ dahil — runtime istendiğinde bir sonuç belgesi yazar, ama `StructuredOutputS
 çağıranın doğrulanmamış bir belgeyi şemaya uygun sanmasına yol açardı. Şema gereken
 çağıran `Unsupported` alır. Diğerleri: oturum yok, araç yok, maliyet yok, artımlı akış
 yok, salt-okunur kısıtlaması yok.
+
+## Yürütme güvenlik kapıları (Faz 5B)
+
+Üç sabit ürün kapısı `CoreX.Hub.Application/Gates/` altındadır. Bunlar **yakalanmış makine
+gerçeklerini** değerlendirir: git çalıştırmaz, süreç başlatmaz, dosya sistemine dokunmaz,
+blob yazmaz, veritabanı açmaz. Genel bir policy engine, kural dili, plugin sistemi veya
+chain-of-responsibility **yoktur** — üç tane kapı vardır, o kadar.
+
+**K1 RuntimePolicyGate** — `HEAD == BaseCommitSha` ise geçer; değilse **bloklar**
+(`UnexpectedAgentCommit`). Otorite HEAD'dir: agent'a "commit attın mı" diye sorulmaz,
+stdout'undan çıkarım yapılmaz. Kapı **asla onarmaz** — reset, `branch -f`, `update-ref`,
+amend, rebase, force push yok. Agent'ın commit'i bıraktığı yerde erişilebilir kalır
+(ADR-0005, errata E1). Commit grafiği raporu zenginleştirir, kararı **vermez**: boş bir
+grafik HEAD uyuşmazlığını geçişe çeviremez, sahte SHA da uydurulmaz.
+
+**K2 ScopeGuard** — dokunulan her yol önce `AllowedScope`'a uymalı, sonra **hiçbir**
+`ForbiddenScope`'a uymamalıdır. **Deny kazanır**: `src/**` izinli + `src/generated/**`
+yasaklı ise `src/orders/Order.cs` geçer, `src/generated/Client.cs` bloklanır. Değiştirilen,
+eklenen, silinen ve rename'in **her iki ucu** aynı listeden gelir, dolayısıyla tek yüzü
+kontrol ederek kaçış saklanamaz. Mutlak, sürücü nitelikli, UNC veya `..` içeren yol
+**fail-closed** reddedilir. Bu bir dosya sistemi sandbox'ı değildir — o `FileSystemGuard`'dır
+ve zaten çalıştı; K2 yalnızca "bu değişiklik görevin bildirdiği kaynak kapsamında mıydı"
+sorusunu yanıtlar.
+
+**K3 SecretGuard** — yalnızca **eklenen** diff satırlarını tarar. Tüm repo, dokunulmamış
+geçmiş ve silinen satırlar kapsam dışıdır. Entropi, ML, vault, rotasyon **yok**.
+Desenler **Faz 4'ün tek kataloğundan** bir port üzerinden gelir; ikinci bir regex kümesi
+yoktur ve mimari test bunu kilitler — kapı ile redaksiyonun "sır neye benzer" konusunda
+ayrışması iki eksikten de kötüdür. Tarama dosya başına **blok** üzerinde yapılır, çünkü PEM
+özel anahtar bloğu gibi şekiller satıra sığmaz. Verdict aile adını, yolu ve satırı taşır —
+**değeri asla**.
+
+**Kanıt önce, kapı sonra.** Üç kapı da değerlendirilir (teşhis eksik kalmasın), ama sonucu
+**ilk bloklayan** kapı belirler: K1 → K2 → K3. Teşhis toplamak ile kapı kazanmak aynı şey
+değildir.
+
+`ExecutionSafetyGates` yalnızca `EligibleForResultCommit` der; **commit atmaz**, execution
+veya task durumu değiştirmez, acceptance yazmaz, doğrulama koşturmaz, worktree silmez.
+Yaşam döngüsü Faz 5C'nindir ve bu tip bilinçli olarak orchestrator diye adlandırılmamıştır.
+
+**`SecretGuardBlocked` geçersiz kılınamaz.** `ignoreSecretGuard`, `forceCommit`,
+`overrideSecret` gibi bir mekanizma yoktur ve test bunu isim düzeyinde de kilitler.
 
 ## Katkı kuralları
 
