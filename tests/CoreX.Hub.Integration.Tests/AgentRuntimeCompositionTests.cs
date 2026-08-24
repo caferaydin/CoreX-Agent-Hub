@@ -185,7 +185,14 @@ public sealed class AgentRuntimeCompositionTests
 
         Assert.Equal("main", repository.DefaultBranch);
         Assert.Equal(["main"], repository.ProtectedBranches);
-        Assert.Equal(repositoryRoot, repository.LocalPath.TrimEnd('\\'));
+
+        // An absolute path to a directory named for the repository - deliberately not
+        // "wherever this test happens to be running". Those are the same thing in a
+        // developer checkout and are not during verification, which runs the suite from a
+        // disposable snapshot of the commit being measured. Asserting they matched made the
+        // shipped configuration look broken every time it was actually being verified.
+        Assert.True(Path.IsPathFullyQualified(repository.LocalPath));
+        Assert.Equal("CoreX Agent Hub", new DirectoryInfo(repository.LocalPath.TrimEnd('\\')).Name);
 
         // The organization root has to contain the repository, or nothing can be prepared.
         Assert.StartsWith(organization.FilesystemRoot, repository.LocalPath, StringComparison.OrdinalIgnoreCase);

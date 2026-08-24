@@ -7,7 +7,18 @@ namespace CoreX.Hub.Integration.Tests;
 /// </summary>
 internal static class FixtureConfig
 {
-    public const string Default = """
+    /// <summary>
+    /// The fixture configuration, with line endings normalised.
+    ///
+    /// The literal below carries whatever the working tree happens to use, and with
+    /// core.autocrlf that is LF in one checkout and CRLF in another. Tests that anchor a
+    /// replacement across two lines then match in one checkout and silently match nothing in
+    /// the next - which turns an assertion into a no-op rather than a failure, and does it
+    /// exactly where it matters most: verification always runs from a fresh checkout.
+    /// </summary>
+    public static string Default { get; } = Literal.ReplaceLineEndings("\n");
+
+    private const string Literal = """
         schemaVersion: 1
         workspace:
           root: 'D:\cx'
