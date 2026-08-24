@@ -20,6 +20,17 @@ internal sealed class ScriptedWorkspace(IExecutionWorkspace inner) : IExecutionW
     /// <summary>Thrown instead of materialising the worktree: a host that died mid preparation.</summary>
     public Exception? FailPreparation { get; set; }
 
+    /// <summary>
+    /// Runs after the execution row exists and while the worktree is being prepared.
+    ///
+    /// The seam a test needs to press stop inside PreparingWorkspace, which is the earliest
+    /// stage an execution can be cancelled in at all.
+    /// </summary>
+    public Action? BeforePrepare { get; set; }
+
+    /// <summary>Whether preparation was reached at all.</summary>
+    public bool PrepareAttempted { get; private set; }
+
     /// <summary>Makes preparation claim a different base commit than the one that was pinned.</summary>
     public string? ReportPreparedBaseAs { get; set; }
 
@@ -52,6 +63,9 @@ internal sealed class ScriptedWorkspace(IExecutionWorkspace inner) : IExecutionW
         int attemptNo,
         CancellationToken ct)
     {
+        PrepareAttempted = true;
+        BeforePrepare?.Invoke();
+
         if (FailPreparation is { } failure)
         {
             throw failure;
@@ -150,5 +164,32 @@ internal sealed class CancellingCommandExecutor(CancellationTokenSource trigger,
             StartedAtUtc = now,
             EndedAtUtc = now,
         });
+    }
+}
+
+/// <summary>
+/// The production context builder, with a seam for cancelling while it runs.
+///
+/// BuildingContext is the second stage an execution can be stopped in, and the only one
+/// between a prepared worktree and a launched agent.
+/// </summary>
+internal sealed class ScriptedContextBuilder(IExecutionContextBuilder inner) : IExecutionContextBuilder
+{
+    public Action? BeforeBuild { get; set; }
+
+    public bool BuildAttempted { get; private set; }
+
+    public Task<BuiltContextPack?> BuildAsync(
+        Guid executionId,
+        Guid repositoryId,
+        CoreX.Hub.Domain.Tasks.HubTask task,
+        int attemptNo,
+        string baseCommitSha,
+        CancellationToken ct)
+    {
+        BuildAttempted = true;
+        BeforeBuild?.Invoke();
+
+        return inner.BuildAsync(executionId, repositoryId, task, attemptNo, baseCommitSha, ct);
     }
 }

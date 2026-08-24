@@ -194,10 +194,18 @@ public sealed class TaskCancellationService
     /// <summary>
     /// Confirms the run really is over, then records the decision.
     ///
-    /// A terminal execution is necessary but not sufficient: the mandatory capture is what
-    /// turns a killed agent into a record of what it did, and a task cancelled before that
-    /// finished would be terminal over evidence nobody wrote. The step's own state is the
-    /// durable answer to whether it happened.
+    /// A terminal execution is necessary but not sufficient when an agent ran: the mandatory
+    /// capture is what turns a killed agent into a record of what it did, and a task
+    /// cancelled before that finished would be terminal over evidence nobody wrote. The
+    /// step's own state is the durable answer to whether it happened.
+    ///
+    /// "Not captured" and "nothing to capture" are different things, though, and only the
+    /// first is a reason to refuse. A run stopped before the agent ever started wrote no
+    /// agent output, so its capture step is Pending because the pipeline never reached it -
+    /// and it never will, because the execution is already terminal. Waiting for it would
+    /// mean waiting out the deadline for something that has already finished, which is what
+    /// made an operator unable to cancel a task during PreparingWorkspace or BuildingContext
+    /// at all.
     /// </summary>
     private async Task<TaskCancellationResult> ConfirmStoppedAsync(
         IHubStore store,
@@ -208,8 +216,14 @@ public sealed class TaskCancellationService
     {
         var steps = await store.ListExecutionStepsAsync(stopped.Id, ct);
         var capture = steps.FirstOrDefault(s => s.Kind == ExecutionStepKind.CaptureChanges);
+        var agent = steps.FirstOrDefault(s => s.Kind == ExecutionStepKind.Agent);
 
-        if (capture is { State: ExecutionStepState.Pending or ExecutionStepState.Running })
+        // Whether an agent ever started is what decides if a missing capture matters. The
+        // agent step leaves Pending the moment the run reaches it, so Pending here means no
+        // agent process existed and there is no output anyone failed to record.
+        var agentRan = agent is not null && agent.State != ExecutionStepState.Pending;
+
+        if (agentRan && capture is { State: ExecutionStepState.Pending or ExecutionStepState.Running })
         {
             return Pending(
                 TaskCancellationState.CancellationRequested, task, stopped,

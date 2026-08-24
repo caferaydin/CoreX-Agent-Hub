@@ -108,6 +108,9 @@ public sealed class OrchestrationHarness : IAsyncDisposable
     /// <summary>Wraps the production verification port, for the same reason.</summary>
     public Func<IExecutionVerifier, IExecutionVerifier>? DecorateVerifier { get; set; }
 
+    /// <summary>Wraps the production context builder, for the same reason.</summary>
+    public Func<IExecutionContextBuilder, IExecutionContextBuilder>? DecorateContext { get; set; }
+
     /// <summary>
     /// Wraps the agent gateway, the same way the workspace and the verifier can be wrapped.
     ///
@@ -149,6 +152,9 @@ public sealed class OrchestrationHarness : IAsyncDisposable
         return harness;
     }
 
+    private IExecutionContextBuilder Context(IExecutionContextBuilder inner) =>
+        DecorateContext is { } decorate ? decorate(inner) : inner;
+
     /// <summary>Wires the orchestrator exactly as production composition does.</summary>
     public ExecutionOrchestrator Orchestrator()
     {
@@ -168,10 +174,10 @@ public sealed class OrchestrationHarness : IAsyncDisposable
         return new ExecutionOrchestrator(
             Store,
             DecorateWorkspace is { } decorateWorkspace ? decorateWorkspace(workspace) : workspace,
-            new ContextGateway(
+            Context(new ContextGateway(
                 new ContextPackBuilder(new FileSystemGuardContextPathGuard()),
                 ContextRoot,
-                _ => new ContextRepositoryFacts("main", ["main"])),
+                _ => new ContextRepositoryFacts("main", ["main"]))),
             DecorateAgent is { } decorateAgent
                 ? decorateAgent(new AgentGateway(runtimes, ["SystemRoot", "TEMP", "TMP", "PATH"]))
                 : new AgentGateway(runtimes, ["SystemRoot", "TEMP", "TMP", "PATH"]),
