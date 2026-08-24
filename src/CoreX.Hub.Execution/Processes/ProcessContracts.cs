@@ -72,10 +72,25 @@ public sealed record ProcessRequest
     public TimeSpan GracefulShutdownPeriod { get; init; } = TimeSpan.FromSeconds(5);
 
     /// <summary>
-    /// Written to stdin and followed by end of stream. When null, stdin stays open until
-    /// graceful shutdown closes it.
+    /// Written to stdin and followed by end of stream. When null, the child is given end of
+    /// stream immediately unless <see cref="KeepStandardInputOpen"/> says otherwise.
     /// </summary>
     public string? StdinPayload { get; init; }
+
+    /// <summary>
+    /// Holds the child's stdin open until graceful shutdown instead of ending it at once.
+    ///
+    /// Off by default, and that default was measured rather than assumed. Stdin is always
+    /// redirected here, so a child that is handed a pipe nobody ever closes can wait on it
+    /// for ever: `dotnet test` over this solution finished every one of its projects and
+    /// then sat there until the hard deadline killed it - twenty minutes for six minutes of
+    /// work - purely because end of stream never came. A tool that reads nothing is not
+    /// harmed by being told there is nothing to read, so the safe default is to say so.
+    ///
+    /// Set this only for a child that genuinely waits on stdin and is meant to keep running
+    /// until the Hub asks it to stop.
+    /// </summary>
+    public bool KeepStandardInputOpen { get; init; }
 
     /// <summary>
     /// Called with each chunk of stdout as it is read, before it is captured.

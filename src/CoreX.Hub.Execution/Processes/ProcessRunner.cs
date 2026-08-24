@@ -336,7 +336,16 @@ public sealed class ProcessRunner
                 return;
             }
 
-            // Stdin stays open so a child can wait on it; graceful shutdown closes it.
+            if (!request.KeepStandardInputOpen)
+            {
+                // Nothing to send, so say so now. Stdin is always redirected, and a child
+                // holding a pipe that never ends can wait on it for ever - which is how a
+                // finished build tool becomes a hard timeout.
+                state.CloseStdin(process);
+                return;
+            }
+
+            // Asked for explicitly: the child waits on stdin, and graceful shutdown closes it.
             await state.StdinClosed.Task.ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is IOException or ObjectDisposedException)

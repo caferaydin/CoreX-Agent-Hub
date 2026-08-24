@@ -44,16 +44,64 @@ public sealed class ProcessStreamSeamTests
     }
 
     [Fact]
-    public async Task Not_supplying_a_payload_leaves_stdin_open_as_before()
+    public async Task Not_supplying_a_payload_gives_the_child_end_of_stream_at_once()
     {
+        // The default that a real verification run had to teach us. Stdin is always
+        // redirected, so a child handed a pipe nobody closes can wait on it for ever: the
+        // whole solution's tests finished in six minutes and the process then sat there
+        // until a twenty minute deadline killed it, because end of stream never came.
         using var workspace = TempWorkspace.Create();
 
         var result = await workspace.Runner.RunAsync(
-            Fixture.Request(workspace, TimeSpan.FromSeconds(30), "stdout", "no stdin here"),
+            Fixture.Request(workspace, TimeSpan.FromSeconds(30), "stdin-echo"),
             CancellationToken.None);
 
         Assert.Equal(ProcessTerminationReason.Exited, result.TerminationReason);
-        Assert.Equal("no stdin here", result.NormalizedStdout);
+        Assert.Equal(0, result.ExitCode);
+
+        // It read to end and got nothing, rather than blocking until a deadline.
+        Assert.Equal("STDIN[]", result.NormalizedStdout);
+        Assert.False(result.JobTerminated);
+    }
+
+    [Fact]
+    public async Task A_child_that_waits_on_stdin_can_still_be_given_one_that_stays_open()
+    {
+        // The old behaviour is still available, but it is now something a request asks for.
+        using var workspace = TempWorkspace.Create();
+
+        var request = Fixture.Request(workspace, TimeSpan.FromSeconds(60), "stdin-wait") with
+        {
+            SoftTimeout = TimeSpan.FromSeconds(1),
+            GracefulShutdownPeriod = TimeSpan.FromSeconds(10),
+            KeepStandardInputOpen = true,
+        };
+
+        var result = await workspace.Runner.RunAsync(request, CancellationToken.None);
+
+        // It waited, and it was still waiting when the soft deadline closed stdin for it.
+        Assert.Equal(ProcessTerminationReason.SoftTimeout, result.TerminationReason);
+        Assert.Equal(0, result.ExitCode);
+        Assert.Contains("waiting-stdin", result.NormalizedStdout, StringComparison.Ordinal);
+        Assert.Contains("STDIN-CLOSED", result.NormalizedStdout, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task A_long_tool_run_ends_when_the_tool_ends_rather_than_at_its_deadline()
+    {
+        // The shape of the defect, in miniature: a child that never reads stdin, given far
+        // more time than it needs. Before the default changed this exited on the deadline
+        // with no exit code; now it exits on its own, promptly.
+        using var workspace = TempWorkspace.Create();
+
+        var result = await workspace.Runner.RunAsync(
+            Fixture.Request(workspace, TimeSpan.FromMinutes(5), "stdout", "work done"),
+            CancellationToken.None);
+
+        Assert.Equal(ProcessTerminationReason.Exited, result.TerminationReason);
+        Assert.Equal(0, result.ExitCode);
+        Assert.False(result.JobTerminated);
+        Assert.InRange(result.Duration, TimeSpan.Zero, TimeSpan.FromSeconds(30));
     }
 
     [Fact]

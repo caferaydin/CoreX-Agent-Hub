@@ -24,6 +24,10 @@ public sealed class ProcessLifecycleTests
         {
             SoftTimeout = TimeSpan.FromSeconds(1),
             GracefulShutdownPeriod = TimeSpan.FromSeconds(10),
+
+            // This child exists to wait on stdin, which is now something a request asks
+            // for rather than what every child gets by default.
+            KeepStandardInputOpen = true,
         };
 
         var result = await workspace.Runner.RunAsync(request, CancellationToken.None);
