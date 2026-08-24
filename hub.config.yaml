@@ -130,6 +130,20 @@ organizations:
                     required: true
                     resultParser: none
 
+                  # Cozumun TAMAMI icin tek adim, ve bilerek parser'siz.
+                  #
+                  # `dotnet test <solution>` her test projesi icin AYRI bir test host
+                  # calistirir ve hepsi ayni `--logger trx;LogFileName=` dosyasina yazar;
+                  # sonuncusu digerlerinin uzerine yazar. Olculdu: cozumde ~1000+ test
+                  # varken dosyada yalnizca 117 sonuc kaldi.
+                  #
+                  # Parser'i acik birakmak, "test adimi gecti, 117 test" gibi YANLIS bir
+                  # makine kaniti uretirdi. Adimin cikis kodu ise cozumun tamami icin
+                  # dogrudur: herhangi bir proje duserse `dotnet test` sifirdan farkli
+                  # doner. Bu yuzden otorite cikis kodudur ve sayac hic iddia edilmez.
+                  #
+                  # Proje basina sayac gerekirse dogru bicim proje basina adimdir; tek
+                  # dosyaya yazan cozum-genisi bir adim degil.
                   - name: test
                     executable: dotnet
                     args:
@@ -138,14 +152,9 @@ organizations:
                       - '-c'
                       - 'Release'
                       - '--no-build'
-                      - '--logger'
-                      - 'trx;LogFileName=results.trx'
-                      - '--results-directory'
-                      - 'results'
                     timeoutSeconds: 3600
                     required: true
-                    resultParser: trx
-                    resultPath: 'results/results.trx'
+                    resultParser: none
 
                   # The model and the migrations must agree. A drifted model is a
                   # silent production failure, so it is a required machine check.

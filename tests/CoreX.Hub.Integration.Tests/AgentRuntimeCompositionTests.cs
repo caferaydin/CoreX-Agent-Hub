@@ -215,9 +215,18 @@ public sealed class AgentRuntimeCompositionTests
         Assert.Contains("Release", build.Args);
         Assert.Contains("--no-restore", build.Args);
 
+        // The test step claims no counters, and that is deliberate rather than an omission.
+        // `dotnet test` over a solution runs one host per project and every one of them
+        // writes the same trx path, so the file that survives holds a single project's
+        // results. Parsing it would publish "the suite passed, 117 tests" as machine
+        // evidence about a suite of more than a thousand. The exit code is authoritative for
+        // the whole solution, so the status is real and the count is simply not claimed.
         var test = profile.Steps.Single(s => s.Name == "test");
-        Assert.Equal("trx", test.ResultParser);
-        Assert.Equal("results/results.trx", test.ResultPath);
+
+        Assert.Equal("none", test.ResultParser);
+        Assert.Null(test.ResultPath);
+        Assert.DoesNotContain(test.Args, a => a.Contains("trx", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains("CoreX.Hub.slnx", test.Args);
 
         // Every step names a logical executable the allowlist declares; PATH is never trusted.
         foreach (var step in profile.Steps)

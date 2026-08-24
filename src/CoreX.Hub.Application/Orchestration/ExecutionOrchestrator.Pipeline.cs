@@ -109,7 +109,13 @@ public sealed partial class ExecutionOrchestrator
         // It is bounded rather than absolute: the sections that must finish get a budget,
         // not a blank cheque, and everything that is still real forward work below keeps
         // honouring the caller.
-        using var mandatory = new MandatoryWorkScope(_options.MandatoryWorkBudget, _clock);
+        //
+        // The budget starts when the caller stops, not when this line runs. What follows is
+        // interleaved with work that legitimately takes as long as it takes - a full
+        // verification run over a real repository is minutes at least - and a countdown
+        // started here would make this a deadline on that work too, killing every honest
+        // long run at the first bookkeeping call after it.
+        using var mandatory = MandatoryWorkScope.WhenCallerStops(_options.MandatoryWorkBudget, ct, _clock);
         var record = mandatory.Token;
 
         await WriteAgentEvidenceAsync(execution, agentResult, record);
