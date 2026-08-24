@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Deterministic stand-in for the real provider executable. Test infrastructure only: it
+    is never referenced by production code and lives under tests/ so the architecture
+    source scanners (which read src/**) do not apply to it.
+
+    It exists so the adapter's parsing, correlation and failure mapping can be proved
+    against every stream shape that matters without spending a paid provider request, and
+    so those proofs run on a machine that is not signed in to anything.
+  -->
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <AssemblyName>corex-claude-fixture</AssemblyName>
+    <RootNamespace>CoreX.Hub.ClaudeFixture</RootNamespace>
+  </PropertyGroup>
+
+</Project>

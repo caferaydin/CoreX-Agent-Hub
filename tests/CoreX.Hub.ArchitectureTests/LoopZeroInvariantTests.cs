@@ -215,15 +215,18 @@ public sealed class LoopZeroInvariantTests
             Assert.False(pattern.IsMatch(code), RepoLayout.Relative(file) + " reaches the network");
         }
 
-        // And no provider is named anywhere in production code: the runtime a profile gets is
-        // whatever composition registered under its key.
+        // And a provider is named in three places only. Everywhere else the runtime a profile
+        // gets is whatever composition registered under its key, and the code cannot tell.
         //
-        // The secret pattern catalog is the one exception, and it proves the rule: it names
-        // vendors because it recognises their credentials, which is the opposite of depending
-        // on them.
-        var scanned = RepoLayout.ProductionSourceFiles
-            .Where(f => !Path.GetFileName(f).Equals("SecretPatternCatalog.cs", StringComparison.Ordinal))
-            .ToList();
+        //   the adapter        naming the thing it adapts is its entire job
+        //   the wiring seam    naming an adapter in order to register it is composition's job
+        //   the secret catalog names vendors because it recognises their credentials, which
+        //                      is the opposite of depending on them
+        //
+        // The exemptions are proved non vacuous below, so none of them can quietly widen.
+        var scanned = RepoLayout.ProductionSourceFiles.Where(f => !IsProviderNamingExempt(f)).ToList();
+
+        Assert.NotEmpty(scanned);
 
         foreach (var provider in new[] { "ClaudeCode", "Codex", "Gemini", "Qwen", "OpenAI", "Anthropic" })
         {
@@ -234,6 +237,106 @@ public sealed class LoopZeroInvariantTests
                     $"{RepoLayout.Relative(file)} names the provider {provider}");
             }
         }
+    }
+
+    [Fact]
+    public void The_provider_naming_exemptions_are_real_and_none_of_them_decides_anything()
+    {
+        var exempt = RepoLayout.ProductionSourceFiles.Where(IsProviderNamingExempt).ToList();
+
+        // Every exempt file exists and really does name a provider, so the exemption list can
+        // never become a way of skipping files that have nothing to do with one.
+        Assert.NotEmpty(exempt);
+
+        foreach (var file in exempt)
+        {
+            Assert.True(
+                ProviderWordPattern.IsMatch(CodeOnly(File.ReadAllText(file))),
+                $"{RepoLayout.Relative(file)} is exempt from the provider naming rule but names no provider");
+        }
+
+        // The configuration section is a section name, not a decision. What a runtime family
+        // declares is where the installed tool is; nothing there can change what the tool may
+        // do, and nothing there is a place to paste a credential.
+        Assert.Contains(
+            exempt,
+            f => Path.GetFileName(f).Equals("HubConfig.cs", StringComparison.Ordinal));
+
+        var declaration = typeof(Application.Configuration.ClaudeCodeRuntimeConfig).GetProperties();
+
+        Assert.NotEmpty(declaration);
+
+        foreach (var property in declaration)
+        {
+            foreach (var forbidden in new[]
+                     {
+                         "Tool", "Bash", "Shell", "Permission", "Mode", "Arg", "Flag",
+                         "ApiKey", "Token", "Secret", "BaseUrl", "Endpoint", "Account",
+                     })
+            {
+                Assert.False(
+                    property.Name.Contains(forbidden, StringComparison.OrdinalIgnoreCase),
+                    $"ClaudeCodeRuntimeConfig.{property.Name} would make {forbidden} a deployment setting");
+            }
+        }
+
+        // The one wiring file names adapters in order to register them, and does not choose
+        // between them: no comparison on a provider or a runtime key, and no fallback.
+        var wiring = exempt.Single(f =>
+            Path.GetFileName(f).Equals("AgentRuntimeRegistry.cs", StringComparison.Ordinal));
+
+        var code = CodeOnly(File.ReadAllText(wiring));
+
+        Assert.StartsWith(
+            Path.Combine(RepoLayout.SourceRoot, "CoreX.Hub.Cli"),
+            wiring,
+            StringComparison.OrdinalIgnoreCase);
+
+        foreach (var branching in new[]
+                 {
+                     @"switch\s*\(\s*[A-Za-z_.]*\b(Provider|RuntimeKey)\b",
+                     @"\b(Provider|RuntimeKey)\b\s*(==|!=)\s*""",
+                     @"\bfallback\b",
+                 })
+        {
+            Assert.False(
+                Regex.IsMatch(code, branching, RegexOptions.IgnoreCase),
+                $"{RepoLayout.Relative(wiring)} decides between providers instead of registering them");
+        }
+    }
+
+    private static readonly Regex ProviderWordPattern =
+        new(@"ClaudeCode|Codex|Gemini|Qwen|OpenAI|Anthropic|claude", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+
+    /// <summary>
+    /// The three places a provider may be named, matched by exact location rather than by
+    /// pattern so that a fourth cannot appear without this list changing.
+    /// </summary>
+    private static bool IsProviderNamingExempt(string path)
+    {
+        var separator = Path.DirectorySeparatorChar;
+        var name = Path.GetFileName(path);
+
+        // The adapter, wherever it lives: a provider named folder inside an agents project.
+        if (path.Contains($"{separator}ClaudeCode{separator}", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        return name switch
+        {
+            // The composition root's single runtime wiring seam, and the adapter factory it
+            // calls. Both are under CoreX.Hub.Cli, which is asserted above.
+            "AgentRuntimeRegistry.cs" or "ClaudeCodeRuntimeFactory.cs" => true,
+
+            // Where a runtime family declares what it needs to be installable.
+            "HubConfig.cs" => true,
+
+            // Recognising a vendor credential in order to redact it.
+            "SecretPatternCatalog.cs" => true,
+
+            _ => false,
+        };
     }
 
     [Fact]

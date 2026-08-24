@@ -176,8 +176,8 @@ public sealed class ProcessRunner
         }
 
         var state = new RunState(request);
-        var stdoutPump = PumpAsync(process.StandardOutput, stdout, state);
-        var stderrPump = PumpAsync(process.StandardError, stderr, state);
+        var stdoutPump = PumpAsync(process.StandardOutput, stdout, state, request.StandardOutputObserver);
+        var stderrPump = PumpAsync(process.StandardError, stderr, state, observer: null);
         var stdinTask = FeedStdinAsync(process, request, state);
 
         var reason = await SuperviseAsync(process, job, state, cancellationToken);
@@ -264,8 +264,16 @@ public sealed class ProcessRunner
     /// Reads one stream to end. Both pumps run concurrently from process start; reading
     /// one stream to completion before the other is the classic redirected-pipe deadlock.
     /// The loop keeps consuming the pipe even after the capture ceiling is reached.
+    ///
+    /// The optional observer sees each chunk before it is captured, so a caller can follow a
+    /// run that has not finished. It is called from here rather than from a second reader
+    /// because there is only one pipe and it may only be read once.
     /// </summary>
-    private static async Task PumpAsync(StreamReader reader, BoundedOutputBuffer buffer, RunState state)
+    private static async Task PumpAsync(
+        StreamReader reader,
+        BoundedOutputBuffer buffer,
+        RunState state,
+        Action<string>? observer)
     {
         var chunk = new char[ReadChunkCharacters];
 
@@ -288,6 +296,31 @@ public sealed class ProcessRunner
 
             state.RecordActivity();
             buffer.Append(chunk.AsSpan(0, read));
+            Observe(observer, chunk, read);
+        }
+    }
+
+    /// <summary>
+    /// Hands one chunk to the observer without ever letting it end the run.
+    ///
+    /// A throwing observer would otherwise abandon the pump, leave the pipe unread and stall
+    /// the child. The captured output is the authority regardless of what an observer does
+    /// with what it sees.
+    /// </summary>
+    private static void Observe(Action<string>? observer, char[] chunk, int read)
+    {
+        if (observer is null)
+        {
+            return;
+        }
+
+        try
+        {
+            observer(new string(chunk, 0, read));
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException)
+        {
+            // Observation is a courtesy to the caller, never a condition of the run.
         }
     }
 

@@ -3,8 +3,9 @@
 # KAPSAM: Faz 1 katalog kavramları (Organization / Project / Repository /
 # VerificationProfile / AgentProfile). Sonraki fazlara ait runtime ayarları burada YOKTUR.
 #
-# Bu dosya YALNIZCA yerel geliştirme ve fixture değerleri içerir.
-#   - Gerçek Core X Logic ürün repository'leri YOK
+# Bu dosya yerel geliştirme/fixture değerleri ile Hub'ın KENDİ repository'sini içerir.
+#   - Core X Logic organizasyonu YALNIZCA agent-hub projesini içerir (G6-3)
+#   - Başka gerçek Core X Logic ürün repository'si YOK (Nakliye360 / Kariora YOK)
 #   - Gerçek Kronos verisi YOK  (bkz. ADR-0017)
 #   - Sır / token / kimlik bilgisi YOK
 #
@@ -24,8 +25,128 @@ verification:
   # gecen bir anahtari kullanabilir; PATH'e guvenilmez, arac calisma zamaninda aranmaz.
   executables:
     dotnet: 'C:\Program Files\dotnet\dotnet.exe'
+    dotnet-ef: 'C:\Users\krono\.dotnet\tools\dotnet-ef.exe'
+
+# Agent calisma zamanlari (Faz 5+). Katalog DEĞİLDİR: veritabanina yazilmaz.
+#
+# Katalog hangi runtimeKey'in kullanilacagini soyler; burasi o anahtarin ARKASINDA bu
+# makinede ne durdugunu soyler. Sir/token/anahtar YOKTUR: kimlik dogrulama bant disidir
+# (ADR-0009) ve arac yuzeyi ile izin modu adapterde dondurulmustur (ADR-0020).
+agents:
+  claudeCodeRuntimes:
+    - key: claude-code
+      executablePath: 'C:\Users\krono\.local\bin\claude.exe'
 
 organizations:
+
+  # --- Core X Logic: Hub'ın kendi repository'si (G6-3) ----------------------
+  # Gerçek katalog girdisidir. Faz 6 gerçek agent kabulünün hedefi budur ve
+  # ŞU AN İÇİN tek gerçek repository'dir.
+  - slug: core-x-logic
+    name: Core X Logic
+    filesystemRoot: 'D:\Private\Cafer AYDIN'
+    isolationLevel: Logical
+    requiresHardIsolation: false
+
+    # ADR-0007: agent alt süreci YALNIZCA bunları miras alır. USERPROFILE, aracın
+    # zaten açık olan iş istasyonu oturumunu bulabilmesi için gereklidir (ADR-0009);
+    # sağlayıcı anahtarı / uç noktası / ana süreç oturumu değişkenleri BURADA YOKTUR
+    # ve runtime tarafından ayrıca reddedilir.
+    environmentAllowlist:
+      - SystemRoot
+      - windir
+      - SystemDrive
+      - PATH
+      - PATHEXT
+      - TEMP
+      - TMP
+      - USERPROFILE
+
+    agentProfiles:
+      - name: claude-implementer
+        role: Implementer
+        provider: ClaudeCode
+        runtimeKey: claude-code
+        permissionProfile: WorkspaceWrite
+        model: claude-opus-5
+        effort: high
+        softTimeoutSeconds: 1800
+        idleTimeoutSeconds: 2400
+        hardTimeoutSeconds: 3600
+
+    projects:
+      - slug: agent-hub
+        name: CoreX Agent Hub
+        taskKeyPrefix: CXH
+        repositories:
+          - slug: corex-agent-hub
+            name: corex-agent-hub
+            localPath: 'D:\Private\Cafer AYDIN\CoreX Agent Hub'
+            defaultBranch: main
+            protectedBranches:
+              - main
+            verificationProfiles:
+              - name: hub-release-full
+                isDefault: true
+                workingDirectory: '.'
+                steps:
+                  - name: restore
+                    executable: dotnet
+                    args: ['restore', 'CoreX.Hub.slnx']
+                    timeoutSeconds: 600
+                    required: true
+                    resultParser: none
+
+                  # -warnaserror is mechanical: exit code alone does not prove a
+                  # warning-free build, and "no warnings" is only true if the compiler
+                  # was told to treat one as a failure.
+                  - name: build
+                    executable: dotnet
+                    args:
+                      - 'build'
+                      - 'CoreX.Hub.slnx'
+                      - '-c'
+                      - 'Release'
+                      - '--no-restore'
+                      - '-warnaserror'
+                    timeoutSeconds: 1200
+                    required: true
+                    resultParser: none
+
+                  - name: test
+                    executable: dotnet
+                    args:
+                      - 'test'
+                      - 'CoreX.Hub.slnx'
+                      - '-c'
+                      - 'Release'
+                      - '--no-build'
+                      - '--logger'
+                      - 'trx;LogFileName=results.trx'
+                      - '--results-directory'
+                      - 'results'
+                    timeoutSeconds: 3600
+                    required: true
+                    resultParser: trx
+                    resultPath: 'results/results.trx'
+
+                  # The model and the migrations must agree. A drifted model is a
+                  # silent production failure, so it is a required machine check.
+                  - name: ef-pending-model
+                    executable: dotnet-ef
+                    args:
+                      - 'migrations'
+                      - 'has-pending-model-changes'
+                      - '--project'
+                      - 'src/CoreX.Hub.Infrastructure'
+                      - '--startup-project'
+                      - 'src/CoreX.Hub.Cli'
+                      - '--no-build'
+                      - '--configuration'
+                      - 'Release'
+                    timeoutSeconds: 600
+                    required: true
+                    resultParser: none
 
   # --- Geliştirme / Loop Zero fixture organizasyonu -------------------------
   - slug: hub-dev

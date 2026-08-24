@@ -1,6 +1,4 @@
 using System.Runtime.Versioning;
-using CoreX.Hub.Agents.Abstractions;
-using CoreX.Hub.Agents.Scripted;
 using CoreX.Hub.Application.Abstractions;
 using CoreX.Hub.Application.Catalog;
 using CoreX.Hub.Application.Configuration;
@@ -71,6 +69,7 @@ public sealed class ExecutionComposition
         Domain.Catalog.Organization organization,
         Domain.Catalog.Repository repository,
         VerificationProfile? verificationProfile,
+        Domain.Catalog.AgentProfile? agentProfile,
         TimeProvider clock)
     {
         ArgumentNullException.ThrowIfNull(session);
@@ -134,6 +133,17 @@ public sealed class ExecutionComposition
                     organization.FilesystemRoot,
                     config.Workspace.Root));
 
+        // Runtimes are declared by configuration and named by the profile. Which one this
+        // execution gets is settled here, before a row exists, so a key nobody declared is a
+        // refusal rather than an execution that discovers it has nothing to run.
+        var runtimes = AgentRuntimeRegistry.Build(
+            config, config.Workspace.Root, workspaceManager.Hooks.EmptyGlobalConfigPath);
+
+        if (agentProfile is not null)
+        {
+            AgentRuntimeRegistry.EnsureResolvable(runtimes, agentProfile);
+        }
+
         var orchestrator = new ExecutionOrchestrator(
             session.Store,
             new WorkspaceGateway(workspaceManager, _ => location),
@@ -141,8 +151,7 @@ public sealed class ExecutionComposition
                 new ContextPackBuilder(new FileSystemGuardContextPathGuard()),
                 contextRoot,
                 _ => new ContextRepositoryFacts(repository.DefaultBranch, repository.ProtectedBranches)),
-            new AgentGateway(BuildRuntimes(
-                config, config.Workspace.Root, workspaceManager.Hooks.EmptyGlobalConfigPath)),
+            new AgentGateway(runtimes, environmentAllowlist),
             verifier,
             new EvidenceGateway(evidenceStore),
             new ExecutionSafetyGates(new SecretGuard(new CatalogSecretScanner())),
@@ -152,55 +161,5 @@ public sealed class ExecutionComposition
             new ExecutionOrchestratorOptions());
 
         return new ExecutionComposition(orchestrator, verifier, repository.Id, config.Workspace.Root);
-    }
-
-    /// <summary>
-    /// Builds the runtime registry from configuration.
-    ///
-    /// Phase 5 has exactly one kind of runtime and the configuration says so in as many
-    /// words. There is no provider lookup here, no fallback to a second runtime when the
-    /// first is unavailable, and no discovery: a profile that names a key nobody declared
-    /// gets an honest "no runtime is registered under that key" from the gateway rather than
-    /// something that happens to be lying around.
-    /// </summary>
-    private static IReadOnlyDictionary<string, IAgentRuntime> BuildRuntimes(
-        HubConfig config,
-        string workspaceRoot,
-        string gitConfigGlobalPath)
-    {
-        var runtimes = new Dictionary<string, IAgentRuntime>(StringComparer.OrdinalIgnoreCase);
-
-        foreach (var declared in config.Agents.ScriptedRuntimes)
-        {
-            if (string.IsNullOrWhiteSpace(declared.Key))
-            {
-                throw new HubConfigurationException("a scripted runtime was declared without a key.");
-            }
-
-            // Written the way the fixture's own verbs are written - apply-patch, out-of-scope-write -
-            // because that is what an operator reading either file would expect to match.
-            var declaredMode = (declared.Mode ?? string.Empty).Replace("-", string.Empty, StringComparison.Ordinal);
-
-            if (!Enum.TryParse<ScriptedAgentMode>(declaredMode, ignoreCase: true, out var mode))
-            {
-                throw new HubConfigurationException(
-                    $"scripted runtime '{declared.Key}' declares mode '{declared.Mode}', which is not one of: "
-                    + string.Join(", ", Enum.GetNames<ScriptedAgentMode>()));
-            }
-
-            var fixturePath = Path.GetFullPath(declared.FixturePath);
-
-            if (!File.Exists(fixturePath))
-            {
-                throw new HubConfigurationException(
-                    $"scripted runtime '{declared.Key}' names a fixture executable that does not exist: {fixturePath}");
-            }
-
-            runtimes[declared.Key] = new ScriptedAgentRuntime(
-                new ScriptedAgentOptions { FixtureExecutablePath = fixturePath, Mode = mode },
-                new ProcessAgentRunner(workspaceRoot, gitConfigGlobalPath));
-        }
-
-        return runtimes;
     }
 }

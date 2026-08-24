@@ -73,7 +73,8 @@ public sealed class ContextGateway : IExecutionContextBuilder
             ? new BuiltContextPack(
                 result.Pack!.PackPath,
                 result.Pack.ContextPackHash,
-                Path.Combine(result.Pack.PackPath, ContextPackBuilder.SystemFileName))
+                Path.Combine(result.Pack.PackPath, ContextPackBuilder.SystemFileName),
+                Path.Combine(result.Pack.PackPath, ContextPackBuilder.RulesFileName))
             : null;
     }
 }

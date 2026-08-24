@@ -60,6 +60,11 @@ public sealed class ProcessAgentRunner : IAgentProcessRunner
                     SoftTimeout = request.SoftTimeout,
                     IdleTimeout = request.IdleTimeout,
                     HardTimeout = request.HardTimeout,
+
+                    // A prompt on the command line is readable by every process on the
+                    // machine, so a runtime that has one hands it over here instead.
+                    StdinPayload = request.StandardInputText,
+                    StandardOutputObserver = request.StandardOutputObserver,
                 },
                 cancellationToken);
         }

@@ -31,6 +31,28 @@ public sealed record AgentProcessRequest
     public TimeSpan? IdleTimeout { get; init; }
 
     public required TimeSpan HardTimeout { get; init; }
+
+    /// <summary>
+    /// Written to the child's stdin, which is then closed.
+    ///
+    /// It exists so a runtime can hand a tool its prompt without putting it on the operating
+    /// system command line, where every process on the machine can read it. Null leaves the
+    /// existing behaviour untouched: stdin stays open until the run ends.
+    /// </summary>
+    public string? StandardInputText { get; init; }
+
+    /// <summary>
+    /// Called with each chunk of stdout as it is read, before anything is done with it.
+    ///
+    /// This is what makes incremental observation possible at all: the result is only
+    /// available once the child has exited, so a runtime that must report progress while the
+    /// run is still going has nowhere else to look. It sees the bytes as they arrive, so it
+    /// is not bounded by the capture ceiling either.
+    ///
+    /// Calls are sequential and arrive on the pump, so an observer that blocks stops the
+    /// pipe being drained. It must be cheap, and it must not throw.
+    /// </summary>
+    public Action<string>? StandardOutputObserver { get; init; }
 }
 
 public sealed record AgentProcessResult

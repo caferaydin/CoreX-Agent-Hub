@@ -77,6 +77,21 @@ public sealed record ProcessRequest
     /// </summary>
     public string? StdinPayload { get; init; }
 
+    /// <summary>
+    /// Called with each chunk of stdout as it is read, before it is captured.
+    ///
+    /// The captured result exists only once the child has exited, so a caller that has to
+    /// observe a long run while it is still going has nowhere else to look. The observer
+    /// also sees everything, including output past
+    /// <see cref="MaxCapturedCharactersPerStream"/>, because the pump keeps consuming the
+    /// pipe after the capture ceiling is reached.
+    ///
+    /// Calls are sequential and happen on the stdout pump. An observer that blocks stops the
+    /// pipe being drained and will eventually stall the child, so it must be cheap. An
+    /// observer that throws is ignored: a broken observer may not end a run.
+    /// </summary>
+    public Action<string>? StandardOutputObserver { get; init; }
+
     public int MaxCapturedCharactersPerStream { get; init; } = DefaultMaxCapturedCharactersPerStream;
 
     /// <summary>Fails fast on a request that could never behave sensibly.</summary>

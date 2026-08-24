@@ -34,11 +34,23 @@ public sealed class HubAgentsConfig
     /// <summary>
     /// The deterministic offline runtimes available here.
     ///
-    /// Named for what they are rather than as a generic runtime list, because Phase 5 has
-    /// exactly one kind of runtime and pretending otherwise would invite a provider switch
-    /// into configuration.
+    /// Named for what they are rather than as a generic runtime list, because a runtime
+    /// family needs different facts to be installable and pretending otherwise would invite
+    /// a provider switch into configuration.
     /// </summary>
     public List<ScriptedRuntimeConfig> ScriptedRuntimes { get; set; } = [];
+
+    /// <summary>
+    /// The installed real runtimes available here, by the same rule as the list above: a
+    /// section per family, each stating only what installing that family actually needs.
+    ///
+    /// What is deliberately not here is as important as what is. No credential, no token,
+    /// no endpoint, no account and no billing setting: authentication is the workstation's
+    /// business, out of band, and nothing in this file is a place to paste a secret. Nor is
+    /// the tool surface, the permission mode or a shell switch here - those are frozen
+    /// decisions in the adapter, not deployment settings.
+    /// </summary>
+    public List<ClaudeCodeRuntimeConfig> ClaudeCodeRuntimes { get; set; } = [];
 }
 
 public sealed class ScriptedRuntimeConfig
@@ -51,6 +63,24 @@ public sealed class ScriptedRuntimeConfig
 
     /// <summary>Which deterministic scenario the fixture plays, by name.</summary>
     public string Mode { get; set; } = string.Empty;
+}
+
+/// <summary>
+/// One installed real runtime on this machine. Configuration, not catalog: the catalog
+/// says which key a profile uses, this says what stands behind that key here.
+/// </summary>
+public sealed class ClaudeCodeRuntimeConfig
+{
+    /// <summary>The <c>runtimeKey</c> an agent profile names to reach this runtime.</summary>
+    public string Key { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Absolute path to the installed executable.
+    ///
+    /// Never a bare name: the child environment is deny by default and nothing is resolved
+    /// on PATH, so an operator reading this file can see exactly what will run.
+    /// </summary>
+    public string ExecutablePath { get; set; } = string.Empty;
 }
 
 /// <summary>

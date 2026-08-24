@@ -43,6 +43,7 @@ return mode switch
     "utf8" => WriteUtf8(),
     "ansi" => WriteAnsi(),
     "stdin-wait" => await StdinWaitAsync(),
+    "stdin-echo" => await StdinEchoAsync(),
     "report" => WriteReport(args),
     "secrets" => WriteSecrets(args),
     "agent" => await AgentAsync(args),
@@ -103,7 +104,7 @@ static int Help()
     RecordAdjacentInvocationMarker();
 
     Console.Error.WriteLine(
-        "modes: exit|stdout|echo-args|marker|stderr|both|flood|silent|chatty|spawn-tree|spawn-child|spawn-leaf|print-env|utf8|ansi|stdin-wait");
+        "modes: exit|stdout|echo-args|marker|stderr|both|flood|silent|chatty|spawn-tree|spawn-child|spawn-leaf|print-env|utf8|ansi|stdin-wait|stdin-echo");
     return 64;
 }
 
@@ -374,6 +375,16 @@ static async Task<int> StdinWaitAsync()
     _ = await Console.In.ReadToEndAsync();
 
     await Console.Out.WriteLineAsync("STDIN-CLOSED");
+    await Console.Out.FlushAsync();
+    return 0;
+}
+
+/// Reads stdin to end and writes it back, so a test can prove what was actually delivered.
+static async Task<int> StdinEchoAsync()
+{
+    var payload = await Console.In.ReadToEndAsync();
+
+    await Console.Out.WriteAsync("STDIN[" + payload + "]");
     await Console.Out.FlushAsync();
     return 0;
 }

@@ -183,8 +183,11 @@ Ayrıştırıcı davranış matrisi:
 | Geçersiz enum veya değer | REDDET |
 | Geçerli yapılandırma | KABUL |
 
-Depodaki `hub.config.yaml` yalnızca **fixture** değerleri içerir: gerçek ürün
-repository'si, gerçek Kronos verisi ve hiçbir sır içermez.
+Depodaki `hub.config.yaml` fixture değerleri ile Hub'ın **kendi** repository'sini içerir.
+`core-x-logic` organizasyonu yalnızca `agent-hub` projesini ve `corex-agent-hub`
+repository'sini bildirir; başka bir gerçek ürün repository'si, gerçek Kronos verisi
+(ADR-0017) ve hiçbir sır yoktur. `localPath` ve `filesystemRoot` bu makineye özgüdür:
+organizasyon kökü repository'yi kapsamalıdır, yoksa hiçbir worktree hazırlanamaz.
 
 ### Doğrulama ayarları
 
@@ -227,12 +230,30 @@ agents:
     - key: scripted
       fixturePath: 'D:\cx	ools\corex-fixture.exe'
       mode: apply-patch
+
+  claudeCodeRuntimes:
+    - key: claude-code
+      executablePath: 'C:\Users\<kullanici>\.local\bin\claude.exe'
 ```
 
-Faz 5'te tek bir runtime türü vardır ve bölümün adı bunu açıkça söyler. Bildirilmemiş bir
-anahtarı adlandıran profil, elde ne varsa onu almaz — "bu anahtar altında runtime kayıtlı
-değil" cevabını alır. `mode`, fixture'ın kendi fiillerinin yazıldığı gibi yazılır
-(`apply-patch`, `out-of-scope-write`, `hang`, ...).
+Her runtime ailesinin kendi bölümü vardır, çünkü kurulabilir olmak için gerekenler
+farklıdır: deterministik koşum bir fixture ve senaryo ister, kurulu bir araç yalnızca
+mutlak yolunu ister. Hepsini tek bir genel listeye sıkıştırmak, yarısı için anlamsız
+ayarlar uydurmak ve yapılandırma dosyasına bir sağlayıcı anahtarı koymak olurdu.
+
+Bildirilmemiş bir anahtarı adlandıran profil, elde ne varsa onu almaz — kurulum daha bir
+execution satırı yazılmadan açık bir yapılandırma hatasıyla durur. Sağlayıcı seçimi,
+fallback ve keşif yoktur.
+
+`mode`, fixture'ın kendi fiillerinin yazıldığı gibi yazılır (`apply-patch`,
+`out-of-scope-write`, `hang`, ...).
+
+`claudeCodeRuntimes` **yalnızca** kurulu çalıştırılabilirin mutlak yolunu taşır. Orada
+anahtar, token, uç nokta, hesap veya faturalandırma ayarı **yoktur**: kimlik doğrulama bant
+dışıdır ve iş istasyonunda zaten açık olan abonelik oturumu kullanılır (ADR-0009). Araç
+yüzeyi (`Read, Edit, Write, Glob, Grep`) ve izin modu (`acceptEdits`) da yapılandırma
+değildir; adapter'de dondurulmuştur (ADR-0020). Bir kurulumun bir dosyadaki metinle kabuğu
+geri açabilmesi, ADR-0020'nin ortadan kaldırdığı şeydir.
 
 ### Kronos onboarding kapısı (ADR-0017)
 
@@ -726,12 +747,13 @@ söylediğinden değil, kalıcılaşmış satırlardan üretir: base/result comm
 adım durumları, doğrulama komutları ve kabul kriterleri. Geçen bir koşuda sıradaki iki
 komutu yazar; kabul **etmez**.
 
-**Runtime yapılandırmadan gelir.** `agents.scriptedRuntimes` bir `runtimeKey`'in arkasında
-neyin durduğunu söyler — fixture yolu ve deterministik senaryo. Katalogda profil hangi
-anahtarı adlandırdığını, yapılandırma o anahtarın bu makinede ne olduğunu söyler; ikisi
-ayrı olduğu için aynı katalog başka bir kurulumda migration'sız çalışır. Faz 5'te tek bir
-runtime türü vardır ve yapılandırma bunu açıkça söyler: sağlayıcı seçimi, fallback veya
-keşif yoktur.
+**Runtime yapılandırmadan gelir.** `agents.*Runtimes` bir `runtimeKey`'in arkasında neyin
+durduğunu söyler — deterministik koşum için fixture yolu ve senaryo, kurulu bir araç için
+mutlak çalıştırılabilir yolu. Katalogda profil hangi anahtarı adlandırdığını, yapılandırma
+o anahtarın bu makinede ne olduğunu söyler; ikisi ayrı olduğu için aynı katalog başka bir
+kurulumda migration'sız çalışır. Sağlayıcı seçimi, fallback veya keşif yoktur; çözüm
+`hub run` bir execution satırı yazmadan önce yapılır, dolayısıyla bildirilmemiş bir anahtar
+worktree kurulmadan reddedilir.
 
 **M5 uyarısı.** Yeni bir deneme başlamadan önce, commit üretmemiş önceki denemelerin
 worktree'leri için **tek satır** uyarı basılır. Silmez, engellemez: o ağaç yapılanların tek

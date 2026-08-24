@@ -109,8 +109,19 @@ public interface IExecutionWorkspace
         CancellationToken ct);
 }
 
-/// <summary>What the context builder produced for one execution.</summary>
-public sealed record BuiltContextPack(string PackPath, string ContextPackHash, string SystemPromptPath);
+/// <summary>
+/// What the context builder produced for one execution.
+///
+/// The two prompt paths are named separately because they are different kinds of thing.
+/// The system prompt is the Hub's own execution contract and is not negotiable; the rules
+/// document is what the organisation, project and repository add on top of it. A runtime
+/// that can layer them keeps that distinction; one that cannot uses the contract alone.
+/// </summary>
+public sealed record BuiltContextPack(
+    string PackPath,
+    string ContextPackHash,
+    string SystemPromptPath,
+    string RulesPromptPath);
 
 /// <summary>The Application owned port for context materialisation.</summary>
 public interface IExecutionContextBuilder

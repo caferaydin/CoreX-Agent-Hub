@@ -163,7 +163,7 @@ public sealed class OrchestrationHarness : IAsyncDisposable
                 new ContextPackBuilder(new FileSystemGuardContextPathGuard()),
                 ContextRoot,
                 _ => new ContextRepositoryFacts("main", ["main"])),
-            new AgentGateway(runtimes),
+            new AgentGateway(runtimes, ["SystemRoot", "TEMP", "TMP", "PATH"]),
             DecorateVerifier is { } decorateVerifier ? decorateVerifier(verifier) : verifier,
             new EvidenceGateway(EvidenceStore),
             GateFixtures.Gates,

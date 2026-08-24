@@ -68,17 +68,60 @@ public enum AgentRunOutcome
     Crashed,
 }
 
-/// <summary>Bounded counters a runtime may report. All optional: many runtimes know none of them.</summary>
+/// <summary>
+/// Counters for one model, as the runtime observed them.
+///
+/// A run is not necessarily one model. A runtime that pins a model may still report work
+/// done by a second one - a summariser, a classifier, a small helper model - and folding
+/// those into a single pair of totals would quietly claim the pinned model did all of it.
+/// </summary>
+public sealed record AgentModelUsage
+{
+    public long? InputTokens { get; init; }
+
+    public long? OutputTokens { get; init; }
+
+    /// <summary>Tokens served from the provider's prompt cache rather than read fresh.</summary>
+    public long? CacheReadTokens { get; init; }
+
+    /// <summary>Tokens written into the provider's prompt cache.</summary>
+    public long? CacheCreationTokens { get; init; }
+
+    /// <summary>Provider reported cost for this model. Metadata, never a Hub billing fact.</summary>
+    public decimal? CostAmount { get; init; }
+}
+
+/// <summary>
+/// Bounded counters a runtime may report. All optional: many runtimes know none of them.
+///
+/// Every number here is the provider's own account of itself. It is evidence, not
+/// authority: nothing in the Hub enforces a budget from it, and a runtime that cannot
+/// honour a cost cap says so through <see cref="AgentCapabilities.SupportsCostCap"/>
+/// rather than by reporting a number and hoping.
+/// </summary>
 public sealed record AgentUsageMetadata
 {
     public long? InputTokens { get; init; }
 
     public long? OutputTokens { get; init; }
 
+    /// <summary>Tokens served from the provider's prompt cache rather than read fresh.</summary>
+    public long? CacheReadTokens { get; init; }
+
+    /// <summary>Tokens written into the provider's prompt cache.</summary>
+    public long? CacheCreationTokens { get; init; }
+
     /// <summary>Only when the runtime genuinely knows a cost. Never inferred.</summary>
     public decimal? CostAmount { get; init; }
 
     public string? CostCurrency { get; init; }
+
+    /// <summary>
+    /// Per model counters when the runtime reports them, keyed by the provider's own model
+    /// identifier. Empty when the runtime knows only totals, never fabricated from them.
+    /// </summary>
+    public IReadOnlyDictionary<string, AgentModelUsage> ModelUsage { get; init; } =
+        new Dictionary<string, AgentModelUsage>(StringComparer.Ordinal);
 
     public static AgentUsageMetadata Empty { get; } = new();
 }

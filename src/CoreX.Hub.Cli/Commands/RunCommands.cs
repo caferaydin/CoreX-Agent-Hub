@@ -70,7 +70,7 @@ public static class RunCommands
         var verificationProfile = await session.Store.FindDefaultVerificationProfileAsync(repository.Id, ct);
 
         var composition = ExecutionComposition.Create(
-            session, config, organization, repository, verificationProfile, TimeProvider.System);
+            session, config, organization, repository, verificationProfile, profile, TimeProvider.System);
 
         // One execution at a time for this installation, across processes. The orchestrator
         // enforces the same rule inside this process; neither is a substitute for the other.
@@ -213,8 +213,10 @@ public static class RunCommands
 
             try
             {
+                // Recovery measures a commit that already exists; it never runs an agent, so
+                // there is no profile to resolve a runtime for.
                 var composition = ExecutionComposition.Create(
-                    session, config, organization, repository, verificationProfile, TimeProvider.System);
+                    session, config, organization, repository, verificationProfile, null, TimeProvider.System);
 
                 var service = new PostCommitRecoveryService(
                     session.OpenStore, composition.Verifier, TimeProvider.System);
