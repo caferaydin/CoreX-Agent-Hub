@@ -108,6 +108,15 @@ public sealed class OrchestrationHarness : IAsyncDisposable
     /// <summary>Wraps the production verification port, for the same reason.</summary>
     public Func<IExecutionVerifier, IExecutionVerifier>? DecorateVerifier { get; set; }
 
+    /// <summary>
+    /// Wraps the agent gateway, the same way the workspace and the verifier can be wrapped.
+    ///
+    /// It exists so a test can act at the moment the agent really starts instead of guessing
+    /// when that will be. Waiting a fixed time is a guess about how fast the machine is, and
+    /// counting fixture processes is a guess about what the rest of the suite is doing.
+    /// </summary>
+    public Func<IAgentRuntimeGateway, IAgentRuntimeGateway>? DecorateAgent { get; set; }
+
     public Guid OrganizationId { get; private set; }
 
     public Guid RepositoryId { get; private set; }
@@ -163,7 +172,9 @@ public sealed class OrchestrationHarness : IAsyncDisposable
                 new ContextPackBuilder(new FileSystemGuardContextPathGuard()),
                 ContextRoot,
                 _ => new ContextRepositoryFacts("main", ["main"])),
-            new AgentGateway(runtimes, ["SystemRoot", "TEMP", "TMP", "PATH"]),
+            DecorateAgent is { } decorateAgent
+                ? decorateAgent(new AgentGateway(runtimes, ["SystemRoot", "TEMP", "TMP", "PATH"]))
+                : new AgentGateway(runtimes, ["SystemRoot", "TEMP", "TMP", "PATH"]),
             DecorateVerifier is { } decorateVerifier ? decorateVerifier(verifier) : verifier,
             new EvidenceGateway(EvidenceStore),
             GateFixtures.Gates,
@@ -413,5 +424,27 @@ public sealed class OrchestrationHarness : IAsyncDisposable
         catch (UnauthorizedAccessException)
         {
         }
+    }
+}
+
+/// <summary>
+/// An agent gateway that says when the run reaches the agent, then runs it for real.
+///
+/// The signal is raised before the runtime is called and the call itself is untouched, so a
+/// test can synchronise on the agent starting without changing what the agent does.
+/// </summary>
+internal sealed class AnnouncingAgentGateway(IAgentRuntimeGateway inner, Action onAgentStarting)
+    : IAgentRuntimeGateway
+{
+    public Task<AgentExecutionResult> RunAsync(
+        CoreX.Hub.Domain.Catalog.AgentProfile profile,
+        PreparedExecutionWorkspace workspace,
+        BuiltContextPack context,
+        CoreX.Hub.Domain.Tasks.HubTask task,
+        string correlationId,
+        CancellationToken ct)
+    {
+        onAgentStarting();
+        return inner.RunAsync(profile, workspace, context, task, correlationId, ct);
     }
 }

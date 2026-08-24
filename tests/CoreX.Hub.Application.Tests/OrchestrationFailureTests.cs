@@ -98,7 +98,13 @@ public sealed class OrchestrationFailureTests
         hub.Mode = ScriptedAgentMode.Hang;
 
         using var cancellation = new CancellationTokenSource();
-        cancellation.CancelAfter(TimeSpan.FromSeconds(3));
+
+        // Cancel exactly when the run reaches the agent, rather than after a fixed wait. A
+        // wait is a guess about how fast this machine is: observed under load during the
+        // Phase 6 acceptance, three seconds expired while the pipeline was still preparing a
+        // worktree, so the run cancelled an early stage and this test asserted about
+        // something else entirely.
+        hub.DecorateAgent = inner => new AnnouncingAgentGateway(inner, () => cancellation.Cancel());
 
         var report = await hub.Orchestrator().RunAsync(
             hub.TaskId, OrchestrationHarness.ScriptedProfileName, cancellation.Token);
