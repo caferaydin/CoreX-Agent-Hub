@@ -1,9 +1,11 @@
 using System.Globalization;
 using System.Runtime.Versioning;
 using CoreX.Hub.Application.Catalog;
+using CoreX.Hub.Application.Configuration;
 using CoreX.Hub.Application.Orchestration;
 using CoreX.Hub.Application.Tasks;
 using CoreX.Hub.Cli.Orchestration;
+using CoreX.Hub.Domain.Catalog;
 using CoreX.Hub.Domain.Executions;
 using CoreX.Hub.Domain.Tasks;
 using CoreX.Hub.Infrastructure.Configuration;
@@ -69,8 +71,10 @@ public static class RunCommands
 
         var verificationProfile = await session.Store.FindDefaultVerificationProfileAsync(repository.Id, ct);
 
+        var reviewer = await ResolveReviewerAsync(session, config, organization, repository, ct);
+
         var composition = ExecutionComposition.Create(
-            session, config, organization, repository, verificationProfile, profile, TimeProvider.System);
+            session, config, organization, repository, verificationProfile, profile, reviewer, TimeProvider.System);
 
         // One execution at a time for this installation, across processes. The orchestrator
         // enforces the same rule inside this process; neither is a substitute for the other.
@@ -214,12 +218,17 @@ public static class RunCommands
             try
             {
                 // Recovery measures a commit that already exists; it never runs an agent, so
-                // there is no profile to resolve a runtime for.
+                // there is no profile to resolve a runtime for. The reviewer is still resolved,
+                // because whether this repository is reviewed decides whether an unreviewed
+                // result may be called Passed - and recovery cannot review one.
+                var reviewer = await ResolveReviewerAsync(session, config, organization, repository, ct);
+
                 var composition = ExecutionComposition.Create(
-                    session, config, organization, repository, verificationProfile, null, TimeProvider.System);
+                    session, config, organization, repository, verificationProfile, null, reviewer,
+                    TimeProvider.System);
 
                 var service = new PostCommitRecoveryService(
-                    session.OpenStore, composition.Verifier, TimeProvider.System);
+                    session.OpenStore, composition.Verifier, TimeProvider.System, composition.ReviewRequired);
 
                 var report = await service.RecoverAsync([pending], ct);
 
@@ -438,6 +447,15 @@ public static class RunCommands
     /// different ways of doing the work, and picking one silently would decide something the
     /// operator did not.
     /// </summary>
+    /// <summary>
+    /// Which profile does the work.
+    ///
+    /// Only an Implementer is a candidate, whether it was asked for by name or picked
+    /// because it was the only one. A reviewer profile is declared read only precisely so it
+    /// cannot change anything, so running a task under one would produce an execution that
+    /// could never write the result it was asked for - and the failure would look like the
+    /// agent's rather than like the mistake it is.
+    /// </summary>
     private static async Task<Domain.Catalog.AgentProfile> ResolveAgentProfileAsync(
         HubSession session,
         HubTask task,
@@ -446,20 +464,59 @@ public static class RunCommands
     {
         if (!string.IsNullOrWhiteSpace(requested))
         {
-            return await session.Store.FindAgentProfileByNameAsync(task.OrganizationId, requested, ct)
+            var named = await session.Store.FindAgentProfileByNameAsync(task.OrganizationId, requested, ct)
                 ?? throw new TaskOperationException($"Agent profile '{requested}' was not found.");
+
+            return named.Role == AgentRole.Implementer
+                ? named
+                : throw new TaskOperationException(
+                    $"Agent profile '{named.Name}' has the role {named.Role}; a task is run by an Implementer.");
         }
 
-        var profiles = await session.Store.ListAgentProfilesAsync(task.OrganizationId, ct);
+        var profiles = (await session.Store.ListAgentProfilesAsync(task.OrganizationId, ct))
+            .Where(p => p.Role == AgentRole.Implementer)
+            .ToList();
 
         return profiles.Count switch
         {
             0 => throw new TaskOperationException(
-                "the task's organization declares no agent profile, so there is nothing to run it with."),
+                "the task's organization declares no implementer agent profile, so there is nothing to run "
+                + "it with."),
             1 => profiles[0],
             _ => throw new UsageException(
-                "the organization declares more than one agent profile; pass --agent <name> to say which "
-                + $"({string.Join(", ", profiles.Select(p => p.Name).Order())})."),
+                "the organization declares more than one implementer agent profile; pass --agent <name> to "
+                + $"say which ({string.Join(", ", profiles.Select(p => p.Name).Order())})."),
         };
+    }
+
+    /// <summary>
+    /// Which profile reviews this repository, from the catalogue the repository points at.
+    ///
+    /// The name comes from configuration and the profile from the seeded catalogue, and the
+    /// two are kept apart on purpose: a name with no profile behind it is a refusal that
+    /// composition reports, not a repository that quietly stops being reviewed.
+    /// </summary>
+    private static async Task<ReviewerSelection> ResolveReviewerAsync(
+        HubSession session,
+        HubConfig config,
+        Domain.Catalog.Organization organization,
+        Domain.Catalog.Repository repository,
+        CancellationToken ct)
+    {
+        var declared = config.Organizations
+            .FirstOrDefault(o => string.Equals(o.Slug, organization.Slug.Value, StringComparison.OrdinalIgnoreCase))
+            ?.Projects
+            .SelectMany(project => project.Repositories)
+            .FirstOrDefault(r => string.Equals(r.Slug, repository.Slug.Value, StringComparison.OrdinalIgnoreCase))
+            ?.ReviewerProfile;
+
+        if (string.IsNullOrWhiteSpace(declared))
+        {
+            return ReviewerSelection.None;
+        }
+
+        return new ReviewerSelection(
+            declared,
+            await session.Store.FindAgentProfileByNameAsync(organization.Id, declared, ct));
     }
 }

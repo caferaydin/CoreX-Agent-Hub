@@ -171,6 +171,72 @@ public sealed partial class WorkspaceManager
     }
 
     /// <summary>
+    /// What a snapshot's working tree is, right now.
+    ///
+    /// The reviewer boundary is not the tool list it was given - that is defence in depth -
+    /// it is this: the same three facts read before a reviewer runs and after it finishes.
+    /// A commit that moved, a tree that differs or a working tree that is no longer clean
+    /// each mean the thing that was measured is not the thing that was reviewed.
+    ///
+    /// Read only, and deliberately so. The index is never refreshed or written to make the
+    /// answer tidier, because mutating a tree in order to prove it was not mutated is not a
+    /// proof. `--no-ext-diff` is passed for the same family of reason the hardened
+    /// configuration exists: a repository must not get to run its own program during an
+    /// integrity check.
+    ///
+    /// Both a modified tracked file and a new untracked one count. Porcelain reports each,
+    /// which is why it is asked as well as the tree hash: a tree hash alone would miss a
+    /// file the reviewer created and never added.
+    /// </summary>
+    public async Task<SnapshotIntegrity?> InspectSnapshotIntegrityAsync(
+        PinnedSnapshot snapshot,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(snapshot);
+
+        var head = await ReadValueAsync(snapshot.SnapshotPath, ["rev-parse", "HEAD"], cancellationToken);
+
+        if (string.IsNullOrWhiteSpace(head))
+        {
+            return null;
+        }
+
+        var tree = await ReadValueAsync(snapshot.SnapshotPath, ["rev-parse", "HEAD^{tree}"], cancellationToken);
+
+        if (string.IsNullOrWhiteSpace(tree))
+        {
+            return null;
+        }
+
+        var status = await GitAsync(
+            snapshot.SnapshotPath,
+            ["--no-optional-locks", "status", "--porcelain", "--untracked-files=all", "--no-renames"],
+            cancellationToken);
+
+        if (!status.Succeeded)
+        {
+            return null;
+        }
+
+        var dirt = status.Stdout
+            .Split((char)10, StringSplitOptions.RemoveEmptyEntries)
+            .Select(l => l.Trim())
+            .Where(l => l.Length > 0)
+            .ToList();
+
+        return new SnapshotIntegrity(
+            head!,
+            tree!,
+            dirt.Count == 0,
+            dirt.Count == 0
+                ? "clean at " + head![..Math.Min(12, head.Length)]
+                : $"{dirt.Count} path(s) differ from the commit: "
+                  + string.Join("; ", dirt.Take(5).Select(Bounded)));
+    }
+
+    private static string Bounded(string line) => line.Length <= 120 ? line : line[..120];
+
+    /// <summary>
     /// Removes a disposable snapshot.
     ///
     /// The "a worktree without a result commit must be preserved" rule deliberately does

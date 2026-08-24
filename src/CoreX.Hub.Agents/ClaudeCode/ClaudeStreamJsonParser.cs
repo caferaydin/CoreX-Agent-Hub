@@ -38,6 +38,18 @@ public sealed record ClaudeResultEvent
 
     public string? TerminalReason { get; init; }
 
+    /// <summary>
+    /// The provider's structured output, verbatim, or null when it did not produce one.
+    ///
+    /// Null is a fact and not an inconvenience. A provider can finish successfully - exit
+    /// zero, is_error false, terminal reason completed - and still return no structured
+    /// output at all, which is what a schema it could not satisfy looks like from outside.
+    /// Nothing here substitutes an empty document for that, and nothing re-parses the
+    /// redundant result string to cover it up: whoever asked for a schema decides what a
+    /// missing one means.
+    /// </summary>
+    public string? StructuredOutput { get; init; }
+
     public AgentUsageMetadata Usage { get; init; } = AgentUsageMetadata.Empty;
 }
 
@@ -317,9 +329,23 @@ public sealed class ClaudeStreamJsonParser
             Text = Text(root, "result"),
             StopReason = Text(root, "stop_reason"),
             TerminalReason = Text(root, "terminal_reason"),
+            StructuredOutput = ReadStructuredOutput(root),
             Usage = ReadUsage(root),
         };
     }
+
+    /// <summary>
+    /// Lifts the structured output out of the result event, unchanged.
+    ///
+    /// Kept as the raw json text rather than a parsed shape: this module knows nothing about
+    /// findings, and whoever supplied the schema is the only one who can say whether what
+    /// came back conforms to it.
+    /// </summary>
+    private static string? ReadStructuredOutput(JsonElement root) =>
+        root.TryGetProperty("structured_output", out var structured)
+        && structured.ValueKind is not (JsonValueKind.Undefined or JsonValueKind.Null)
+            ? structured.GetRawText()
+            : null;
 
     /// <summary>
     /// Reads the provider's own account of what the run consumed.

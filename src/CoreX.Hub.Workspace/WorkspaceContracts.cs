@@ -357,3 +357,12 @@ public sealed record SnapshotIssue(SnapshotIssueCode Code, string Detail)
 
 /// <summary>Whether a snapshot is still pinned to the commit it was created at.</summary>
 public sealed record PinnedSnapshotCheck(bool StillPinned, string? ObservedHeadSha, string? Detail);
+
+/// <summary>
+/// A snapshot's identity as three neutral facts: which commit, which tree, and whether the
+/// working tree still matches it.
+///
+/// Nothing here is a git concept the caller has to understand. Two of these compared is the
+/// whole of the reviewer tamper authority.
+/// </summary>
+public sealed record SnapshotIntegrity(string HeadSha, string TreeSha, bool IsClean, string Detail);

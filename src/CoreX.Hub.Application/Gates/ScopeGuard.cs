@@ -71,6 +71,16 @@ public static class ScopeGuard
     /// qualified path, a UNC path or a traversal segment is not something to match
     /// leniently, it is something that should never have reached here.
     /// </summary>
+    /// <summary>
+    /// The same rule, for a caller that has a repository relative path from somewhere other
+    /// than a capture - a reviewer finding, for instance.
+    ///
+    /// Exposed rather than copied. A second implementation of "is this path safe to judge"
+    /// would be the one that eventually disagreed, and it would disagree in the direction of
+    /// accepting something this one rejects.
+    /// </summary>
+    public static string? DescribeMalformedPath(string? path) => Malformed(path ?? string.Empty);
+
     private static string? Malformed(string path)
     {
         if (string.IsNullOrWhiteSpace(path))

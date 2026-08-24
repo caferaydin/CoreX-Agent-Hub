@@ -70,19 +70,24 @@ public sealed class ClaudeCodeRuntime : IAgentRuntime
     /// SessionResume: no. Session persistence is deliberately off and no resume path is
     ///   implemented, so a resume identifier is refused before launch instead of being
     ///   dropped.
-    /// StructuredSchema: no. Nothing here passes a schema on or validates against one.
-    ///   Phase 7's reviewer owns that path.
-    /// ReadOnlyMode: no. This runtime always runs with edits enabled; a read only profile
-    ///   is refused rather than run as something else.
+    /// StructuredSchema: yes. A supplied schema is passed to the provider and the structured
+    ///   result it returns is handed back verbatim. What this runtime does not do is decide
+    ///   whether that result conforms - the caller supplied the schema and owns that - and it
+    ///   never invents a document when the provider returned none. Writing structured output
+    ///   to a caller chosen path is a different feature and is still refused by name.
+    /// ReadOnlyMode: yes. A read only request runs with reading tools and plan permission,
+    ///   and the provider's own report of both is checked before the run is believed. It is
+    ///   defence in depth and not the boundary: what proves a reviewer changed nothing is the
+    ///   snapshot's tree, compared before and after.
     /// </summary>
     public AgentCapabilities Describe() => new()
     {
-        SupportsStructuredSchema = false,
+        SupportsStructuredSchema = true,
         SupportsSessionResume = false,
         SupportsToolAllowlist = true,
         SupportsCostCap = false,
         SupportsStreaming = true,
-        SupportsReadOnlyMode = false,
+        SupportsReadOnlyMode = true,
     };
 
     /// <summary>
@@ -208,7 +213,13 @@ public sealed class ClaudeCodeRuntime : IAgentRuntime
         parser.Complete();
         var stream = parser.Snapshot();
 
-        var outcome = Decide(process, stream, invocation, out var diagnostic);
+        var expectedTools = ClaudeCodeInvocationBuilder.ExpectedEffectiveTools(
+            request.PermissionProfile, !string.IsNullOrWhiteSpace(request.StructuredOutputSchema));
+
+        var expectedPermissionMode = ClaudeCodeInvocationBuilder.PermissionModeFor(request.PermissionProfile);
+
+        var outcome = Decide(
+            process, stream, invocation, expectedTools, expectedPermissionMode, out var diagnostic);
 
         sink.Report(AgentEvent.Completed(outcome.ToString()));
 
@@ -225,6 +236,10 @@ public sealed class ClaudeCodeRuntime : IAgentRuntime
             // survives a stream this adapter could not read (ADR-0009).
             Stdout = process.Stdout,
             Stderr = process.Stderr,
+
+            // Verbatim, and null when the provider produced none. Deciding what a missing
+            // structured result means belongs to whoever supplied the schema.
+            StructuredOutput = stream.Result?.StructuredOutput,
             Usage = stream.Result?.Usage ?? AgentUsageMetadata.Empty,
             Duration = process.Duration,
             Diagnostic = diagnostic,
@@ -274,6 +289,8 @@ public sealed class ClaudeCodeRuntime : IAgentRuntime
         AgentProcessResult process,
         ClaudeStreamReport stream,
         ClaudeCodeInvocation invocation,
+        IReadOnlyList<string> expectedTools,
+        string expectedPermissionMode,
         out string? diagnostic)
     {
         var processOutcome = MapProcess(process);
@@ -287,7 +304,7 @@ public sealed class ClaudeCodeRuntime : IAgentRuntime
             return processOutcome;
         }
 
-        if (Reject(stream, invocation) is { } rejection)
+        if (Reject(stream, invocation, expectedTools, expectedPermissionMode) is { } rejection)
         {
             diagnostic = Join(rejection, StreamNotes(stream));
             return AgentRunOutcome.Failed;
@@ -312,7 +329,11 @@ public sealed class ClaudeCodeRuntime : IAgentRuntime
     };
 
     /// <summary>Why an otherwise clean exit is still not a completed run, or null.</summary>
-    private static string? Reject(ClaudeStreamReport stream, ClaudeCodeInvocation invocation)
+    private static string? Reject(
+        ClaudeStreamReport stream,
+        ClaudeCodeInvocation invocation,
+        IReadOnlyList<string> expectedTools,
+        string expectedPermissionMode)
     {
         if (stream.ParseDiagnostics.Count > 0)
         {
@@ -331,10 +352,10 @@ public sealed class ClaudeCodeRuntime : IAgentRuntime
                    + $"'{invocation.SessionId}'.";
         }
 
-        if (!string.Equals(init.PermissionMode, ClaudeCodeInvocationBuilder.PermissionMode, StringComparison.Ordinal))
+        if (!string.Equals(init.PermissionMode, expectedPermissionMode, StringComparison.Ordinal))
         {
             return $"the provider ran in permission mode '{init.PermissionMode}' rather than the stated "
-                   + $"'{ClaudeCodeInvocationBuilder.PermissionMode}'.";
+                   + $"'{expectedPermissionMode}'.";
         }
 
         if (init.McpServerCount != 0)
@@ -343,10 +364,10 @@ public sealed class ClaudeCodeRuntime : IAgentRuntime
                    + "active; this runtime declares none.";
         }
 
-        if (!SameTools(init.Tools))
+        if (!SameTools(init.Tools, expectedTools))
         {
             return $"the provider reported the tool surface [{string.Join(", ", init.Tools)}] rather than the "
-                   + $"frozen [{string.Join(", ", ClaudeCodeInvocationBuilder.Tools)}].";
+                   + $"expected [{string.Join(", ", expectedTools)}].";
         }
 
         if (stream.Result is not { } result)
@@ -377,9 +398,9 @@ public sealed class ClaudeCodeRuntime : IAgentRuntime
         return null;
     }
 
-    private static bool SameTools(IReadOnlyList<string> reported) =>
-        reported.Count == ClaudeCodeInvocationBuilder.Tools.Count
-        && ClaudeCodeInvocationBuilder.Tools.All(t => reported.Contains(t, StringComparer.Ordinal));
+    private static bool SameTools(IReadOnlyList<string> reported, IReadOnlyList<string> expected) =>
+        reported.Count == expected.Count
+        && expected.All(t => reported.Contains(t, StringComparer.Ordinal));
 
     private static bool SessionVerified(ClaudeStreamReport stream, ClaudeCodeInvocation invocation) =>
         stream.Init is { SessionId: { Length: > 0 } observed }

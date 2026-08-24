@@ -4,6 +4,7 @@ using CoreX.Hub.Agents.Abstractions;
 using CoreX.Hub.Agents.Scripted;
 using CoreX.Hub.Application.Abstractions;
 using CoreX.Hub.Application.Orchestration;
+using CoreX.Hub.Application.Review;
 using CoreX.Hub.Cli.Agents;
 using CoreX.Hub.Cli.Context;
 using CoreX.Hub.Cli.Orchestration;
@@ -87,6 +88,16 @@ public sealed class OrchestrationHarness : IAsyncDisposable
     public WorkspaceManager WorkspaceManager { get; }
 
     public ScriptedAgentMode Mode { get; set; } = ScriptedAgentMode.ApplyPatch;
+
+    /// <summary>
+    /// The reviewer, when this run is reviewed at all.
+    ///
+    /// Null is the honest default and not a convenience: most of these tests are about the
+    /// stages before the review, and a repository that names no reviewer really does reach
+    /// the Review step with nothing to run - which is a case worth exercising rather than
+    /// hiding behind a stub that always passes.
+    /// </summary>
+    public IExecutionReviewer? Reviewer { get; set; }
 
     public VerificationProfile? VerificationProfile { get; set; }
 
@@ -191,7 +202,8 @@ public sealed class OrchestrationHarness : IAsyncDisposable
             {
                 HeartbeatInterval = TimeSpan.FromMilliseconds(200),
                 MaximumLeaseSilence = TimeSpan.FromMinutes(2),
-            });
+            },
+            Reviewer);
     }
 
     /// <summary>

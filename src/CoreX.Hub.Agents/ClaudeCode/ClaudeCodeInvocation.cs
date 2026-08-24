@@ -82,8 +82,38 @@ public static class ClaudeCodeInvocationBuilder
     /// </summary>
     public static IReadOnlyList<string> Tools { get; } = ["Read", "Edit", "Write", "Glob", "Grep"];
 
-    /// <summary>The permission mode this adapter always states, whatever the user settings say.</summary>
+    /// <summary>
+    /// The reviewer tool surface: reading only, and no way to change anything.
+    ///
+    /// A reviewer that could edit could launder its own verdict, so the restriction is not a
+    /// convenience. It is defence in depth rather than the boundary - the boundary is that
+    /// the snapshot's tree is compared before and after - but a capability that does not
+    /// exist cannot be misused, and this list is a constant for the same reason the
+    /// implementer's is.
+    /// </summary>
+    public static IReadOnlyList<string> ReviewerTools { get; } = ["Read", "Glob", "Grep"];
+
+    /// <summary>
+    /// The tool the provider adds by itself when a schema is requested.
+    ///
+    /// Measured, not assumed: with --json-schema the init event reports this alongside the
+    /// tools that were asked for. It is how structured output is returned at all, so a
+    /// runtime that treated an unrequested tool as a breach would refuse every structured
+    /// review; and one that accepted any unrequested tool would not notice a shell.
+    /// </summary>
+    public const string StructuredOutputTool = "StructuredOutput";
+
+    /// <summary>The permission mode this adapter states for an implementer run.</summary>
     public const string PermissionMode = "acceptEdits";
+
+    /// <summary>
+    /// The permission mode a read only run states.
+    ///
+    /// Plan mode is what the provider offers for "look, do not act". It is stated explicitly
+    /// for exactly the reason the implementer's mode is: the user settings this run loads
+    /// carry a default, and a mode nobody stated is a mode somebody else chose.
+    /// </summary>
+    public const string ReviewerPermissionMode = "plan";
 
     /// <summary>The only setting source this adapter loads. Project and local are never read.</summary>
     public const string SettingSources = "user";
@@ -142,6 +172,39 @@ public static class ClaudeCodeInvocationBuilder
     /// </summary>
     public static IReadOnlyList<string> EffortLevels { get; } = ["low", "medium", "high", "xhigh", "max"];
 
+    /// <summary>
+    /// Which of the two shapes a request asks for.
+    ///
+    /// The permission profile decides it, and nothing else does. There is no mode flag and
+    /// no second runtime: an implementer is a run that may write, a reviewer is a run that
+    /// may not, and the catalog already says which one this is.
+    /// </summary>
+    public static bool IsReviewerRequest(AgentPermissionProfile profile) =>
+        profile == AgentPermissionProfile.ReadOnly;
+
+    /// <summary>The tools a request asks the provider for, before the provider adds its own.</summary>
+    public static IReadOnlyList<string> RequestedToolsFor(AgentPermissionProfile profile) =>
+        IsReviewerRequest(profile) ? ReviewerTools : Tools;
+
+    public static string PermissionModeFor(AgentPermissionProfile profile) =>
+        IsReviewerRequest(profile) ? ReviewerPermissionMode : PermissionMode;
+
+    /// <summary>
+    /// The tools the provider is expected to report once it has started.
+    ///
+    /// It is the requested set plus, in schema mode only, the tool the provider adds to
+    /// return structured output. Anything else - and in particular anything that can write
+    /// or execute - means the run is not the run that was asked for.
+    /// </summary>
+    public static IReadOnlyList<string> ExpectedEffectiveTools(
+        AgentPermissionProfile profile,
+        bool structuredSchemaRequested)
+    {
+        var requested = RequestedToolsFor(profile);
+
+        return structuredSchemaRequested ? [.. requested, StructuredOutputTool] : requested;
+    }
+
     public static bool IsForbiddenEnvironmentName(string name) =>
         !string.IsNullOrWhiteSpace(name)
         && (ForbiddenEnvironmentNames.Contains(name, StringComparer.OrdinalIgnoreCase)
@@ -178,8 +241,8 @@ public static class ClaudeCodeInvocationBuilder
             "--safe-mode",
             "--setting-sources", SettingSources,
             "--strict-mcp-config",
-            "--tools", string.Join(',', Tools),
-            "--permission-mode", PermissionMode,
+            "--tools", string.Join(',', RequestedToolsFor(request.PermissionProfile)),
+            "--permission-mode", PermissionModeFor(request.PermissionProfile),
             "--model", request.ModelHint!.Trim(),
             "--effort", effort,
             "--system-prompt-file", request.SystemPromptFile,
@@ -189,6 +252,12 @@ public static class ClaudeCodeInvocationBuilder
         {
             arguments.Add("--append-system-prompt-file");
             arguments.Add(request.AppendSystemPromptFile);
+        }
+
+        if (!string.IsNullOrWhiteSpace(request.StructuredOutputSchema))
+        {
+            arguments.Add("--json-schema");
+            arguments.Add(request.StructuredOutputSchema);
         }
 
         return ClaudeCodeInvocationPlan.Ready(new ClaudeCodeInvocation
@@ -226,22 +295,15 @@ public static class ClaudeCodeInvocationBuilder
                    + "so a resume identifier cannot be honoured.";
         }
 
-        if (!string.IsNullOrWhiteSpace(request.StructuredOutputSchema))
-        {
-            return "unsupported: this runtime declares no structured schema support, so a supplied schema "
-                   + "would be neither passed on nor validated.";
-        }
-
+        // A schema is supported; writing the result to a path of the caller's choosing is
+        // not. The provider returns structured output in its own result, so honouring a path
+        // would mean this runtime inventing a file - and inventing it inside the very tree a
+        // review is measuring. Declaring schema support does not imply arbitrary output-path
+        // support, so the narrower feature is refused by name.
         if (!string.IsNullOrWhiteSpace(request.StructuredOutputPath))
         {
-            return "unsupported: this runtime produces no structured document, so nothing would ever be "
-                   + "written to the requested path.";
-        }
-
-        if (request.PermissionProfile != AgentPermissionProfile.WorkspaceWrite)
-        {
-            return $"unsupported: this runtime declares no read only mode and always runs with edits "
-                   + $"enabled, so the '{request.PermissionProfile}' permission profile cannot be honoured.";
+            return "unsupported: this runtime returns structured output on the provider result and writes "
+                   + "no structured document, so nothing would ever be written to the requested path.";
         }
 
         if (string.IsNullOrWhiteSpace(request.SessionId))

@@ -93,10 +93,12 @@ public sealed partial class ExecutionOrchestrator
             return AuditFor(execution, "ResultCommitCreated", "result commit " + commit.CommitSha[..12]);
         });
 
-        if (commit.CommitDiff is { Length: > 0 })
-        {
-            await WriteEvidenceAsync(execution, commit.CommitDiff, EvidenceKind.GitCommitDiff, "text/plain", record);
-        }
+        // Held rather than merely written: the review is anchored to this exact artifact,
+        // and looking it up later by kind would mean guessing which of several rows was meant.
+        var commitDiff = commit.CommitDiff is { Length: > 0 }
+            ? await WriteEvidenceAsync(
+                execution, commit.CommitDiff, EvidenceKind.GitCommitDiff, "text/plain", record)
+            : null;
 
         // The commit staged everything, so the worktree should now be exactly the commit.
         // If it is not, the tree and the commit are different things and nothing may be
@@ -173,21 +175,58 @@ public sealed partial class ExecutionOrchestrator
             record);
 
         // Review ---------------------------------------------------------------------
-        // Phase 5 has no reviewer. The step is recorded as skipped with a reason rather
-        // than as a clean review, because "nobody looked" is not "somebody approved".
-        await AdvanceAsync(execution, ExecutionState.Reviewing, null, record);
-        await SkipAsync(execution.Id, ExecutionStepKind.Review, ReviewNotConfigured, record);
+        // Only a result that passed the verification required of it is reviewed. Reviewing
+        // one that failed would spend a reviewer on a state the machine has already refused,
+        // and would invite the review to become an argument against a mechanical answer.
+        await AdvanceAsync(
+            execution,
+            ExecutionState.Reviewing,
+            passed && _reviewer is not null ? ExecutionStepKind.Review : null,
+            record);
 
-        return await CompleteAsync(
+        if (!passed)
+        {
+            await SkipAsync(execution.Id, ExecutionStepKind.Review, ReviewSkippedVerificationFailed, record);
+
+            return await CompleteAsync(
+                execution,
+                task,
+                ExecutionOutcome.VerificationFailed,
+                verification.Detail,
+                verification.SnapshotResidual,
+                record);
+        }
+
+        if (_reviewer is null)
+        {
+            // No reviewer is configured for this repository. The step says so with a reason
+            // rather than reporting a clean review, because "nobody looked" is not "somebody
+            // approved" - and the execution still passes, since the verification that was
+            // required of it did.
+            await SkipAsync(execution.Id, ExecutionStepKind.Review, ReviewNotConfigured, record);
+
+            return await CompleteAsync(
+                execution,
+                task,
+                ExecutionOutcome.Passed,
+                verification.Detail,
+                verification.SnapshotResidual,
+                record);
+        }
+
+        return await ReviewAndFinishAsync(
             execution,
             task,
-            passed ? ExecutionOutcome.Passed : ExecutionOutcome.VerificationFailed,
-            verification.Detail,
+            repositoryId,
+            commit.CommitSha,
+            changes.ChangedPaths,
+            commitDiff,
             verification.SnapshotResidual,
+            ct,
             record);
     }
 
-    private const string ReviewNotConfigured = "ReviewNotConfiguredInPhase5";
+    private const string ReviewNotConfigured = "ReviewNotConfigured";
 
     private const string CancelledBeforeCommit = "CancelledBeforeResultCommit";
 

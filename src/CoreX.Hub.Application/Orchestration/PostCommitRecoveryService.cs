@@ -69,12 +69,28 @@ public sealed class PostCommitRecoveryService
     private readonly Func<IHubStore> _open;
     private readonly IExecutionVerifier _verifier;
     private readonly TimeProvider _clock;
+    private readonly bool _reviewRequired;
 
-    public PostCommitRecoveryService(Func<IHubStore> open, IExecutionVerifier verifier, TimeProvider clock)
+    /// <summary>
+    /// <paramref name="reviewRequired"/> says whether this repository is one that gets an
+    /// independent review.
+    ///
+    /// Recovery deliberately cannot perform one - it holds no reviewer and no workspace - so
+    /// the only thing it can honestly do with the answer is refuse to call an unreviewed
+    /// result Passed. A recovered execution that a reviewer never saw is exactly what
+    /// ReviewUnusable means, and calling it Passed would let a dead host be the way around
+    /// the review.
+    /// </summary>
+    public PostCommitRecoveryService(
+        Func<IHubStore> open,
+        IExecutionVerifier verifier,
+        TimeProvider clock,
+        bool reviewRequired = false)
     {
         _open = open ?? throw new ArgumentNullException(nameof(open));
         _verifier = verifier ?? throw new ArgumentNullException(nameof(verifier));
         _clock = clock ?? throw new ArgumentNullException(nameof(clock));
+        _reviewRequired = reviewRequired;
     }
 
     public async Task<PostCommitRecoveryReport> RecoverAsync(
@@ -292,7 +308,8 @@ public sealed class PostCommitRecoveryService
     /// <summary>
     /// Runs the ordinary end of the pipeline: review is recorded as skipped because nobody
     /// looked, the execution completes with its outcome, and a passing run waits for a
-    /// person exactly as it would have.
+    /// person exactly as it would have - unless this repository is reviewed, in which case a
+    /// result no reviewer saw is not one that passed.
     /// </summary>
     private async Task<PostCommitRecovery> FinishAsync(
         IHubStore store,
@@ -309,9 +326,19 @@ public sealed class PostCommitRecoveryService
         var steps = await store.ListExecutionStepsAsync(execution.Id, ct);
         var review = steps.FirstOrDefault(s => s.Kind == ExecutionStepKind.Review);
 
+        var reviewed = review is { State: ExecutionStepState.Succeeded };
+
         if (review is { State: ExecutionStepState.Pending })
         {
-            review.Skip("ReviewNotConfiguredInPhase5", now);
+            review.Skip(_reviewRequired ? ReviewNotRunAfterHostLoss : ReviewNotConfigured, now);
+        }
+
+        if (_reviewRequired && !reviewed && outcome == ExecutionOutcome.Passed)
+        {
+            // The machine verification stands and is recorded; what is missing is the review,
+            // and its absence is stated rather than stepped over.
+            outcome = ExecutionOutcome.ReviewUnusable;
+            detail = detail + "; the host was lost before this result was reviewed, so no review exists";
         }
 
         ExecutionCompletion.Apply(execution, task, outcome, detail, now);
@@ -348,6 +375,10 @@ public sealed class PostCommitRecoveryService
             Detail = detail,
         };
     }
+
+    private const string ReviewNotConfigured = "ReviewNotConfigured";
+
+    private const string ReviewNotRunAfterHostLoss = "ReviewNotRunAfterHostLoss";
 
     private static PostCommitRecovery Closed(
         PostCommitRecoveryRequired item,

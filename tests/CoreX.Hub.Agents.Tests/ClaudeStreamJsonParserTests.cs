@@ -1,3 +1,4 @@
+using System.Text.Json;
 using CoreX.Hub.Agents.ClaudeCode;
 
 namespace CoreX.Hub.Agents.Tests;
@@ -287,7 +288,75 @@ public sealed class ClaudeStreamJsonParserTests
         "{\"type\":\"assistant\",\"message\":{\"role\":\"assistant\",\"content\":"
         + "[{\"type\":\"text\",\"text\":\"" + text + "\"}]}}\n";
 
+    // --- Structured output ------------------------------------------------------------
+    //
+    // This field is the only thing that separates a review from a provider that merely
+    // finished. Measured in Phase 7A: the run can report success, exit zero, and carry no
+    // structured output at all - so what the parser does with its absence decides whether a
+    // schema failure looks like a clean review.
+
+    [Fact]
+    public void A_structured_result_is_carried_through_exactly_as_it_arrived()
+    {
+        var report = Read(Init(Session), ResultWith(Session, "{\"findings\":[],\"summary\":\"nothing\"}"));
+
+        Assert.NotNull(report.Result!.StructuredOutput);
+
+        // Raw json, not a parsed shape: this module knows nothing about findings, and only
+        // whoever supplied the schema can say whether what came back conforms to it.
+        using var document = JsonDocument.Parse(report.Result.StructuredOutput!);
+
+        Assert.Equal("nothing", document.RootElement.GetProperty("summary").GetString());
+        Assert.Empty(document.RootElement.GetProperty("findings").EnumerateArray());
+    }
+
+    [Fact]
+    public void A_successful_result_with_no_structured_output_says_so_rather_than_inventing_one()
+    {
+        var report = Read(Init(Session), Result(Session));
+
+        Assert.Equal("success", report.Result!.Subtype);
+        Assert.False(report.Result.IsError);
+        Assert.Null(report.Result.StructuredOutput);
+    }
+
+    [Fact]
+    public void A_null_structured_output_is_the_same_as_none()
+    {
+        var report = Read(
+            Init(Session),
+            "{\"type\":\"result\",\"subtype\":\"success\",\"is_error\":false,\"session_id\":\"" + Session
+            + "\",\"result\":\"done\",\"structured_output\":null}\n");
+
+        Assert.Null(report.Result!.StructuredOutput);
+    }
+
+    [Fact]
+    public void A_structured_result_that_arrives_in_pieces_is_still_whole()
+    {
+        var whole = string.Concat(
+            Init(Session), ResultWith(Session, "{\"findings\":[],\"summary\":\"split across reads\"}"));
+
+        var parser = new ClaudeStreamJsonParser();
+
+        for (var i = 0; i < whole.Length; i += 5)
+        {
+            parser.Append(whole.Substring(i, Math.Min(5, whole.Length - i)));
+        }
+
+        parser.Complete();
+
+        var structured = parser.Snapshot().Result!.StructuredOutput;
+
+        Assert.NotNull(structured);
+        Assert.Contains("split across reads", structured!, StringComparison.Ordinal);
+    }
+
     private static string Result(string session) =>
         "{\"type\":\"result\",\"subtype\":\"success\",\"is_error\":false,\"session_id\":\"" + session + "\","
         + "\"result\":\"done\",\"usage\":{\"input_tokens\":11,\"output_tokens\":7}}\n";
+
+    private static string ResultWith(string session, string structuredOutput) =>
+        "{\"type\":\"result\",\"subtype\":\"success\",\"is_error\":false,\"session_id\":\"" + session + "\","
+        + "\"result\":\"done\",\"structured_output\":" + structuredOutput + "}\n";
 }

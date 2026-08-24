@@ -172,6 +172,20 @@ public sealed class RepositoryConfig
 
     public List<string> ProtectedBranches { get; set; } = [];
 
+    /// <summary>
+    /// The agent profile name an independent review of this repository runs under.
+    ///
+    /// A name, resolved the same way an implementer profile is: profile to runtime key to
+    /// registry to runtime. Naming a provider here, or picking whichever profile happens to
+    /// have the Reviewer role, would put the choice in code and make swapping the reviewer a
+    /// code change rather than a configuration one.
+    ///
+    /// Absent means this repository is not reviewed, and that is a deliberate statement
+    /// rather than a silent skip: a repository that names a profile which cannot review
+    /// refuses to start an execution at all.
+    /// </summary>
+    public string? ReviewerProfile { get; set; }
+
     public List<VerificationProfileConfig> VerificationProfiles { get; set; } = [];
 }
 

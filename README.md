@@ -5,7 +5,9 @@ Ticari bir ürün değildir; tek geliştirici iş istasyonunda, tek kullanıcı 
 
 Otoriter mimari doküman: [`docs/architecture/CoreX-Agent-Hub-Mimari-Plan-v1.1.1.md`](docs/architecture/CoreX-Agent-Hub-Mimari-Plan-v1.1.1.md)
 (durum: **ARCHITECTURE ACCEPTED — DISCOVERY CLOSED**).
-Kabul edilmiş kararlar: [`docs/adr/`](docs/adr/) (ADR-0001 … ADR-0017).
+Kabul edilmiş kararlar: [`docs/adr/`](docs/adr/) (ADR-0001 … ADR-0022).
+
+Bağımsız review: [`docs/phase-7-review.md`](docs/phase-7-review.md).
 
 ## Mevcut durum
 
@@ -297,7 +299,8 @@ tests/                        Domain / Application / Integration / Execution / W
                               Verification / Architecture / LoopZero testleri +
                               corex-fixture (deterministik test yardımcı exe'si).
 docs/architecture             Otoriter mimari doküman + tarihçe.
-docs/adr                      ADR-0001 … ADR-0019.
+docs/adr                      ADR-0001 … ADR-0022.
+docs/phase-7-review.md        Bağımsız review: sınır, ölçümler, G7-1 kalibrasyonu.
 ```
 
 Bağımlılık yönü tek yönlüdür ve `CoreX.Hub.ArchitectureTests` tarafından derlenmiş
@@ -559,7 +562,7 @@ gelir, çünkü içinde onları ayırt edecek hiçbir şey yoktur.
 ```
 Task Ready → Execution Created → Task Running
   PreparingWorkspace → BuildingContext → RunningAgent → CapturingChanges
-  K0 → K1 → K2 → K3 → CreateResultCommit → Verifying → Reviewing(Skipped) → Completed
+  K0 → K1 → K2 → K3 → CreateResultCommit → Verifying → Reviewing → Completed
 Passed → Task AwaitingAcceptance      ·      diğer her şey → Task Ready
 ```
 
@@ -585,9 +588,33 @@ Snapshot her hâlükârda bırakılır; bırakılamazsa artık (residual) olarak
 ölçümün ne olduğunu değiştirmez. `BaselineKey` üçlüsü değişmedi:
 `RepositoryId + BaseCommitSha + ProfileHash`.
 
-**Review Faz 7'dir.** Yaşam döngüsündeki `Reviewing` durumu korunur ama Review adımı
-`Skipped` + `ReviewNotConfiguredInPhase5` olarak kaydedilir. "Kimse bakmadı", "biri
-onayladı" demek **değildir**: sahte `Clean` review, sahte bulgu ve override yoktur.
+**Bağımsız review.** Doğrulamayı geçen bir sonuç, `ResultCommitSha`'ya sabitlenmiş tek
+kullanımlık bir snapshot'ta bağımsız bir reviewer tarafından incelenir (ADR-0022). Agent'ın
+worktree'si kullanılmaz. Reviewer **kanıt** üretir — şemaya uyan yapılandırılmış bulgular —
+**karar** üretmez: şemada "verdict" alanı yoktur, düz metin hiç okunmaz ve sonuç
+`ReviewFindingGate` tarafından verilir.
+
+Reviewer'ın `outOfScope` iddiası kanıttır; **kapsamı Hub belirler**, execution'ın gerçekten
+değiştirdiği yollardan. İki cevap uyuşmazsa uyuşmazlık kaydedilir, sessizce düzeltilmez.
+
+Ağaç, reviewer çalışmadan **önce** ve her denemeden **sonra** ölçülür; HEAD, tree veya
+temizlik değiştiyse sonuç `ReviewUnusable`'dır ve yeniden denenmez. Yeniden deneme **bir**
+kezdir ve yalnızca gelmeyen/uymayan bir belge içindir; süresi dolan, iptal edilen veya düşen
+bir sağlayıcı denenmez.
+
+Biten bir sağlayıcı tamamlanmış bir review **değildir**: ölçüldü ki sağlayıcı sıfırla
+çıkıp hiç yapılandırılmış çıktı döndürmeyebilir. "Çıktı yok" asla "bulgu yok" sayılmaz.
+
+Reviewer profili katalogdadır (`reviewerProfile`); hangi sağlayıcının incelediği
+yapılandırma sorusudur, kod sorusu değil. Profil bildirilmemişse repository review
+edilmiyor demektir: adım `Skipped` + `ReviewNotConfigured` olarak kaydedilir — "kimse
+bakmadı", "biri onayladı" demek **değildir**.
+
+| Sonuç | Anlamı | İnsan kabulü |
+|---|---|---|
+| `Passed` | Review çalıştı, bloklayan bulgu yok | Düz kabul |
+| `ReviewBlocked` | Review çalıştı, bloklayan bulgu var | Yalnızca override (ADR-0014) |
+| `ReviewUnusable` | Kullanılabilir review **yok** | Hiçbiri |
 
 **Lease.** Sahip, süreç kimliği **ve** host başlangıç zamanının çiftidir — işletim
 sistemleri süreç kimliğini yeniden kullanır, geri dönüşmüş bir numara özgün sahip değildir.

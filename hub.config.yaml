@@ -91,6 +91,20 @@ organizations:
         idleTimeoutSeconds: 2400
         hardTimeoutSeconds: 3600
 
+      # Bagimsiz gozden gecirici. Ayni runtime anahtari, farkli izin profili:
+      # ReadOnly, runtime tarafinda Read/Glob/Grep + plan izin moduna cevrilir.
+      # Faz 8'de Codex'e gecis YALNIZCA bu profili degistirmekle olur.
+      - name: claude-reviewer
+        role: Reviewer
+        provider: ClaudeCode
+        runtimeKey: claude-code
+        permissionProfile: ReadOnly
+        model: claude-opus-5
+        effort: high
+        softTimeoutSeconds: 900
+        idleTimeoutSeconds: 1200
+        hardTimeoutSeconds: 1800
+
     projects:
       - slug: agent-hub
         name: CoreX Agent Hub
@@ -102,6 +116,9 @@ organizations:
             defaultBranch: main
             protectedBranches:
               - main
+
+            # Hangi profilin gozden gecirdigini KATALOG soyler, kod degil.
+            reviewerProfile: claude-reviewer
             verificationProfiles:
               - name: hub-release-full
                 isDefault: true

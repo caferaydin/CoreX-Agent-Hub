@@ -379,8 +379,7 @@ public sealed class ClaudeCodeRuntimeTests
         foreach (var request in new[]
                  {
                      fixture.Request(resumeSessionId: Guid.NewGuid().ToString("D")),
-                     fixture.Request(structuredOutputSchema: "{\"type\":\"object\"}"),
-                     fixture.Request(permissionProfile: AgentPermissionProfile.ReadOnly),
+                     fixture.Request(structuredOutputPath: "C:/tmp/out.json"),
                      fixture.Request(model: null),
                      fixture.Request(effort: "enormous"),
                      fixture.Request(sessionId: "not-a-uuid"),

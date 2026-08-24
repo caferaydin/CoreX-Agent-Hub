@@ -144,7 +144,7 @@ public sealed class OrchestrationGateTests
 
         var review = steps.Single(s => s.Kind == ExecutionStepKind.Review);
         Assert.Equal(ExecutionStepState.Skipped, review.State);
-        Assert.Equal("ReviewNotConfiguredInPhase5", review.StateReason);
+        Assert.Equal("ReviewNotConfigured", review.StateReason);
 
         Assert.Equal(TaskState.Ready, (await hub.TaskAsync()).State);
 

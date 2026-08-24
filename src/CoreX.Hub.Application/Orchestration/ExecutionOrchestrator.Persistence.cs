@@ -15,6 +15,9 @@ public sealed partial class ExecutionOrchestrator
         Failed,
         TimedOut,
         Cancelled,
+
+        /// <summary>The runtime declared it cannot do this (ADR-0008). Never a success.</summary>
+        Unsupported,
     }
 
     private sealed record ValidatedStart(

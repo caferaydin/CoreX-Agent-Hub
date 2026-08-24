@@ -52,6 +52,9 @@ public sealed partial class ExecutionOrchestrator
             case StepFate.Cancelled:
                 step.Cancel(reason ?? "the run was cancelled", now);
                 break;
+            case StepFate.Unsupported:
+                step.Unsupported(reason ?? "the runtime does not support this step", now);
+                break;
             default:
                 step.Fail(reason ?? "the step failed", now);
                 break;

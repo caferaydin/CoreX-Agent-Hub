@@ -141,16 +141,31 @@ public sealed class CancellationFinalizationInvariantTests
     }
 
     [Fact]
-    public void No_reviewer_arrived_with_this_fix()
+    public void A_cancelled_review_ends_the_run_rather_than_escaping_it()
     {
-        var declarations = new Regex(
-            @"\b(class|record|interface)\s+(ReviewEngine|ReviewRuntime|ReviewerProfile|ReviewAgent)\b",
-            RegexOptions.CultureInvariant);
+        var code = CodeOnly(Source("ExecutionOrchestrator.Review.cs"));
 
-        foreach (var file in RepoLayout.ProductionSourceFiles)
-        {
-            Assert.DoesNotMatch(declarations, File.ReadAllText(file));
-        }
+        // The review is the last external work an execution does, and by the time it runs a
+        // result commit exists. Letting cancellation out of here would reach the pipeline's
+        // catch, which is written for a run that had not committed yet.
+        Assert.Contains(
+            "catch (OperationCanceledException) when (ct.IsCancellationRequested)",
+            code,
+            StringComparison.Ordinal);
+
+        // What it becomes is the absence of a review, which is never a pass.
+        var caught = Between(code, "catch (OperationCanceledException)", "await WriteReviewEvidenceAsync");
+
+        Assert.Contains("ReviewVerdict.Unusable", caught, StringComparison.Ordinal);
+        Assert.DoesNotContain("ReviewVerdict.Clean", caught, StringComparison.Ordinal);
+
+        // And every write that closes the run is driven by the bounded token, not by the one
+        // the caller just cancelled. Only the reviewer itself is given ct.
+        var closing = Between(code, "await WriteReviewEvidenceAsync", "private async Task WriteReviewEvidenceAsync");
+
+        Assert.DoesNotContain(" ct)", closing, StringComparison.Ordinal);
+        Assert.DoesNotContain(" ct,", closing, StringComparison.Ordinal);
+        Assert.Contains("record)", closing, StringComparison.Ordinal);
     }
 
     private static IEnumerable<string> OrchestrationSources() =>

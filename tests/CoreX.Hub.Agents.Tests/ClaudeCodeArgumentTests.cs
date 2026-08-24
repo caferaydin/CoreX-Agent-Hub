@@ -345,9 +345,7 @@ public sealed class ClaudeCodeArgumentTests
         foreach (var (mutate, expected) in new (Func<AgentRunRequest, AgentRunRequest>, string)[]
                  {
                      (r => r with { ResumeSessionId = Guid.NewGuid().ToString("D") }, "resume"),
-                     (r => r with { StructuredOutputSchema = "{\"type\":\"object\"}" }, "schema"),
-                     (r => r with { StructuredOutputPath = "C:/tmp/out.json" }, "structured"),
-                     (r => r with { PermissionProfile = AgentPermissionProfile.ReadOnly }, "read only"),
+                     (r => r with { StructuredOutputPath = "C:/tmp/out.json" }, "path"),
                  })
         {
             var plan = ClaudeCodeInvocationBuilder.Plan(mutate(Request()));
@@ -387,11 +385,104 @@ public sealed class ClaudeCodeArgumentTests
         Assert.True(capabilities.SupportsStreaming);
         Assert.True(capabilities.SupportsToolAllowlist);
 
+        // Genuinely implemented as of the reviewer mode: a schema is passed on and the
+        // structured result comes back, and a read only run really does run with reading
+        // tools under plan permission.
+        Assert.True(capabilities.SupportsStructuredSchema);
+        Assert.True(capabilities.SupportsReadOnlyMode);
+
         // Not claimed, and each refusal above is what "not claimed" costs the caller.
         Assert.False(capabilities.SupportsCostCap);
         Assert.False(capabilities.SupportsSessionResume);
-        Assert.False(capabilities.SupportsStructuredSchema);
-        Assert.False(capabilities.SupportsReadOnlyMode);
+    }
+
+
+    // ------------------------------------------------------------------- reviewer ------
+
+    [Fact]
+    public void A_read_only_request_asks_for_reading_tools_and_plan_permission()
+    {
+        var arguments = Plan(r => r with { PermissionProfile = AgentPermissionProfile.ReadOnly });
+
+        Assert.Equal("Read,Glob,Grep", Value(arguments, "--tools"));
+        Assert.Equal("plan", Value(arguments, "--permission-mode"));
+
+        // Nothing that can change a file or run a command is offered to a reviewer.
+        foreach (var forbidden in new[] { "Edit", "Write", "Bash" })
+        {
+            Assert.DoesNotContain(
+                arguments,
+                a => a.Split(',').Contains(forbidden, StringComparer.Ordinal));
+        }
+
+        Assert.DoesNotContain("acceptEdits", arguments);
+    }
+
+    [Fact]
+    public void A_supplied_schema_reaches_the_provider()
+    {
+        const string Schema = "{\"type\":\"object\"}";
+
+        var arguments = Plan(r => r with
+        {
+            PermissionProfile = AgentPermissionProfile.ReadOnly,
+            StructuredOutputSchema = Schema,
+        });
+
+        Assert.Equal(Schema, Value(arguments, "--json-schema"));
+    }
+
+    [Fact]
+    public void No_schema_means_no_schema_flag()
+    {
+        Assert.DoesNotContain("--json-schema", Plan());
+    }
+
+    [Fact]
+    public void The_expected_effective_tools_include_the_one_the_provider_adds_itself()
+    {
+        // Measured in the Phase 7A gate: with --json-schema the provider reports a
+        // StructuredOutput tool it was never asked for. Treating that as a breach would
+        // refuse every structured review; treating any extra tool as fine would miss a shell.
+        Assert.Equal(
+            ["Read", "Glob", "Grep", "StructuredOutput"],
+            ClaudeCodeInvocationBuilder.ExpectedEffectiveTools(
+                AgentPermissionProfile.ReadOnly, structuredSchemaRequested: true));
+
+        Assert.Equal(
+            ["Read", "Glob", "Grep"],
+            ClaudeCodeInvocationBuilder.ExpectedEffectiveTools(
+                AgentPermissionProfile.ReadOnly, structuredSchemaRequested: false));
+
+        Assert.Equal(
+            ["Read", "Edit", "Write", "Glob", "Grep"],
+            ClaudeCodeInvocationBuilder.ExpectedEffectiveTools(
+                AgentPermissionProfile.WorkspaceWrite, structuredSchemaRequested: false));
+    }
+
+    [Fact]
+    public void An_implementer_request_is_unchanged_by_the_reviewer_mode_existing()
+    {
+        // ADR-0020 is not relaxed because a second mode arrived.
+        var arguments = Plan();
+
+        Assert.Equal("Read,Edit,Write,Glob,Grep", Value(arguments, "--tools"));
+        Assert.Equal("acceptEdits", Value(arguments, "--permission-mode"));
+        Assert.DoesNotContain(arguments, a => a.Contains("Bash", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void A_structured_output_path_is_still_refused_even_though_a_schema_is_supported()
+    {
+        var plan = ClaudeCodeInvocationBuilder.Plan(Request(r => r with
+        {
+            PermissionProfile = AgentPermissionProfile.ReadOnly,
+            StructuredOutputSchema = "{\"type\":\"object\"}",
+            StructuredOutputPath = "C:/tmp/out.json",
+        }));
+
+        Assert.True(plan.IsRefused);
+        Assert.Contains("path", plan.Refusal!, StringComparison.OrdinalIgnoreCase);
     }
 
     private static IReadOnlyList<string> Plan(Func<AgentRunRequest, AgentRunRequest>? mutate = null)

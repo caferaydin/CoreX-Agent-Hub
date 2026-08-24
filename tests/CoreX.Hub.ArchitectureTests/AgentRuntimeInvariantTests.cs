@@ -290,10 +290,14 @@ public sealed class AgentRuntimeInvariantTests
     }
 
     [Fact]
-    public void Phase_seven_and_later_work_has_not_arrived_early()
+    public void Phase_eight_and_later_work_has_not_arrived_early()
     {
+        // ReviewEngine is deliberately absent from this list: the independent review is
+        // Phase 7 and has arrived. Automatic repair, a second provider family, billing and
+        // stored credentials have not, and none of them may appear as a side effect of
+        // wiring the reviewer.
         var declarations = new Regex(
-            @"\b(class|record|interface|struct)\s+(ReviewEngine|CodexRuntime|GeminiRuntime|RepairLoop|"
+            @"\b(class|record|interface|struct)\s+(CodexRuntime|GeminiRuntime|RepairLoop|"
             + @"RepairEngine|BillingAccount|CredentialStore|ProviderFallback)\b",
             RegexOptions.CultureInvariant);
 

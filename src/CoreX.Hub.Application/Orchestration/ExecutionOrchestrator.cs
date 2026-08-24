@@ -1,5 +1,6 @@
 using CoreX.Hub.Application.Abstractions;
 using CoreX.Hub.Application.Gates;
+using CoreX.Hub.Application.Review;
 using CoreX.Hub.Domain.Executions;
 using CoreX.Hub.Domain.Tasks;
 
@@ -27,6 +28,7 @@ public sealed partial class ExecutionOrchestrator
     private readonly IExecutionContextBuilder _context;
     private readonly IAgentRuntimeGateway _agent;
     private readonly IExecutionVerifier _verifier;
+    private readonly IExecutionReviewer? _reviewer;
     private readonly IExecutionEvidenceWriter _evidence;
     private readonly ExecutionSafetyGates _gates;
     private readonly IExecutionLeaseWriter _lease;
@@ -46,13 +48,20 @@ public sealed partial class ExecutionOrchestrator
         IExecutionLeaseWriter lease,
         IProcessLivenessProbe liveness,
         TimeProvider clock,
-        ExecutionOrchestratorOptions options)
+        ExecutionOrchestratorOptions options,
+        IExecutionReviewer? reviewer = null)
     {
         _store = store ?? throw new ArgumentNullException(nameof(store));
         _workspace = workspace ?? throw new ArgumentNullException(nameof(workspace));
         _context = context ?? throw new ArgumentNullException(nameof(context));
         _agent = agent ?? throw new ArgumentNullException(nameof(agent));
         _verifier = verifier ?? throw new ArgumentNullException(nameof(verifier));
+
+        // Optional, and the only optional port here. A repository that names no reviewer is
+        // not reviewed, which the Review step records as a skip with a reason - never as a
+        // clean review. Composition refuses to build a reviewer it cannot honour, so a null
+        // arriving here always means "none was configured" and never "one failed to load".
+        _reviewer = reviewer;
         _evidence = evidence ?? throw new ArgumentNullException(nameof(evidence));
         _gates = gates ?? throw new ArgumentNullException(nameof(gates));
         _lease = lease ?? throw new ArgumentNullException(nameof(lease));

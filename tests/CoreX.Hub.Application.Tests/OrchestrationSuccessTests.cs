@@ -43,7 +43,7 @@ public sealed class OrchestrationSuccessTests
 
         var review = steps.Single(s => s.Kind == ExecutionStepKind.Review);
         Assert.Equal(ExecutionStepState.Skipped, review.State);
-        Assert.Equal("ReviewNotConfiguredInPhase5", review.StateReason);
+        Assert.Equal("ReviewNotConfigured", review.StateReason);
     }
 
     [Fact]

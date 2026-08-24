@@ -51,32 +51,49 @@ public sealed partial class ExecutionOrchestrator
             ct);
     }
 
-    private async Task WriteEvidenceAsync(
+    /// <summary>
+    /// Stores one blob and the row that points at it.
+    ///
+    /// <paramref name="stepId"/> is what keeps two producers of the same kind apart. The
+    /// implementer's transcript belongs to the Agent step and the reviewer's to the Review
+    /// step; without that, an execution would hold two AgentStdout artifacts with nothing to
+    /// say which of them anybody was reading.
+    ///
+    /// Returns the row so a caller that needs to refer to this evidence later - the review,
+    /// which is anchored to the stored commit diff - can hold the artifact rather than go
+    /// looking for it by kind and hope there is only one.
+    /// </summary>
+    private async Task<EvidenceArtifact?> WriteEvidenceAsync(
         Execution execution,
         string text,
         EvidenceKind kind,
         string mediaType,
-        CancellationToken ct)
+        CancellationToken ct,
+        Guid? stepId = null)
     {
         var stored = await _evidence.WriteAsync(text, kind, mediaType, ct);
         if (stored is null)
         {
-            return;
+            return null;
         }
 
-        _store.AddEvidenceArtifact(new EvidenceArtifact(
+        var artifact = new EvidenceArtifact(
             Guid.CreateVersion7(),
             execution.OrganizationId,
             execution.Id,
-            null,
+            stepId,
             kind,
             stored.Sha256,
             stored.SizeBytes,
             stored.MediaType,
             stored.RedactionCount,
-            _clock.GetUtcNow()));
+            _clock.GetUtcNow());
+
+        _store.AddEvidenceArtifact(artifact);
 
         await _store.SaveChangesAsync(ct);
+
+        return artifact;
     }
 
     /// <summary>
