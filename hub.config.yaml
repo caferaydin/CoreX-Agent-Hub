@@ -48,9 +48,21 @@ organizations:
     isolationLevel: Logical
     requiresHardIsolation: false
 
-    # ADR-0007: agent alt süreci YALNIZCA bunları miras alır. USERPROFILE, aracın
-    # zaten açık olan iş istasyonu oturumunu bulabilmesi için gereklidir (ADR-0009);
-    # sağlayıcı anahtarı / uç noktası / ana süreç oturumu değişkenleri BURADA YOKTUR
+    # ADR-0007: bu organizasyona ait HER yönetilen alt süreç (agent ve doğrulama)
+    # boş ortamdan başlar ve YALNIZCA bunları miras alır.
+    #
+    # Liste iki tüketicinin birleşimidir:
+    #   - agent: USERPROFILE, aracın zaten açık olan iş istasyonu oturumunu bulması
+    #     için gereklidir (ADR-0009);
+    #   - doğrulama: NuGet geri yükleme, kullanıcı yapılandırması için APPDATA ve
+    #     makine yapılandırması için ProgramFiles/ProgramFiles(x86) ister. Bunlar
+    #     olmadan `dotnet restore` "Value cannot be null. (Parameter 'path1')" ile
+    #     düşer. Ölçüldü, varsayılmadı.
+    #
+    # ClaudeCodeRuntime kendi tavanına daraltır: agent alt süreci bu listenin
+    # yalnızca kendi ihtiyaç duyduğu alt kümesini görür.
+    #
+    # Sağlayıcı anahtarı / uç noktası / ana süreç oturumu değişkenleri BURADA YOKTUR
     # ve runtime tarafından ayrıca reddedilir.
     environmentAllowlist:
       - SystemRoot
@@ -61,6 +73,11 @@ organizations:
       - TEMP
       - TMP
       - USERPROFILE
+      - APPDATA
+      - LOCALAPPDATA
+      - ProgramFiles
+      - ProgramFiles(x86)
+      - NUMBER_OF_PROCESSORS
 
     agentProfiles:
       - name: claude-implementer

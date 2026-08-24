@@ -139,9 +139,20 @@ public sealed class ClaudeCodeFixture : IDisposable
         ResumeSessionId = resumeSessionId,
     };
 
-    /// <summary>What a real organization grants an agent child (ADR-0007).</summary>
+    /// <summary>
+    /// What a real organization grants its managed children (ADR-0007).
+    ///
+    /// Deliberately the production shape, which is wider than this runtime needs: the same
+    /// list has to serve a .NET verification toolchain, whose NuGet restore wants APPDATA
+    /// and a ProgramFiles. The adapter narrows to its own ceiling, and tests that assert on
+    /// the child environment are asserting on that narrowing rather than on a list invented
+    /// to match it.
+    /// </summary>
     public static IReadOnlyList<string> DefaultEnvironmentAllowlist { get; } =
-        ["SystemRoot", "windir", "SystemDrive", "PATH", "PATHEXT", "TEMP", "TMP", "USERPROFILE"];
+    [
+        "SystemRoot", "windir", "SystemDrive", "PATH", "PATHEXT", "TEMP", "TMP", "USERPROFILE",
+        "APPDATA", "LOCALAPPDATA", "ProgramFiles", "ProgramFiles(x86)", "NUMBER_OF_PROCESSORS",
+    ];
 
     public void Dispose()
     {

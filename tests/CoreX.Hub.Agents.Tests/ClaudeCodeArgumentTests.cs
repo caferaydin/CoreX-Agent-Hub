@@ -203,11 +203,46 @@ public sealed class ClaudeCodeArgumentTests
     }
 
     [Fact]
-    public void The_child_inherits_what_the_organization_granted_and_nothing_more()
+    public void The_child_inherits_the_organization_grant_narrowed_to_what_this_runtime_permits()
     {
-        var plan = ClaudeCodeInvocationBuilder.Plan(Request());
+        // The organization's list covers every managed child it owns, including a
+        // verification toolchain whose NuGet restore needs names this runtime has no use
+        // for. Those are dropped rather than passed on: the child sees the intersection,
+        // which is never more than either side allowed.
+        var granted = ClaudeCodeFixture.DefaultEnvironmentAllowlist;
 
-        Assert.Equal(ClaudeCodeFixture.DefaultEnvironmentAllowlist, plan.Invocation!.EnvironmentAllowlist);
+        Assert.Contains("APPDATA", granted);
+        Assert.Contains("ProgramFiles", granted);
+
+        var inherited = ClaudeCodeInvocationBuilder.Plan(Request()).Invocation!.EnvironmentAllowlist;
+
+        Assert.Equal(
+            ClaudeCodeInvocationBuilder.PermittedEnvironmentNames.Order(StringComparer.OrdinalIgnoreCase),
+            inherited.Order(StringComparer.OrdinalIgnoreCase));
+
+        Assert.DoesNotContain("APPDATA", inherited);
+        Assert.DoesNotContain("ProgramFiles", inherited);
+
+        // And nothing the runtime needs was lost on the way.
+        foreach (var required in ClaudeCodeInvocationBuilder.RequiredEnvironmentNames)
+        {
+            Assert.Contains(required, inherited);
+        }
+    }
+
+    [Fact]
+    public void A_grant_narrower_than_the_ceiling_is_passed_on_as_it_is()
+    {
+        // Narrowing only ever removes. A caller that granted less than the ceiling gets
+        // exactly what it granted, not the ceiling.
+        string[] granted = ["SystemRoot", "TEMP", "TMP", "USERPROFILE"];
+
+        var inherited = ClaudeCodeInvocationBuilder
+            .Plan(Request(r => r with { EnvironmentAllowlist = granted }))
+            .Invocation!
+            .EnvironmentAllowlist;
+
+        Assert.Equal(granted, inherited);
     }
 
     [Theory]
@@ -275,15 +310,33 @@ public sealed class ClaudeCodeArgumentTests
     }
 
     [Fact]
-    public void A_run_that_asks_for_more_than_the_runtime_permits_is_refused()
+    public void A_name_the_runtime_has_no_use_for_is_narrowed_away_rather_than_refused()
     {
+        // A harmless extra is not an error - the organization grants one list for every
+        // child it owns - but it never reaches this one either.
         var plan = ClaudeCodeInvocationBuilder.Plan(Request(r => r with
         {
-            EnvironmentAllowlist = [.. ClaudeCodeFixture.DefaultEnvironmentAllowlist, "APPDATA"],
+            EnvironmentAllowlist = [.. ClaudeCodeFixture.DefaultEnvironmentAllowlist, "COMSPEC", "DOTNET_ROOT"],
+        }));
+
+        Assert.False(plan.IsRefused, plan.Refusal);
+        Assert.DoesNotContain("COMSPEC", plan.Invocation!.EnvironmentAllowlist);
+        Assert.DoesNotContain("DOTNET_ROOT", plan.Invocation.EnvironmentAllowlist);
+    }
+
+    [Fact]
+    public void Narrowing_never_becomes_a_way_of_tolerating_a_credential()
+    {
+        // The distinction the narrowing turns on: a name this runtime does not need is
+        // dropped, and a name no child may ever inherit is still a refusal, so a credential
+        // can never be quietly filtered out and forgotten about.
+        var plan = ClaudeCodeInvocationBuilder.Plan(Request(r => r with
+        {
+            EnvironmentAllowlist = [.. ClaudeCodeFixture.DefaultEnvironmentAllowlist, "ANTHROPIC_API_KEY"],
         }));
 
         Assert.True(plan.IsRefused);
-        Assert.Contains("APPDATA", plan.Refusal!, StringComparison.Ordinal);
+        Assert.Contains("ANTHROPIC_API_KEY", plan.Refusal!, StringComparison.Ordinal);
     }
 
     [Fact]

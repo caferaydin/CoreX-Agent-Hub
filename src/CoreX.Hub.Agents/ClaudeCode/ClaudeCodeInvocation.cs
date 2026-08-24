@@ -93,10 +93,15 @@ public static class ClaudeCodeInvocationBuilder
     /// <summary>
     /// The widest environment this runtime will let a child inherit.
     ///
-    /// The child environment starts empty (ADR-0007) and the caller says what goes back
-    /// into it, so this is a ceiling rather than a list of what is used: a run asking for a
-    /// name that is not here is refused, because widening what an agent child can see is an
-    /// adapter decision and not a configuration one.
+    /// The child environment starts empty (ADR-0007) and the organization says what may go
+    /// back into it. That statement covers every managed child, not just this one - the same
+    /// list has to be enough for a .NET verification toolchain - so this is the adapter's own
+    /// ceiling within it, and a name the organization grants that is not here is simply not
+    /// passed on. The child ends up with the intersection, which is never more than either
+    /// side allowed and is usually less.
+    ///
+    /// Widening what an agent child can see stays an adapter decision: adding to this list is
+    /// a code change, and no configuration can reach past it.
     /// </summary>
     public static IReadOnlyList<string> PermittedEnvironmentNames { get; } =
         ["SystemRoot", "windir", "SystemDrive", "PATH", "PATHEXT", "TEMP", "TMP", "USERPROFILE"];
@@ -188,10 +193,17 @@ public static class ClaudeCodeInvocationBuilder
 
         return ClaudeCodeInvocationPlan.Ready(new ClaudeCodeInvocation
         {
-            // Exactly what the caller granted. The runtime checked it is workable and
-            // contains nothing dangerous; it does not quietly add to it.
             Arguments = arguments,
-            EnvironmentAllowlist = [.. request.EnvironmentAllowlist],
+
+            // What the organization granted, narrowed to what this runtime is willing to
+            // pass on. Never more than the caller allowed and never more than the adapter
+            // permits, so a name that only the verification toolchain needs stops here.
+            EnvironmentAllowlist =
+            [
+                .. request.EnvironmentAllowlist
+                    .Where(n => PermittedEnvironmentNames.Contains(n, StringComparer.OrdinalIgnoreCase))
+                    .Distinct(StringComparer.OrdinalIgnoreCase),
+            ],
             SessionId = sessionId,
             StandardInputText = request.UserPrompt,
         });
@@ -279,11 +291,10 @@ public static class ClaudeCodeInvocationBuilder
                        + "credentials, a provider endpoint or this process's own session.";
             }
 
-            if (!PermittedEnvironmentNames.Contains(name, StringComparer.OrdinalIgnoreCase))
-            {
-                return $"the run asks the child to inherit '{name}', which is outside the environment this "
-                       + "runtime permits; widening it is an adapter change, not a configuration one.";
-            }
+            // A name this runtime has no use for is not an error. The organization's list
+            // covers every managed child, including a verification toolchain with needs of
+            // its own, and one it does not share is narrowed away above rather than
+            // refused - the child sees less, which is the safe direction.
         }
 
         var missing = RequiredEnvironmentNames
