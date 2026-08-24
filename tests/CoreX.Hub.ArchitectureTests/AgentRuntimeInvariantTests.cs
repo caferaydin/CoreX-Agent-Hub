@@ -263,6 +263,33 @@ public sealed class AgentRuntimeInvariantTests
     }
 
     [Fact]
+    public void The_e1_acceptance_refinement_is_recorded_and_authorises_nothing()
+    {
+        // ADR-0021 explains why the original S.3 wording cannot be executed through a tool
+        // surface that has no shell. An acceptance clarification is all it is, so the guard
+        // checks both halves: that it exists, and that it did not quietly become a licence.
+        var adr = Directory
+            .EnumerateFiles(Path.Combine(RepoLayout.Root, "docs", "adr"), "ADR-0021-*.md")
+            .SingleOrDefault();
+
+        Assert.True(adr is not null, "the E1 acceptance refinement must be recorded as an ADR");
+
+        var text = File.ReadAllText(adr!);
+
+        Assert.Contains("Accepted", text, StringComparison.Ordinal);
+        Assert.Contains("ADR-0020", text, StringComparison.Ordinal);
+        Assert.Contains("RuntimePolicyViolation", text, StringComparison.Ordinal);
+        Assert.Contains("BaseCommitSha", text, StringComparison.Ordinal);
+
+        Assert.Contains("ADR-0021", File.ReadAllText(
+            Path.Combine(RepoLayout.Root, "docs", "adr", "README.md")), StringComparison.Ordinal);
+
+        // No production code may change because this record exists, and the shell is still
+        // absent from every production file.
+        Assert.Equal(["Read", "Edit", "Write", "Glob", "Grep"], ClaudeCodeInvocationBuilder.Tools);
+    }
+
+    [Fact]
     public void Phase_seven_and_later_work_has_not_arrived_early()
     {
         var declarations = new Regex(
