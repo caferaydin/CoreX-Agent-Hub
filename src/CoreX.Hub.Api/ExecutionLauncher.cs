@@ -189,7 +189,9 @@ public sealed class ExecutionLauncher : IHostedService, IAsyncDisposable
         // Yield first so the caller's await is never completed inline on this thread.
         await Task.Yield();
 
-        var signal = new NamedExecutionCancellation();
+        // The same primitive the operator's cancel reaches for, from the same place. A run
+        // that listened on something built differently would be a run nobody could stop.
+        var signal = HubCancellation.Signal();
         IDisposable? listening = null;
 
         using var stopping = CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token);
@@ -202,7 +204,7 @@ public sealed class ExecutionLauncher : IHostedService, IAsyncDisposable
                 stopping.Token,
                 executionId =>
                 {
-                    listening = signal.Listen(executionId, stopping.Cancel);
+                    listening = signal?.Listen(executionId, stopping.Cancel);
                     identity.TrySetResult(executionId);
                 });
 

@@ -217,6 +217,47 @@ public sealed class HubApiFixture : IAsyncDisposable
         return execution;
     }
 
+    /// <summary>
+    /// A live execution with no process behind it - what a host that died leaves.
+    ///
+    /// Deliberately not terminal and deliberately unlistened-for: that is the shape the
+    /// cancellation authority has to refuse rather than fake.
+    /// </summary>
+    public async Task<DomainExecution> SeedRunningExecutionAsync(HubTask task)
+    {
+        await using var scope = Runtime.OpenScope();
+
+        var now = DateTimeOffset.UtcNow;
+
+        var execution = new DomainExecution(
+            Guid.CreateVersion7(),
+            task.OrganizationId,
+            task.Id,
+            attemptNo: 1,
+            baseCommitSha: "a11ce0a11ce0a11ce0a11ce0a11ce0a11ce0a11c",
+            branchName: $"agent/{task.TaskKey.Value}/1",
+            worktreePath: Path.Combine(Root, "work", task.TaskKey.Value),
+            previousExecutionId: null,
+            nowUtc: now);
+
+        execution.Advance(ExecutionState.PreparingWorkspace, now);
+        execution.Advance(ExecutionState.BuildingContext, now);
+        execution.Advance(ExecutionState.RunningAgent, now);
+
+        scope.Store.AddExecution(execution);
+
+        var owning = await scope.Store.FindTaskAsync(task.Id, CancellationToken.None);
+
+        if (owning is not null && owning.State == TaskState.Ready)
+        {
+            owning.MarkRunning(now);
+        }
+
+        await scope.Store.SaveChangesAsync(CancellationToken.None);
+
+        return execution;
+    }
+
     public async Task<HubTask> SeedTaskAsync(string taskKey, TaskState state = TaskState.Ready)
     {
         await using var scope = Runtime.OpenScope();

@@ -236,6 +236,18 @@ public static class Dtos
         WorkspaceCleanup = r.WorkspaceCleanup.Outcome.ToString(),
     };
 
+    public static CancellationResultDto Cancellation(Application.Tasks.TaskCancellationResult r) => new()
+    {
+        State = r.State.ToString(),
+        TaskKey = r.TaskKey,
+        TaskState = r.TaskState.ToString(),
+        ExecutionId = r.ExecutionId,
+        ExecutionState = r.ExecutionState?.ToString(),
+        ResultCommitSha = r.ResultCommitSha,
+        WorktreePreserved = r.WorktreePreserved,
+        Detail = r.Detail,
+    };
+
     public static AgentProfileDto AgentProfile(AgentProfile p, bool runtimeDeclared) => new()
     {
         Name = p.Name,

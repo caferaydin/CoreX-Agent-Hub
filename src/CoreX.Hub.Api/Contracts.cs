@@ -379,6 +379,42 @@ public sealed record RunStartedDto
     public required string EventsUrl { get; init; }
 }
 
+public sealed record CancelBody
+{
+    public required string Actor { get; init; }
+
+    public string? Reason { get; init; }
+}
+
+/// <summary>
+/// What a cancellation achieved, in the authority's own vocabulary.
+///
+/// <see cref="State"/> is deliberately not a boolean. Stopping a live run is asking a
+/// separate process to stop and then reading the database to see whether it did, so
+/// "Cancelled", "CancellationRequested" and "Refused" are three different truths and
+/// flattening them would let a client show a task as finished while an agent was still
+/// writing.
+/// </summary>
+public sealed record CancellationResultDto
+{
+    public required string State { get; init; }
+
+    public required string TaskKey { get; init; }
+
+    public required string TaskState { get; init; }
+
+    public Guid? ExecutionId { get; init; }
+
+    public string? ExecutionState { get; init; }
+
+    public string? ResultCommitSha { get; init; }
+
+    /// <summary>Commitless work is kept. Reported so that is visible rather than assumed.</summary>
+    public required bool WorktreePreserved { get; init; }
+
+    public required string Detail { get; init; }
+}
+
 public sealed record HumanVerdictBody(Guid CriterionId, string Verdict, string? Note);
 
 public sealed record AcceptBody

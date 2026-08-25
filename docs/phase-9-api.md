@@ -40,6 +40,7 @@ değişikliği yok). `CoreX.Hub.Cli` artık yalnızca konsol adaptörüdür (`Pr
 | POST | `/tasks` | `TaskService.CreateAsync` |
 | POST | `/tasks/{taskKey}/ready` | Ready gate |
 | POST | `/tasks/{taskKey}/runs` | Yürütmeyi **başlatır ve döner** (202) |
+| POST | `/tasks/{taskKey}/cancel` | Mevcut iptal otoritesini çağırır |
 | GET | `/executions/{id}` | Commit'ler, adımlar, workspace, beklenmeyen commit |
 | GET | `/executions/{id}/steps` | Normalize edilmiş zaman çizelgesi |
 | GET | `/executions/{id}/verification` | Kalıcı komut sonuçları |
@@ -65,6 +66,7 @@ Her mutasyon ince bir çağrıdır:
 | task create | `TaskService.CreateAsync` |
 | ready | `TaskService.MarkReadyAsync` (ready gate) |
 | run | `ExecutionLaunchPlanner` + `ExecutionOrchestrator` |
+| cancel | `TaskCancellationService.CancelAsync` |
 | accept / override | `AcceptanceService.AcceptAsync` |
 | request-changes / reject | `AcceptanceService` |
 | review bloklar mı | `ReviewFindingGate` (ADR-0022) |
@@ -95,6 +97,55 @@ Kapanışta: iptal istenir (ADR-0023 dayanıklı sonlandırma), sınırlı süre
 bir sonraki süreç reconcile eder.
 
 **Tarayıcı kapanması, SSE kopması, sekme yenilenmesi bir yürütmeyi iptal etmez.**
+
+## 4b. İptal
+
+`POST /api/v1/tasks/{taskKey}/cancel`
+
+Gövde: `{ "actor": "...", "reason": "..." }` — başka hiçbir şey. Süreç kimliği, sinyal adı,
+sağlayıcı, runtime veya izin modu **istekten seçilemez**; guard bunu doğrular.
+
+**Hedef: TaskKey.** Mevcut CLI otoritesi de öyledir (`hub cancel <TASKKEY>`). "Bu görevi ve
+varsa şu an koşan yürütmesini durdur" demektir. İkinci bir yorum icat edilmedi.
+
+Otorite: `TaskCancellationService` — Faz 5'ten beri Application'da, sağlayıcı-nötr, dar bir
+port (`IExecutionCancellationSignal`) arkasında. **API'de hiçbir iptal kuralı yoktur.**
+Çıkarılacak bir şey yoktu; tek risk *inşanın* ikiye ayrılmasıydı ve o tek yere alındı
+(`HubCancellation`). Sinyal de tek yerde kurulur: koşan tarafın dinlediği ile operatörün
+istediği aynı adlandırılmış primitiftir.
+
+### Üç sonuç, tek boolean değil
+
+| `state` | Anlamı | HTTP |
+|---|---|---|
+| `Cancelled` | İş durdu, görev terminal | 200 |
+| `CancellationRequested` | Durması istendi, süresinde durmadı; **görev olduğu gibi bırakıldı** | 200 |
+| `Refused` | Hiçbir şey istenmedi, hiçbir şey değişmedi | 409 `cancellation_refused` |
+
+`CancellationRequested`'ı `Cancelled` diye raporlamak, hâlâ yazıyor olabilecek bir süreç
+hakkında iddiada bulunmak olurdu. İkisi ayrı tutulur.
+
+### Reddedilme durumları
+
+- Görev zaten terminal → *"the task is already X"*. Terminal durum **yeniden yazılmaz**,
+  yürütme kazandığı outcome'u korur.
+- Koşan yürütme var ama kimse dinlemiyor (host ölmüş) → reddedilir. Görev `Cancelled`
+  yazılmaz; bir sonraki hub komutu reconcile eder.
+- Platformda sinyal yok → reddedilir.
+
+Tekrarlanan iptal: ilkinden sonra görev terminaldir, ikincisi olağan terminal reddidir.
+İdempotency altyapısı **kurulmadı**.
+
+### İstemcinin bağlantısı
+
+İptal isteği otoriteye `CancellationToken.None` ile verilir. Canlı bir koşuyu durdurmak başka
+bir sürece sorup durduğunu görmeyi bekler; isteği başlatan bağlantı bunu **geri alamaz**.
+Sekmeyi kapatan bir tarayıcı yine de iptal etmiştir.
+
+### SSE
+
+İptal için ayrı bir kanal **eklenmedi**. Olağan sorgu ve durum akışı geçişi gösterir, çünkü
+otorite onu kalıcı hâle getirmiştir — gösteren tek şey budur.
 
 ## 5. SSE
 

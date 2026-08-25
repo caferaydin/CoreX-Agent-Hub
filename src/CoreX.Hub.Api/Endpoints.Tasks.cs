@@ -187,6 +187,42 @@ public static class TaskEndpoints
             }
         });
 
+        api.MapPost("/tasks/{taskKey}/cancel", async (
+            string taskKey,
+            string? organizationSlug,
+            CancelBody body,
+            HubRuntime runtime,
+            CancellationToken ct) =>
+        {
+            await using var scope = runtime.OpenScope();
+
+            try
+            {
+                // Stopping a live run means asking another process and waiting to see it
+                // stop, which takes as long as it takes. The request that started it must not
+                // be able to un-start it, so the authority is given a token that does not
+                // belong to the client - a browser that navigates away has still cancelled.
+                var result = await scope.Cancellation.CancelAsync(
+                    taskKey, organizationSlug, body.Reason, CancellationToken.None);
+
+                var dto = Dtos.Cancellation(result);
+
+                // Refused is a refusal, and it is reported as one rather than as a 200 with a
+                // discouraging string. The other two both mean the request was taken.
+                return result.State == Application.Tasks.TaskCancellationState.Refused
+                    ? ApiErrors.Refused("cancellation_refused", result.Detail)
+                    : Results.Ok(dto);
+            }
+            catch (Composition.Orchestration.AmbiguousLaunchException ex)
+            {
+                return ApiErrors.Invalid(ex.Message, [.. ex.Candidates]);
+            }
+            catch (Exception ex) when (ApiErrors.FromException(ex) is { } refusal)
+            {
+                return refusal;
+            }
+        });
+
         api.MapPost("/tasks/{taskKey}/runs", async (
             string taskKey,
             string? organizationSlug,

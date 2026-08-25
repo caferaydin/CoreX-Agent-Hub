@@ -119,7 +119,7 @@ public static class RunCommands
     {
         using var stopping = CancellationTokenSource.CreateLinkedTokenSource(ct);
 
-        var signal = new NamedExecutionCancellation();
+        var signal = HubCancellation.Signal();
         IDisposable? listening = null;
 
         try
@@ -128,7 +128,7 @@ public static class RunCommands
                 taskId,
                 agentProfileName,
                 stopping.Token,
-                executionId => listening = signal.Listen(executionId, stopping.Cancel));
+                executionId => listening = signal?.Listen(executionId, stopping.Cancel));
         }
         finally
         {
@@ -151,12 +151,11 @@ public static class RunCommands
 
         await RecoverPendingAsync(session, output, ct);
 
-        var service = new TaskCancellationService(
-            session.OpenStore,
-            OperatingSystem.IsWindows() ? new NamedExecutionCancellation() : null,
-            TimeProvider.System);
-
-        var result = await service.CancelAsync(taskKey, args.GetOption("org"), args.GetOption("reason"), ct);
+        // The same construction the HTTP surface gets. Every rule below it - what may be
+        // cancelled, whether a running execution can be stopped, what is written and when -
+        // has been the application's since Phase 5 and is untouched here.
+        var result = await HubCancellation.Build(session.OpenStore)
+            .CancelAsync(taskKey, args.GetOption("org"), args.GetOption("reason"), ct);
 
         Output.WriteField(output, "Task", result.TaskKey);
         Output.WriteField(output, "Result", result.State.ToString());

@@ -82,6 +82,9 @@ public sealed class HubScope : IAsyncDisposable
 {
     private readonly HubDbContext _context;
 
+    private static IHubStore Open(string dataDirectory, OrganizationScope scope) =>
+        new EfHubStore(HubDatabase.CreateContext(HubPaths.ResolveDatabasePath(dataDirectory), scope));
+
     internal HubScope(HubDbContext context, OrganizationScope scope, string dataDirectory, string configPath)
     {
         _context = context;
@@ -97,6 +100,7 @@ public sealed class HubScope : IAsyncDisposable
 
         Tasks = new TaskService(Store);
         Acceptance = new AcceptanceService(Store, new VerificationTruthReader(Store), release);
+        Cancellation = HubCancellation.Build(() => Open(dataDirectory, scope));
     }
 
     public OrganizationScope Scope { get; }
@@ -105,8 +109,46 @@ public sealed class HubScope : IAsyncDisposable
 
     public TaskService Tasks { get; }
 
+    /// <summary>
+    /// The operator's "stop this" decision, built the one way it is built anywhere.
+    ///
+    /// Not a new authority - <see cref="TaskCancellationService"/> already owns every rule,
+    /// and has since Phase 5. What this is here for is that constructing it wrongly is
+    /// possible and quiet: a caller that passed no signal would still compile, still answer,
+    /// and would silently be unable to stop a running execution. One construction means the
+    /// console and the HTTP surface cannot differ on that.
+    /// </summary>
+    public TaskCancellationService Cancellation { get; }
+
     /// <summary>The only path a human decision about an execution is recorded through.</summary>
     public AcceptanceService Acceptance { get; }
 
     public ValueTask DisposeAsync() => _context.DisposeAsync();
+}
+
+/// <summary>
+/// How the cancellation authority is constructed, in one place.
+///
+/// The signal is the part worth being careful about. It is a named cross-process primitive,
+/// which is a Windows facility here, and it is optional by design - the service treats its
+/// absence as "cannot stop running work" rather than pretending. Deciding that per caller
+/// would mean two adapters could disagree about whether cancelling a live run is even
+/// possible, so the decision is made here and nowhere else.
+/// </summary>
+public static class HubCancellation
+{
+    /// <summary>
+    /// The cross-process signal, or null where there is none.
+    ///
+    /// Two callers need it and they need it for opposite reasons: a runner listens so its
+    /// execution can be stopped, and an operator asks so it stops. Both are the same named
+    /// primitive, and building it in one place is what makes "started over HTTP" and
+    /// "started at a terminal" equally cancellable.
+    /// </summary>
+    public static IExecutionCancellationSignal? Signal() =>
+        OperatingSystem.IsWindows() ? new NamedExecutionCancellation() : null;
+
+    /// <summary>The operator's decision, built the one way it is built anywhere.</summary>
+    public static TaskCancellationService Build(Func<IHubStore> open) =>
+        new(open, Signal(), TimeProvider.System);
 }

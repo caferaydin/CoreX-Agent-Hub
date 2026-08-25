@@ -226,6 +226,126 @@ public sealed class ApiInvariantTests
     }
 
     [Fact]
+    public void Cancellation_is_one_authority_that_both_adapters_ask()
+    {
+        // The service itself was never duplicated - it has been the application's since
+        // Phase 5. What this guards is that neither adapter builds its own, because building
+        // it without a signal compiles, answers, and silently cannot stop a live run.
+        var builders = RepoLayout.ProductionSourceFiles
+            .Where(f => CodeOnly(File.ReadAllText(f))
+                .Contains("new TaskCancellationService", StringComparison.Ordinal))
+            .Select(Path.GetFileName)
+            .ToList();
+
+        Assert.Empty(builders);
+
+        // And the named OS primitive is constructed in exactly one place, so the runner that
+        // listens and the operator who asks cannot be holding different mechanisms.
+        var signals = RepoLayout.ProductionSourceFiles
+            .Where(f => CodeOnly(File.ReadAllText(f))
+                .Contains("new NamedExecutionCancellation", StringComparison.Ordinal))
+            .Select(Path.GetFileName)
+            .ToList();
+
+        Assert.Equal(["HubRuntime.cs"], signals);
+    }
+
+    [Fact]
+    public void The_api_holds_no_cancellation_rule_of_its_own()
+    {
+        foreach (var file in ApiSources())
+        {
+            var code = CodeOnly(File.ReadAllText(file));
+            var name = RepoLayout.Relative(file);
+
+            foreach (var forbidden in new[]
+                     {
+                         // The rules: which states may be cancelled, how long to wait for a
+                         // runner to stop, what to write when it does. All application's.
+                         "new TaskCancellationService", "NamedExecutionCancellation",
+                         "TryRequest(", "StopDeadline", "PollInterval",
+                         ".CancelByOperator(", "TaskState.Cancelled",
+                     })
+            {
+                Assert.False(code.Contains(forbidden, StringComparison.Ordinal), $"{name}: {forbidden}");
+            }
+        }
+
+        // What it does do is ask, through the shared construction.
+        Assert.Contains(
+            ApiSources().Select(File.ReadAllText),
+            s => s.Contains("Cancellation.CancelAsync", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void The_launchers_run_dictionary_is_not_a_cancellation_route()
+    {
+        // Starting a run legitimately needs the launcher; stopping one must not. Its
+        // dictionary tracks what this process happens to be driving, which is a different
+        // question from what may be cancelled: an execution started by another process is
+        // cancellable and absent from it, and one present in it is not cancellable because
+        // it is there.
+        var tasks = File.ReadAllText(Source("Endpoints.Tasks.cs"));
+
+        var from = tasks.IndexOf("/tasks/{taskKey}/cancel", StringComparison.Ordinal);
+        var to = tasks.IndexOf("/tasks/{taskKey}/runs", StringComparison.Ordinal);
+
+        Assert.True(from > 0 && to > from, "the cancel and run routes are no longer where this guard reads them");
+
+        var cancelling = CodeOnly(tasks[from..to]);
+
+        foreach (var forbidden in new[] { "ExecutionLauncher", "launcher", "_running", "Running" })
+        {
+            Assert.False(cancelling.Contains(forbidden, StringComparison.Ordinal), forbidden);
+        }
+
+        // The launcher exposes its running set for diagnostics, and nothing in the API reads
+        // it at all - so it cannot become an authority by accident.
+        foreach (var file in ApiSources().Where(f => !f.EndsWith("ExecutionLauncher.cs", StringComparison.Ordinal)))
+        {
+            Assert.DoesNotContain(".Running", CodeOnly(File.ReadAllText(file)), StringComparison.Ordinal);
+        }
+    }
+
+    [Fact]
+    public void A_cancellation_request_cannot_reach_past_a_hub_identity()
+    {
+        // Only a task and a person. No process id, no signal name, no provider, no permission
+        // - so nothing reachable over the network can name an OS handle.
+        Assert.Equal(
+            ["Actor", "Reason"],
+            typeof(Api.CancelBody).GetProperties().Select(p => p.Name).Order(StringComparer.Ordinal));
+
+        foreach (var property in typeof(Api.CancelBody).GetProperties())
+        {
+            foreach (var forbidden in new[] { "Process", "Signal", "Handle", "Execution", "Pid", "Name" })
+            {
+                Assert.False(
+                    property.Name.Contains(forbidden, StringComparison.OrdinalIgnoreCase),
+                    $"CancelBody.{property.Name} would let a request name {forbidden}");
+            }
+        }
+    }
+
+    [Fact]
+    public void There_is_no_generic_status_mutation_endpoint()
+    {
+        // Cancel, accept, reject and request-changes are four decisions, not one field. A
+        // PATCH that took a target state would make them interchangeable to a client and
+        // would need the rules restated here to tell them apart.
+        foreach (var file in ApiSources())
+        {
+            var code = CodeOnly(File.ReadAllText(file));
+            var name = RepoLayout.Relative(file);
+
+            foreach (var forbidden in new[] { "MapPatch(", "MapPut(", "\"/status\"", "TargetState", "NewState" })
+            {
+                Assert.False(code.Contains(forbidden, StringComparison.Ordinal), $"{name}: {forbidden}");
+            }
+        }
+    }
+
+    [Fact]
     public void No_user_interface_and_no_later_phase_work_arrived()
     {
         foreach (var file in ApiSources())
