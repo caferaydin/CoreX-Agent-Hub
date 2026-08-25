@@ -122,7 +122,18 @@ public sealed class ReviewCompositionTests
         var markdown = await File.ReadAllTextAsync(contract);
 
         Assert.Contains("Untrusted content", markdown, StringComparison.Ordinal);
-        Assert.Contains("Do not modify any file", markdown, StringComparison.Ordinal);
+        Assert.Contains("Do not modify anything", markdown, StringComparison.Ordinal);
+
+        // Reading the checkout is stated as permitted, and separately from the prohibition.
+        //
+        // This distinction is not cosmetic. On one provider reading a file is a tool of its
+        // own and "run no commands" costs nothing; on another, reading a file IS a sandboxed
+        // command, and the same sentence quietly reduces the reviewer to whatever the diff
+        // happened to include. An instruction whose meaning depends on the provider is not a
+        // provider-neutral contract, so the rule now names effects rather than mechanisms.
+        Assert.Contains("Read unchanged files", markdown, StringComparison.Ordinal);
+        Assert.Contains("Reading the checkout is none of those things", markdown, StringComparison.Ordinal);
+        Assert.DoesNotContain("Do not run any command", markdown, StringComparison.Ordinal);
 
         // Deliberately says nothing about how many findings to produce: a reviewer told to
         // find something will find something, and a threshold calibrated against that number
