@@ -273,6 +273,14 @@ public sealed class ExecutionComposition
         var reviewRoot = Path.Combine(session.DataDirectory, "review");
         var snapshotRoot = Path.Combine(config.Workspace.Root, "_review");
 
+        // Created here, and not left to the first snapshot to create.
+        //
+        // A snapshot root is a trust root, and the path guard refuses one that does not
+        // exist - it has nothing to canonicalise and cannot tell a real directory from a
+        // reparse point that is not there yet. Every other Hub owned root on this path is
+        // created the same way for the same reason.
+        Directory.CreateDirectory(snapshotRoot);
+
         return new ReviewEngine(
             new ReviewWorkspaceGateway(workspaceManager, location, snapshotRoot),
             new ReviewRuntimeGateway(runtime, profile, organization.EnvironmentAllowlist),

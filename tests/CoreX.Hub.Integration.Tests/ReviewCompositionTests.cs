@@ -130,6 +130,33 @@ public sealed class ReviewCompositionTests
         Assert.Contains("no minimum and no maximum", markdown, StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// The review snapshot root exists once a reviewer is composed.
+    ///
+    /// Found by the Phase 7 acceptance rather than by a deterministic test: every real stage
+    /// succeeded and the review then refused, because a snapshot root is a trust root and the
+    /// path guard has nothing to canonicalise when the directory is not there. The failure
+    /// was honest - ReviewUnusable, never a pass - but it cost a whole real execution to
+    /// learn, and nothing in the suite could have said it earlier: the orchestration tests
+    /// inject a reviewer directly and never build this gateway.
+    /// </summary>
+    [Fact]
+    public async Task Composing_a_reviewer_creates_the_root_its_snapshots_will_live_in()
+    {
+        await using var fixture = await CompositionFixture.CreateAsync();
+
+        var snapshotRoot = Path.Combine(fixture.WorkspaceRoot, "_review");
+
+        Assert.False(Directory.Exists(snapshotRoot));
+
+        var composition = fixture.Compose(fixture.Reviewer());
+
+        Assert.True(composition.ReviewRequired);
+        Assert.True(
+            Directory.Exists(snapshotRoot),
+            "a snapshot root that does not exist is refused by the path guard");
+    }
+
     [Fact]
     public void The_shipped_configuration_names_a_reviewer_the_hub_can_honour()
     {
@@ -225,6 +252,8 @@ public sealed class ReviewCompositionTests
         public string Root { get; }
 
         public string DataDirectory => _hub.DataDirectory;
+
+        public string WorkspaceRoot => Config.Workspace.Root;
 
         public Organization Organization { get; }
 
