@@ -146,7 +146,7 @@ public sealed class CodexCompositionTests
     }
 
     [Fact]
-    public void The_active_reviewer_is_still_the_claude_one()
+    public void The_active_reviewer_is_the_codex_one_and_a_line_of_configuration_is_what_made_it_so()
     {
         var config = new YamlHubConfigReader().Read(Path.Combine(FindRepositoryRoot(), "hub.config.yaml"));
 
@@ -155,9 +155,27 @@ public sealed class CodexCompositionTests
             .Projects.Single(p => p.Slug == "agent-hub")
             .Repositories.Single(r => r.Slug == "corex-agent-hub");
 
-        // The Codex profile exists and is not in use. A foundation slice that quietly entered
-        // the real review path would make the switch impossible to accept on its own terms.
-        Assert.Equal("claude-reviewer", repository.ReviewerProfile);
+        // The whole Phase 8 claim, asserted as data: this repository is reviewed by the
+        // second provider, and the only thing that changed to make it so is which profile
+        // name this line carries.
+        Assert.Equal("codex-reviewer", repository.ReviewerProfile);
+
+        var reviewer = config.Organizations
+            .Single(o => o.Slug == "core-x-logic")
+            .AgentProfiles.Single(p => p.Name == repository.ReviewerProfile);
+
+        Assert.Equal(AgentRole.Reviewer.ToString(), reviewer.Role);
+        Assert.Equal(AgentPermissionProfile.ReadOnly.ToString(), reviewer.PermissionProfile);
+
+        // And it reaches a runtime this installation actually declares, so the switch cannot
+        // be a name that resolves to nothing.
+        Assert.Contains(config.Agents.CodexRuntimes, r => r.Key == reviewer.RuntimeKey);
+
+        // The Claude reviewer profile is still declared and simply not selected. A switch
+        // that deleted the alternative would not be a switch.
+        Assert.Contains(
+            config.Organizations.Single(o => o.Slug == "core-x-logic").AgentProfiles,
+            p => p.Name == "claude-reviewer");
     }
 
     private static AgentProfile Profile(string runtimeKey) => new(

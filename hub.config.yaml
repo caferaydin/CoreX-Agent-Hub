@@ -143,7 +143,7 @@ organizations:
               - main
 
             # Hangi profilin gozden gecirdigini KATALOG soyler, kod degil.
-            reviewerProfile: claude-reviewer
+            reviewerProfile: codex-reviewer
             verificationProfiles:
               - name: hub-release-full
                 isDefault: true

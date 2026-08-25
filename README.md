@@ -25,7 +25,7 @@ Bağımsız review: [`docs/phase-7-review.md`](docs/phase-7-review.md).
 | Faz 6 | ClaudeCodeRuntime + gerçek agent kabulü | **TAMAM** |
 | Faz 7 | Bağımsız review + inceleme override kabulü | **TAMAM** |
 | Faz 8A | Sabitlenmiş `CodexRuntime` (ikinci gerçek sağlayıcı, sağlayıcı-nötr temel) | **TAMAM** |
-| Faz 8B | Codex reviewer profil geçişi + gerçek ürün review kabulü | uygulanmadı |
+| Faz 8B | Codex reviewer profil geçişi + gerçek ürün review kabulü | **TAMAM** |
 | Faz 9 | Minimal API + React UI | uygulanmadı |
 | Faz 10 | Sertleştirme + WSL2 sert izolasyon + Kronos kapısı | uygulanmadı |
 
