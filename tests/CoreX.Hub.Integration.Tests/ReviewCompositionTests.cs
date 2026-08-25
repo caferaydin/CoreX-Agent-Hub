@@ -168,23 +168,31 @@ public sealed class ReviewCompositionTests
             .Single(p => p.Slug == "agent-hub")
             .Repositories.Single(r => r.Slug == "corex-agent-hub");
 
-        Assert.Equal("claude-reviewer", repository.ReviewerProfile);
+        Assert.Equal("codex-reviewer", repository.ReviewerProfile);
 
         var profile = Assert.Single(organization.AgentProfiles, p => p.Name == repository.ReviewerProfile);
 
         Assert.Equal(AgentRole.Reviewer.ToString(), profile.Role);
         Assert.Equal(AgentPermissionProfile.ReadOnly.ToString(), profile.PermissionProfile);
-        Assert.Equal("claude-code", profile.RuntimeKey);
         Assert.False(string.IsNullOrWhiteSpace(profile.Model));
         Assert.False(string.IsNullOrWhiteSpace(profile.Effort));
 
-        // The reviewer and the implementer are different profiles reaching the same declared
-        // runtime. Phase 8 points the reviewer elsewhere by editing this profile and nothing
-        // else.
+        // What this test asserted through Phase 7 was that the reviewer and the implementer
+        // were two profiles over one runtime. That was the weaker version of the claim. They
+        // now reach two different providers, and the edit that did it was this one line of
+        // configuration - the profiles, the roles and the permissions are unchanged.
         var implementer = Assert.Single(organization.AgentProfiles, p => p.Name == "claude-implementer");
 
-        Assert.Equal(implementer.RuntimeKey, profile.RuntimeKey);
+        Assert.NotEqual(implementer.RuntimeKey, profile.RuntimeKey);
         Assert.NotEqual(implementer.PermissionProfile, profile.PermissionProfile);
+
+        // The runtime it names is declared by this installation, so the reviewer resolves to
+        // something real rather than to a name nobody registered.
+        Assert.Contains(config.Agents.CodexRuntimes, r => r.Key == profile.RuntimeKey);
+
+        // And the Claude reviewer is still declared, unselected. A switch that removed the
+        // alternative would not be a switch.
+        Assert.Contains(organization.AgentProfiles, p => p.Name == "claude-reviewer");
     }
 
     private static string FindRepositoryRoot()
