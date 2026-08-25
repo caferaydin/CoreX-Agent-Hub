@@ -249,9 +249,13 @@ public sealed class ProviderNeutralityTests
         {
             var name = RepoLayout.Relative(file);
 
-            // The secret pattern catalog names an OPENAI token shape. That is a secret to
-            // redact, not a backend to call, and the exemption is proven below.
-            if (string.Equals(Path.GetFileName(file), SecretCatalogFileName, StringComparison.Ordinal))
+            // Two files name an OPENAI variable, and neither of them calls anything.
+            //
+            // The secret pattern catalog names a token shape to redact. The Codex invocation
+            // builder names an environment prefix a child process never receives - a denial
+            // list, which is the opposite of a gateway. Both exemptions are proven below.
+            if (string.Equals(Path.GetFileName(file), SecretCatalogFileName, StringComparison.Ordinal)
+                || string.Equals(Path.GetFileName(file), CodexInvocationFileName, StringComparison.Ordinal))
             {
                 continue;
             }
@@ -272,6 +276,20 @@ public sealed class ProviderNeutralityTests
         var catalogCode = CodeOnly(File.ReadAllText(catalog));
         Assert.Contains("OPENAI_TOKEN", catalogCode, StringComparison.Ordinal);
         Assert.DoesNotContain("HttpClient", catalogCode, StringComparison.Ordinal);
+
+        // Same for the second exemption: the only OPENAI in it sits in the list of names a
+        // child process is refused, and a name that is refused cannot be a name that is used.
+        var invocation = CodeOnly(File.ReadAllText(
+            RepoLayout.ProductionSourceFiles.Single(f =>
+                string.Equals(Path.GetFileName(f), CodexInvocationFileName, StringComparison.Ordinal))));
+
+        Assert.Contains("ForbiddenEnvironmentPrefixes", invocation, StringComparison.Ordinal);
+        Assert.DoesNotContain("OPENAI_API_KEY", invocation, StringComparison.Ordinal);
+
+        foreach (var construct in forbidden.Where(c => !string.Equals(c, "OpenAI", StringComparison.Ordinal)))
+        {
+            Assert.False(invocation.Contains(construct, StringComparison.OrdinalIgnoreCase), construct);
+        }
     }
 
     // ------------------------- ACTIVE NOW: access, authentication and billing --------
@@ -566,6 +584,8 @@ public sealed class ProviderNeutralityTests
     // ------------------------------------------------------------------ helpers -------
 
     private const string SecretCatalogFileName = "SecretPatternCatalog.cs";
+
+    private const string CodexInvocationFileName = "CodexInvocation.cs";
 
     private static AgentProfile NewProfile(string provider, string runtimeKey, string? model) =>
         new(

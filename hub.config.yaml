@@ -37,6 +37,15 @@ agents:
     - key: claude-code
       executablePath: 'C:\Users\krono\.local\bin\claude.exe'
 
+  # Codex SABITLENMIS bir surume baglidir. Bu saglayicinin review'un dayandigi davranisi
+  # surumler arasinda iki yonde de degisti (G8-2 / G8-2B / G8-2C olcumleri), bu yuzden
+  # "kurulu olan bir Codex" kullanilabilir bir gercek degildir. PATH'e bakilmaz: bu makinede
+  # global olarak 0.149.1 kurulu ve o surum reviewer olarak KABUL EDILMEDI.
+  codexRuntimes:
+    - key: codex-reviewer-runtime
+      executablePath: 'D:\cx\_tools\codex-0.130.0\node_modules\@openai\codex-win32-x64\vendor\x86_64-pc-windows-msvc\codex\codex.exe'
+      acceptedVersion: '0.130.0'
+
 organizations:
 
   # --- Core X Logic: Hub'ın kendi repository'si (G6-3) ----------------------
@@ -100,6 +109,22 @@ organizations:
         runtimeKey: claude-code
         permissionProfile: ReadOnly
         model: claude-opus-5
+        effort: high
+        softTimeoutSeconds: 900
+        idleTimeoutSeconds: 1200
+        hardTimeoutSeconds: 1800
+
+      # Faz 8A: profil VAR ama ETKIN DEGIL. Repository hala claude-reviewer'i gosteriyor;
+      # gecis Faz 8B'nin isidir. Profilin varligi tek basina review yoluna girmez.
+      #
+      # Model gpt-5.5 bilerek secildi: olculdu ki gpt-5.6-sol code_mode_only + multi_agent
+      # yuzeyini zorunlu kiliyor, gpt-5.5 ise Direct Mode ve multi-agent araci sunmuyor.
+      - name: codex-reviewer
+        role: Reviewer
+        provider: Codex
+        runtimeKey: codex-reviewer-runtime
+        permissionProfile: ReadOnly
+        model: gpt-5.5
         effort: high
         softTimeoutSeconds: 900
         idleTimeoutSeconds: 1200

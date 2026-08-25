@@ -33,6 +33,7 @@ v1.1.1 esas alınır.
 | ADR-0021 | Faz 6 native Windows E1 kabul inceltmesi: araç yüzeyi ölçümü + deterministik K1 | Accepted |
 | ADR-0022 | Bağımsız review kanıt üretir, karar üretmez; kapı Hub'ındır | Accepted |
 | ADR-0023 | Kesilen bir yazmadan sonra otorite veritabanıdır | Accepted |
+| ADR-0024 | Sabitlenmiş sağlayıcı sürümü çalışma zamanının parçasıdır | Accepted |
 
 ## Onaylanmış Faz 0 format kararları
 

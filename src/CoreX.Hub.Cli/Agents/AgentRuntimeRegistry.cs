@@ -49,6 +49,7 @@ public static class AgentRuntimeRegistry
 
         AddScripted(runtimes, config, Processes);
         ClaudeCodeRuntimeFactory.AddDeclared(runtimes, config, workspaceRoot, Processes);
+        CodexRuntimeFactory.AddDeclared(runtimes, config, workspaceRoot, Processes);
 
         return runtimes;
     }

@@ -51,6 +51,16 @@ public sealed class HubAgentsConfig
     /// decisions in the adapter, not deployment settings.
     /// </summary>
     public List<ClaudeCodeRuntimeConfig> ClaudeCodeRuntimes { get; set; } = [];
+
+    /// <summary>
+    /// The pinned Codex installations available here.
+    ///
+    /// Its own section for the same reason the others have one: what a family needs to be
+    /// installable differs. This one needs the exact build, because the behaviour a review
+    /// depends on has moved between Codex releases in both directions, and the release a
+    /// developer machine has on PATH is usually not the accepted one.
+    /// </summary>
+    public List<CodexRuntimeConfig> CodexRuntimes { get; set; } = [];
 }
 
 public sealed class ScriptedRuntimeConfig
@@ -81,6 +91,33 @@ public sealed class ClaudeCodeRuntimeConfig
     /// on PATH, so an operator reading this file can see exactly what will run.
     /// </summary>
     public string ExecutablePath { get; set; } = string.Empty;
+}
+
+/// <summary>
+/// One pinned Codex installation on this machine.
+///
+/// No credential, no token, no endpoint and no account: authentication is the workstation's
+/// own Codex session, out of band, and the Hub neither reads nor replaces it.
+/// </summary>
+public sealed class CodexRuntimeConfig
+{
+    /// <summary>The <c>runtimeKey</c> an agent profile names to reach this runtime.</summary>
+    public string Key { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Absolute path to the pinned executable.
+    ///
+    /// Never a bare name. This runtime does not look on PATH, and on a machine where a
+    /// newer Codex is installed globally, looking there would silently run the review on a
+    /// build that was measured and rejected.
+    /// </summary>
+    public string ExecutablePath { get; set; } = string.Empty;
+
+    /// <summary>
+    /// The exact version that path must report. Not a floor and not a range: a build nobody
+    /// has measured is refused rather than tried.
+    /// </summary>
+    public string AcceptedVersion { get; set; } = string.Empty;
 }
 
 /// <summary>

@@ -215,8 +215,9 @@ public sealed class LoopZeroInvariantTests
             Assert.False(pattern.IsMatch(code), RepoLayout.Relative(file) + " reaches the network");
         }
 
-        // And a provider is named in three places only. Everywhere else the runtime a profile
-        // gets is whatever composition registered under its key, and the code cannot tell.
+        // And a provider is named in three kinds of place only. Everywhere else the runtime a
+        // profile gets is whatever composition registered under its key, and the code cannot
+        // tell - which is what made adding a second real provider a configuration change.
         //
         //   the adapter        naming the thing it adapts is its entire job
         //   the wiring seam    naming an adapter in order to register it is composition's job
@@ -262,21 +263,30 @@ public sealed class LoopZeroInvariantTests
             exempt,
             f => Path.GetFileName(f).Equals("HubConfig.cs", StringComparison.Ordinal));
 
-        var declaration = typeof(Application.Configuration.ClaudeCodeRuntimeConfig).GetProperties();
+        Type[] declarations =
+        [
+            typeof(Application.Configuration.ClaudeCodeRuntimeConfig),
+            typeof(Application.Configuration.CodexRuntimeConfig),
+        ];
 
-        Assert.NotEmpty(declaration);
-
-        foreach (var property in declaration)
+        foreach (var declaration in declarations)
         {
-            foreach (var forbidden in new[]
-                     {
-                         "Tool", "Bash", "Shell", "Permission", "Mode", "Arg", "Flag",
-                         "ApiKey", "Token", "Secret", "BaseUrl", "Endpoint", "Account",
-                     })
+            var properties = declaration.GetProperties();
+
+            Assert.NotEmpty(properties);
+
+            foreach (var property in properties)
             {
-                Assert.False(
-                    property.Name.Contains(forbidden, StringComparison.OrdinalIgnoreCase),
-                    $"ClaudeCodeRuntimeConfig.{property.Name} would make {forbidden} a deployment setting");
+                foreach (var forbidden in new[]
+                         {
+                             "Tool", "Bash", "Shell", "Permission", "Mode", "Arg", "Flag",
+                             "ApiKey", "Token", "Secret", "BaseUrl", "Endpoint", "Account",
+                         })
+                {
+                    Assert.False(
+                        property.Name.Contains(forbidden, StringComparison.OrdinalIgnoreCase),
+                        $"{declaration.Name}.{property.Name} would make {forbidden} a deployment setting");
+                }
             }
         }
 
@@ -318,16 +328,21 @@ public sealed class LoopZeroInvariantTests
         var name = Path.GetFileName(path);
 
         // The adapter, wherever it lives: a provider named folder inside an agents project.
-        if (path.Contains($"{separator}ClaudeCode{separator}", StringComparison.OrdinalIgnoreCase))
+        // One entry per family, listed rather than pattern matched, so a third family cannot
+        // become exempt by being dropped into a folder with a plausible name.
+        foreach (var family in new[] { "ClaudeCode", "Codex" })
         {
-            return true;
+            if (path.Contains($"{separator}{family}{separator}", StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
         }
 
         return name switch
         {
             // The composition root's single runtime wiring seam, and the adapter factory it
             // calls. Both are under CoreX.Hub.Cli, which is asserted above.
-            "AgentRuntimeRegistry.cs" or "ClaudeCodeRuntimeFactory.cs" => true,
+            "AgentRuntimeRegistry.cs" or "ClaudeCodeRuntimeFactory.cs" or "CodexRuntimeFactory.cs" => true,
 
             // Where a runtime family declares what it needs to be installable.
             "HubConfig.cs" => true,

@@ -28,8 +28,10 @@ public sealed class AgentRuntimeInvariantTests
                 .Select(m => m.Name)
                 .Order(StringComparer.Ordinal));
 
-        // Two implementations now, and both implement the same three members. A provider that
-        // needed a fourth would have made the other one implement a lie.
+        // Three implementations now - two real providers and the deterministic fixture - and
+        // all three implement the same three members. The second real provider is the test
+        // that matters: a contract shaped around one vendor would have needed a fourth member
+        // here, and adding one would have made the other two implement a lie.
         var runtimes = ArchitectureAssemblies.Agents
             .GetTypes()
             .Where(t => typeof(IAgentRuntime).IsAssignableFrom(t) && t is { IsInterface: false, IsAbstract: false })
@@ -37,7 +39,7 @@ public sealed class AgentRuntimeInvariantTests
             .Order(StringComparer.Ordinal)
             .ToList();
 
-        Assert.Equal(["ClaudeCodeRuntime", "ScriptedAgentRuntime"], runtimes);
+        Assert.Equal(["ClaudeCodeRuntime", "CodexRuntime", "ScriptedAgentRuntime"], runtimes);
     }
 
     [Fact]
@@ -292,12 +294,17 @@ public sealed class AgentRuntimeInvariantTests
     [Fact]
     public void Phase_eight_and_later_work_has_not_arrived_early()
     {
-        // ReviewEngine is deliberately absent from this list: the independent review is
-        // Phase 7 and has arrived. Automatic repair, a second provider family, billing and
-        // stored credentials have not, and none of them may appear as a side effect of
-        // wiring the reviewer.
+        // ReviewEngine and CodexRuntime are deliberately absent from this list: the
+        // independent review is Phase 7 and the pinned second provider is Phase 8, and both
+        // have arrived. Automatic repair, a third provider family, billing, stored
+        // credentials and silent provider substitution have not, and none of them may appear
+        // as a side effect of adding a provider.
+        //
+        // ProviderFallback earns its place here twice over now that a second real runtime
+        // exists: falling back from one to the other is exactly the shortcut that would make
+        // a review's finding untraceable to the build that produced it.
         var declarations = new Regex(
-            @"\b(class|record|interface|struct)\s+(CodexRuntime|GeminiRuntime|RepairLoop|"
+            @"\b(class|record|interface|struct)\s+(GeminiRuntime|RepairLoop|"
             + @"RepairEngine|BillingAccount|CredentialStore|ProviderFallback)\b",
             RegexOptions.CultureInvariant);
 
