@@ -69,24 +69,24 @@ describe('App shell', () => {
     }
   });
 
-  it('has no mutation control anywhere in the shell', () => {
+  it('offers the one action this phase added, and none of the ones it did not', () => {
     stubFetch({ '/api/v1/tasks': { body: taskPage([]) } });
 
     show();
 
-    for (const forbidden of [
-      /create/i,
-      /new task/i,
-      /ready/i,
-      /^run$/i,
-      /cancel/i,
-      /accept/i,
-      /override/i,
-      /request changes/i,
-      /reject/i,
-    ]) {
+    // Phase 9C: creating a task is reachable from the working screen.
+    expect(screen.getByRole('link', { name: /new task/i })).toHaveAttribute('href', '/tasks/new');
+
+    // Phase 9D: deciding whether work is accepted is not here, and not as a disabled control
+    // either - a greyed-out Accept would promise something this slice has not proved.
+    for (const forbidden of [/accept/i, /override/i, /request changes/i, /reject/i]) {
       expect(screen.queryByRole('button', { name: forbidden })).not.toBeInTheDocument();
       expect(screen.queryByRole('link', { name: forbidden })).not.toBeInTheDocument();
+    }
+
+    // And the task-scoped actions live on the task, not in the shell.
+    for (const scoped of [/mark ready/i, /^run$/i, /cancel task/i]) {
+      expect(screen.queryByRole('button', { name: scoped })).not.toBeInTheDocument();
     }
   });
 });

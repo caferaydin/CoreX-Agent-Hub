@@ -2,6 +2,11 @@ import type {
   AcceptanceStateDto,
   AgentProfileDto,
   ApiErrorEnvelope,
+  CancellationResultDto,
+  CreateTaskRequest,
+  MarkReadyResultDto,
+  RunStartedDto,
+  TaskSummaryDto,
   EvidenceDto,
   ExecutionDetailDto,
   HealthDto,
@@ -22,9 +27,10 @@ import type {
  * there is no retry policy, no interceptor stack and no cache here - just the base URL, the
  * envelope, and one function per thing a screen needs.
  *
- * Read-only in Phase 9B. There is no method on this client that changes Hub state, which is
- * what makes "the UI cannot mutate anything" a fact about the code rather than a promise
- * about the components.
+ * Every request the UI makes goes through here, which is what makes what the UI can and
+ * cannot do checkable rather than merely intended. Phase 9C adds exactly four state-changing
+ * calls - create, ready, run, cancel - and no more: there is deliberately no accept, no
+ * override, no reject, because Phase 9D has not happened yet.
  */
 
 /**
@@ -103,6 +109,48 @@ async function request<T>(path: string, signal?: AbortSignal): Promise<T> {
 
   if (text.length === 0) {
     throw new TransportError('The Hub returned an empty response.');
+  }
+
+  try {
+    return JSON.parse(text) as T;
+  } catch (cause) {
+    throw new TransportError('The Hub returned a response this client could not read.', cause);
+  }
+}
+
+/**
+ * Sends something, and reads the answer the same way a read does.
+ *
+ * Never retried. A mutation that failed for an unknown reason may or may not have happened,
+ * and quietly sending it again is how one click becomes two attempts. The operator retries,
+ * because only the operator knows whether they still want to.
+ */
+async function send<T>(path: string, body: unknown, signal?: AbortSignal): Promise<T> {
+  let response: Response;
+
+  try {
+    response = await fetch(`${apiBase}${path}`, {
+      method: 'POST',
+      signal,
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      body: JSON.stringify(body),
+    });
+  } catch (cause) {
+    if (cause instanceof DOMException && cause.name === 'AbortError') {
+      throw cause;
+    }
+
+    throw new TransportError('The Hub did not answer. Is it running?', cause);
+  }
+
+  const text = await response.text();
+
+  if (!response.ok) {
+    throw new ApiError(response.status, readEnvelope(text, response.status));
+  }
+
+  if (text.length === 0) {
+    throw new TransportError('The Hub accepted this but said nothing about it.');
   }
 
   try {
@@ -225,4 +273,28 @@ export const api = {
 
   /** Where the live stream for an execution lives. Opened by the SSE hook, not by fetch. */
   eventsUrl: (id: string) => `${apiBase}/executions/${id}/events`,
+
+  // --- The four things this phase can change -----------------------------------------------
+
+  createTask: (request: CreateTaskRequest, signal?: AbortSignal) =>
+    send<TaskSummaryDto>('/tasks', request, signal),
+
+  markTaskReady: (taskKey: string, actor: string, signal?: AbortSignal) =>
+    send<MarkReadyResultDto>(`/tasks/${encodeURIComponent(taskKey)}/ready`, { actor }, signal),
+
+  /**
+   * Starts an attempt and returns as soon as the Hub has an execution to name.
+   *
+   * A 202 with an identity, not a finished run - the work continues without this request, and
+   * the execution page follows it from durable state.
+   */
+  runTask: (taskKey: string, actor: string, agentProfile: string, signal?: AbortSignal) =>
+    send<RunStartedDto>(`/tasks/${encodeURIComponent(taskKey)}/runs`, { actor, agentProfile }, signal),
+
+  cancelTask: (taskKey: string, actor: string, reason: string | null, signal?: AbortSignal) =>
+    send<CancellationResultDto>(
+      `/tasks/${encodeURIComponent(taskKey)}/cancel`,
+      { actor, reason },
+      signal,
+    ),
 } as const;

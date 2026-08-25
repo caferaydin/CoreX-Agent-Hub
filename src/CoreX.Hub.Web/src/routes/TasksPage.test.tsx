@@ -102,17 +102,17 @@ describe('TasksPage', () => {
     );
   });
 
-  it('offers nothing that would change Hub state', async () => {
+  it('offers creating a task and nothing that acts on an existing one', async () => {
     stubFetch({ '/api/v1/tasks': { body: taskPage([taskSummary()]) } });
 
     renderAt('/tasks', '/tasks', <TasksPage />);
 
     await screen.findByText('CXH-001');
 
-    // Phase 9B is a read experience. Not even a disabled control, so nothing suggests an
-    // action the slice has not proved.
-    expect(screen.queryAllByRole('button')).toHaveLength(0);
+    expect(screen.getByRole('link', { name: /new task/i })).toBeInTheDocument();
 
+    // Acting on a task happens on the task, where its state is visible. A Run button in a list
+    // row would be a click made without the context that decides whether it is sensible.
     for (const forbidden of [/run/i, /cancel/i, /accept/i, /override/i, /reject/i, /ready/i]) {
       expect(screen.queryByRole('button', { name: forbidden })).not.toBeInTheDocument();
     }

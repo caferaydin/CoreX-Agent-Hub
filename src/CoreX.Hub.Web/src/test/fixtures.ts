@@ -1,5 +1,7 @@
 import type {
   AgentProfileDto,
+  OrganizationDto,
+  ProjectDto,
   EvidenceDto,
   ExecutionDetailDto,
   ExecutionSummaryDto,
@@ -249,3 +251,19 @@ index 0000000..c3903ed
 -removed line for the sake of the test
  context line
 `;
+
+export const organization = (over: Partial<OrganizationDto> = {}): OrganizationDto => ({
+  id: '01a03a11-2222-7001-b175-8c2679d883a8',
+  slug: 'core-x-logic',
+  name: 'Core X Logic',
+  ...over,
+});
+
+export const project = (over: Partial<ProjectDto> = {}): ProjectDto => ({
+  id: '01a03a11-1111-7001-b175-8c2679d883a8',
+  organizationId: '01a03a11-2222-7001-b175-8c2679d883a8',
+  slug: 'agent-hub',
+  name: 'Agent Hub',
+  taskKeyPrefix: 'CXH',
+  ...over,
+});

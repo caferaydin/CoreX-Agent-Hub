@@ -64,23 +64,31 @@ public sealed class WebInvariantTests
     }
 
     [Fact]
-    public void The_ui_cannot_change_hub_state_in_this_phase()
+    public void The_ui_can_change_exactly_the_four_things_this_phase_added()
     {
-        // Every request the UI makes goes through one client, so a mutation would have to be
-        // written here. Asserted as the absence of a verb rather than the presence of a
-        // comment: adding one has to break this.
+        // Phase 9B forbade every verb but GET. That guard has done its job and is replaced
+        // rather than kept: the property now worth asserting is not "the UI changes nothing"
+        // but "the UI changes these four things and no others". Every request goes through one
+        // client, so the list is checkable rather than merely intended.
         var client = File.ReadAllText(Path.Combine(WebRoot, "src", "api", "client.ts"));
 
-        // Any verb other than a read. `fetch` defaults to GET, so a mutation has to say so.
+        Assert.Equal(
+            ["cancelTask", "createTask", "markTaskReady", "runTask"],
+            MutationMethods(client));
+
+        // The acceptance decisions are Phase 9D. Not present, and not present-but-unused.
         Assert.DoesNotMatch(
-            new Regex(@"method\s*:\s*['""](POST|PUT|PATCH|DELETE)['""]", RegexOptions.IgnoreCase),
+            new Regex(@"/(accept|accept-override|reject|request-changes)[`\'""]", RegexOptions.CultureInvariant),
             client);
 
-        // And the mutation routes by name, matched where a path ends, so that reading
-        // `/attempts/1/acceptance` is not mistaken for posting `/attempts/1/accept`.
-        Assert.DoesNotMatch(
-            new Regex(@"/(cancel|accept|accept-override|reject|runs|ready|request-changes)[`'""]", RegexOptions.CultureInvariant),
-            client);
+        foreach (var forbidden in new[] { "acceptTask", "overrideAcceptance", "requestChanges", "rejectTask" })
+        {
+            Assert.False(client.Contains(forbidden, StringComparison.Ordinal), forbidden);
+        }
+
+        // POST is the only verb the Hub's mutation surface uses, so anything else here would
+        // be a shape the API does not have.
+        Assert.DoesNotMatch(new Regex(@"method\s*:\s*[\'""](PUT|PATCH|DELETE)[\'""]", RegexOptions.IgnoreCase), client);
 
         // Non vacuous: it really is the client, and it really does call the Hub.
         Assert.Contains("/api/v1", client, StringComparison.Ordinal);
@@ -89,17 +97,65 @@ public sealed class WebInvariantTests
         // And no component reaches around it with its own request.
         foreach (var file in WebSources().Where(f => !f.EndsWith("client.ts", StringComparison.Ordinal)))
         {
-            var text = File.ReadAllText(file);
-
             if (file.Contains("test", StringComparison.OrdinalIgnoreCase))
             {
                 // Tests stub fetch on purpose; that is how they prove the client's behaviour.
                 continue;
             }
 
-            // The global, not any identifier that happens to end in it - `refetch()` is
-            // this UI reloading a query, which is the opposite of reaching around the client.
-            Assert.DoesNotMatch(new Regex(@"(?<![\w.])fetch\s*\("), text);
+            // The global, not any identifier that happens to end in it - `refetch()` is this
+            // UI reloading a query, which is the opposite of reaching around the client.
+            Assert.DoesNotMatch(new Regex(@"(?<![\w.])fetch\s*\("), File.ReadAllText(file));
+        }
+    }
+
+    [Fact]
+    public void Which_actions_the_ui_offers_is_not_a_second_state_machine()
+    {
+        // The affordance rules look at one value - the task's state - and nothing else. A
+        // frontend that reproduced the real conditions would be a second copy of the state
+        // machine, and the day the two disagreed the UI would be confidently wrong.
+        var rules = CodeOnly(File.ReadAllText(Path.Combine(WebRoot, "src", "lib", "actions.ts")));
+
+        // AwaitingAcceptance is deliberately not forbidden here: it is the name of a task
+        // state, and reading a state is exactly what these rules are allowed to do. What
+        // they must not read is the acceptance data behind it.
+        foreach (var forbidden in new[]
+                 {
+                     "readyGate", "attempts", "criteria", "verification",
+                     "findings", "outcome", "override", "machineTruth",
+                 })
+        {
+            Assert.False(rules.Contains(forbidden, StringComparison.OrdinalIgnoreCase), forbidden);
+        }
+
+        // It offers the three task actions and says which states are terminal. Nothing else.
+        Assert.Equal(
+            ["canCancel", "canMarkReady", "canRun", "isTerminalTask"],
+            Exported(rules));
+    }
+
+    [Fact]
+    public void An_action_never_names_a_provider_or_a_runtime_setting()
+    {
+        // Create, ready, run and cancel work the same whichever provider is configured. The
+        // operator names a task and, at run time, an implementer profile - never a runtime, a
+        // permission profile or a sandbox.
+        foreach (var file in WebSources().Where(f =>
+                     f.EndsWith("TaskActions.tsx", StringComparison.Ordinal)
+                     || f.EndsWith("CreateTaskPage.tsx", StringComparison.Ordinal)))
+        {
+            var code = CodeOnly(File.ReadAllText(file));
+
+            foreach (var forbidden in new[]
+                     {
+                         "Claude", "Codex", "runtimeKey", "permissionProfile",
+                         "sandbox", "executablePath", "reviewerProfile",
+                     })
+            {
+                Assert.False(code.Contains(forbidden, StringComparison.OrdinalIgnoreCase),
+                    $"{Name(file)}: {forbidden}");
+            }
         }
     }
 
@@ -236,6 +292,24 @@ public sealed class WebInvariantTests
                 f.EndsWith(".ts", StringComparison.Ordinal) || f.EndsWith(".tsx", StringComparison.Ordinal))
             .Where(f => !f.Contains($"{Path.DirectorySeparatorChar}node_modules{Path.DirectorySeparatorChar}",
                 StringComparison.Ordinal));
+
+    /// <summary>The names of the client's state-changing methods, in order.</summary>
+    private static IReadOnlyList<string> MutationMethods(string client) =>
+    [
+        .. Regex
+            .Matches(client, @"(?<name>[a-zA-Z]+):\s*\([^)]*\)\s*=>\s*send<")
+            .Select(m => m.Groups["name"].Value)
+            .Order(StringComparer.Ordinal),
+    ];
+
+    /// <summary>Every exported binding in a module, in order.</summary>
+    private static IReadOnlyList<string> Exported(string module) =>
+    [
+        .. Regex
+            .Matches(module, @"export const (?<name>[a-zA-Z]+)")
+            .Select(m => m.Groups["name"].Value)
+            .Order(StringComparer.Ordinal),
+    ];
 
     /// <summary>Source with its commentary removed, so a guard measures code.</summary>
     private static string CodeOnly(string source) =>

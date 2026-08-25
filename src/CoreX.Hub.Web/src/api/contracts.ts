@@ -328,3 +328,67 @@ export interface ExecutionEventDto {
   readonly type: string;
   readonly message: string;
 }
+
+// --- Mutation requests and results ---------------------------------------------------------
+
+/**
+ * Creating a task.
+ *
+ * Shaped exactly like the server's CreateTaskBody. Note what is absent: no runtime, no
+ * permission profile, no model, no reviewer. An operator creates a task; which agent runs it
+ * is stated when it is run, and how that agent is reached is the installation's business.
+ */
+export interface CreateTaskRequest {
+  readonly organizationSlug: string;
+  readonly projectSlug: string;
+  readonly repositorySlug?: string;
+  readonly objective: string;
+  readonly taskKey?: string;
+  readonly allowedScope: readonly string[];
+  readonly forbiddenScope: readonly string[];
+  readonly criteria: readonly CriterionRequest[];
+  readonly actor: string;
+}
+
+export interface CriterionRequest {
+  readonly kind: CriterionKind;
+  readonly text: string;
+  readonly verificationRef: string | null;
+  readonly humanCheckHint: string | null;
+}
+
+export interface MarkReadyResultDto {
+  readonly transitioned: boolean;
+  readonly task: TaskSummaryDto;
+  readonly readyGateSatisfied: boolean;
+  readonly readyGateProblems: readonly string[];
+}
+
+export interface RunStartedDto {
+  readonly executionId: string;
+  readonly taskKey: string;
+  readonly attemptNo: number;
+
+  /** Where to watch it. The request did not wait for the run. */
+  readonly eventsUrl: string;
+}
+
+/**
+ * What a cancellation achieved.
+ *
+ * Three values, not a boolean, and the difference is the whole point: stopping a live run is
+ * asking a separate process to stop and then reading the database to see whether it did.
+ * `CancellationRequested` is a 200 that explicitly does not mean the task is finished.
+ */
+export type CancellationState = 'Cancelled' | 'CancellationRequested' | 'Refused';
+
+export interface CancellationResultDto {
+  readonly state: CancellationState;
+  readonly taskKey: string;
+  readonly taskState: TaskState;
+  readonly executionId: string | null;
+  readonly executionState: ExecutionState | null;
+  readonly resultCommitSha: string | null;
+  readonly worktreePreserved: boolean;
+  readonly detail: string;
+}

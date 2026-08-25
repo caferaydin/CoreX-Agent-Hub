@@ -30,6 +30,11 @@ export function TasksPage(): ReactNode {
             ? `${state.data.total} task${state.data.total === 1 ? '' : 's'}`
             : undefined
         }
+        aside={
+          <Link to="/tasks/new" className="button button--primary">
+            New task
+          </Link>
+        }
       />
       <div className="content">
         <div className="page">
@@ -43,7 +48,7 @@ export function TasksPage(): ReactNode {
             {state.status === 'ready' && state.data.items.length === 0 ? (
               <Empty
                 title="No tasks yet"
-                detail="A task is created from the Hub command line. Once one exists it appears here with its latest attempt."
+                detail="Create one and it appears here with its latest attempt."
               />
             ) : null}
             {state.status === 'ready' && state.data.items.length > 0 ? (

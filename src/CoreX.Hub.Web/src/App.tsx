@@ -2,6 +2,7 @@ import { Component, type ErrorInfo, type ReactNode } from 'react';
 import { NavLink, Navigate, Route, Routes, useLocation } from 'react-router-dom';
 import { Icon } from './components/Icon';
 import { AgentProfilesPage } from './routes/AgentProfilesPage';
+import { CreateTaskPage } from './routes/CreateTaskPage';
 import { ExecutionDetailPage } from './routes/ExecutionDetailPage';
 import { RepositoriesPage } from './routes/RepositoriesPage';
 import { TaskDetailPage } from './routes/TaskDetailPage';
@@ -15,7 +16,9 @@ import { TasksPage } from './routes/TasksPage';
  * they go, so they appear as breadcrumbs on the screens that have them rather than as items
  * here.
  *
- * Read-only in Phase 9B. There is no control anywhere in this tree that changes Hub state.
+ * Phase 9C adds four operator actions - create, ready, run, cancel - and no more. Deciding
+ * whether work is accepted is Phase 9D, and there is deliberately not even a disabled control
+ * for it anywhere in this tree.
  */
 export function App(): ReactNode {
   return (
@@ -26,6 +29,7 @@ export function App(): ReactNode {
           <Routes>
             <Route path="/" element={<Navigate to="/tasks" replace />} />
             <Route path="/tasks" element={<TasksPage />} />
+            <Route path="/tasks/new" element={<CreateTaskPage />} />
             <Route path="/tasks/:taskKey" element={<TaskDetailPage />} />
             <Route path="/executions/:executionId" element={<ExecutionDetailPage />} />
             <Route path="/repositories" element={<RepositoriesPage />} />

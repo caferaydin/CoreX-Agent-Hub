@@ -17,6 +17,7 @@ import {
 } from '../components/primitives';
 import { durationBetween, formatDuration } from '../lib/format';
 import { lookOfOutcome, lookOfTaskState } from '../lib/status';
+import { TaskActions } from './TaskActions';
 
 /**
  * One task, in the order a person asks about it.
@@ -64,6 +65,9 @@ export function TaskDetailPage(): ReactNode {
       />
       <div className="content">
         <div className="page">
+          {/* Kept apart from the panels below: those render server truth, this changes it. */}
+          <TaskActions task={task} onChanged={refetch} />
+
           <Panel title="Overview">
             <p style={{ marginTop: 0, marginBottom: 'var(--space-4)' }}>{task.summary.objective}</p>
             <div className="fields">

@@ -1,6 +1,7 @@
-# Faz 9B — Operatör arayüzü kabuğu
+# Faz 9B–9C — Operatör arayüzü
 
-Bu belge Faz 9B'nin teslimidir: React/TypeScript operatör arayüzü, **salt okunur**.
+Faz 9B: React/TypeScript operatör kabuğu, salt okunur.
+Faz 9C: ilk durum değiştiren eylemler — **create, ready, run, cancel**.
 
 Faz 9A sözleşmesi: `docs/phase-9-api.md`.
 
@@ -170,7 +171,90 @@ Arayüz hiçbir yerde sağlayıcıya göre dallanmaz. `provider` bir hücrede ya
 `ClaudeCodeRuntime` / `CodexRuntime` isimleri arayüzde hiç geçmez. Guard: karşılaştırma
 regex'i + tip adı taraması.
 
-## 11. Salt okunurluk
+## 11. Operatör eylemleri (Faz 9C)
+
+Dört eylem, dördü de mevcut Faz 9A uçlarını çağırır.
+
+| Eylem | Uç | Yanıt |
+|---|---|---|
+| Create | `POST /tasks` | 201 `TaskSummaryDto` |
+| Mark ready | `POST /tasks/{k}/ready` | 200 `{transitioned, task, readyGateSatisfied, readyGateProblems}` |
+| Run | `POST /tasks/{k}/runs` | **202** `{executionId, taskKey, attemptNo, eventsUrl}` |
+| Cancel | `POST /tasks/{k}/cancel` | 200 `{state, taskState, detail, …}` / 409 |
+
+### Sunucu otoritedir
+
+Bir 409 çözülecek bir frontend hatası **değildir**. Sunucunun mesajı ve korelasyon kimliği
+olduğu gibi gösterilir.
+
+`src/lib/actions.ts` yalnızca **hangi düğmenin görüneceğine** karar verir ve bunu tek bir
+değere — görevin durumuna — bakarak yapar. Ready gate'i, deneme geçmişini, doğrulama kanıtını
+okumaz. Bunun tersi tehlikeli olanı: gerçek koşulları yeniden üreten bir frontend, state
+machine'in ikinci bir kopyası olurdu ve ikisi ayrıştığı gün UI kendinden emin biçimde yanlış
+olurdu. Bayat bir sayfadan gelen her eylem test edilir; operatörün gördüğü şey sunucunun
+reddidir.
+
+### Create
+
+`/tasks/new` — kendi rotası, çünkü depo + amaç + kapsam + kriterler bir diyaloğa sığmaz.
+
+Sorulmayanlar kasıtlıdır: runtime yok, permission profile yok, sandbox yok, model yok, reviewer
+yok. Operatör bir iş tanımlar. **Hangi agent'ın çalıştıracağı da burada sorulmaz** — create
+sözleşmesi bunu almaz; o seçim çalıştırma anındadır.
+
+Doğrulama yalnızca ergonomiktir (depo seçilmemiş, amaç boş, anahtar biçimi). Anahtarın boşta
+olup olmadığı Hub'ın cevabıdır.
+
+Reddedilirse: **form olduğu gibi kalır**. Başarılıysa Hub'ın atadığı anahtara gidilir — yazılan
+anahtara değil — ve detay sayfası taze çeker. Yeni görev yerelde kurulmaz.
+
+Create **bir kez** gönderilir: başarılı bir create'in tekrarı ikinci bir görev demektir.
+
+### Ready
+
+Yalnızca `Draft` için görünür. 200 ama `transitioned: false` bir hata değildir — kapı cevap
+vermiştir ve neyi beklediği zaten sayfada yazılıdır.
+
+### Run
+
+**202 ile döner ve gitmez.** React hiçbir yerde sağlayıcının bitmesini beklemez; başarıda
+`/executions/{id}`'ye gidilir ve oradaki mevcut REST + SSE modeli koşuyu izler. Ayrı bir
+"çalışan görev" frontend state machine'i yoktur.
+
+Implementer profili `role === 'Implementer'` ile süzülür — sağlayıcı adına göre değil. Bir
+reviewer profili asla implementer olarak sunulmaz.
+
+Run da **bir kez** gönderilir.
+
+### Cancel — istendi ≠ oldu
+
+Onay diyaloğu gerekir ve ne vaat edebileceği konusunda dürüsttür: koşan süreçten durması
+*istenir*, sonra durduğu *beklenir*, ve bu garanti değildir.
+
+| `state` | UI |
+|---|---|
+| `Cancelled` | "Cancelled." |
+| `CancellationRequested` | "Cancellation requested — hâlâ Running." **Terminal olarak gösterilmez.** |
+| 409 | Sunucunun reddi |
+
+Yerel olarak hiçbir zaman `Cancelled` yazılmaz. Terminal bir sonuç asla üzerine yazılmaz.
+
+Cancel bir mutasyondur; **SSE'ye dokunmaz**. Execution sayfası kendi akışını koşu dayanıklı
+olarak terminal olana kadar açık tutar. İptale özel EventSource yoktur.
+
+### Actor
+
+`hub:operator:ui`, tek yerde sabit (`src/lib/actor.ts`). Hub tek kullanıcılı yerel bir araçtır;
+oturum açma **eklenmedi** ve bir string'i doldurmak için eklenmeyecek.
+
+## 12. Ertelenen eylemler (Faz 9D)
+
+Accept, ReviewBlocked override, request-changes, reject.
+
+Devre dışı "yakında" düğmesi bile **yok**: gri bir Accept, bu dilimin kanıtlamadığı bir şeyi
+vaat ederdi. Mevcut salt-okunur kabul görünümü — `overrideApplicable` dahil — yerinde kalır.
+
+## 13. Salt okunur kalanlar
 
 Faz 9B'de mutasyon **yok**: create, ready, run, cancel, accept, override, request-changes,
 reject — hiçbiri. Devre dışı "yakında" düğmesi bile yok.
@@ -180,20 +264,19 @@ bir verb ya da bir mutasyon rotası yoktur (guard + testler).
 
 Sayfalardaki tek düğmeler bir kimliği panoya kopyalar.
 
-## 12. Erişilebilirlik
+## 14. Erişilebilirlik
 
 Semantik navigasyon (`nav` + gerçek `a[href]`), tablo semantiği (`caption`, `th scope`),
 görünür odak, ikon-only öğelerde erişilebilir ad, `role="status"` / `role="alert"` ile
 duyurulan yükleme ve hata, renge bağlı olmayan durum. Div-button yok.
 
-## 13. Duyarlılık
+## 15. Duyarlılık
 
 Masaüstü öncelikli. 900px altında kenar çubuğu ikonlara daralır. Yatay taşma yalnızca kasıtlı
 kaydırılabilir alanlarda (tablolar, diff). Mobil optimizasyonu Faz 9 gereksinimi değildir.
 
-## 14. Faz 9C–9E'ye kalanlar
+## 16. Faz 9D–9E'ye kalanlar
 
-- **9C:** operatör eylemleri — run, cancel; onay akışları.
 - **9D:** kabul akışı. Override düğmesi **yalnızca** `overrideApplicable` true iken ve boş
   olmayan gerekçe zorunlu. Sunucu zaten reddediyor; UI dürüst olmalı.
 - **9E:** gerçek tarayıcı E2E + yetkili tam sistem regresyonu.
