@@ -29,19 +29,41 @@ public sealed partial class ExecutionOrchestrator
                 $"No base commit could be pinned for task '{validated.Task.TaskKey}': {preflight.Detail}");
         }
 
-        var start = await PersistStartAsync(validated, baseCommitSha, ct);
-        var execution = start.Execution;
-        var task = start.Task;
-
-        using var heartbeat = new LeaseHeartbeat(this, execution.Id, _options.HeartbeatInterval, _clock);
-
-        // The attempt now has an identity, and nothing external has happened yet. A host that
-        // wants to be able to stop this particular run has to be told here: earlier there was
-        // no id to name, and later the agent would already be running.
-        onExecutionStarted?.Invoke(execution.Id);
+        StartedExecution start;
 
         try
         {
+            start = await PersistStartAsync(validated, baseCommitSha, ct);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            // The claim is one transaction, and the exception says nothing about which side
+            // of its commit the cancellation landed on. If it never committed there is no
+            // attempt and nothing to account for; if it did, an execution exists that this
+            // pipeline never owned, and leaving it Running would make the next process
+            // reconcile something this one already knew the answer to.
+            //
+            // The database is the only thing that can tell the two apart.
+            if (await CloseStartedIfDurableAsync(taskId) is { } closed)
+            {
+                return closed;
+            }
+
+            throw;
+        }
+
+        var execution = start.Execution;
+        var task = start.Task;
+
+        try
+        {
+            using var heartbeat = new LeaseHeartbeat(this, execution.Id, _options.HeartbeatInterval, _clock);
+
+            // The attempt now has an identity, and nothing external has happened yet. A host
+            // that wants to be able to stop this particular run has to be told here: earlier
+            // there was no id to name, and later the agent would already be running.
+            onExecutionStarted?.Invoke(execution.Id);
+
             return await RunPipelineAsync(start, preflight, ct);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)

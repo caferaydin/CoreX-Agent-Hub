@@ -68,22 +68,27 @@ public sealed class OrchestrationFailureTests
         Assert.Contains("step-one.txt", diff, StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// What the pipeline does with an agent that never returns.
+    ///
+    /// It used to also count every corex-fixture process on the machine before and after,
+    /// which is not this run's business: test classes run in parallel, so another class
+    /// holding a live fixture made the count go up for reasons that had nothing to do with
+    /// the timeout. That is a flaky duplicate rather than extra coverage - the Job Object
+    /// guarantee is proved by PID, deterministically, in
+    /// Execution.Tests ProcessTreeTests.Hard_timeout_also_kills_the_whole_tree.
+    /// </summary>
     [Fact]
-    public async Task A_hanging_agent_times_out_and_the_process_tree_is_gone()
+    public async Task A_hanging_agent_times_out_and_leaves_an_honest_record()
     {
         await using var hub = await OrchestrationHarness.CreateAsync();
         hub.Mode = ScriptedAgentMode.Hang;
-
-        var before = System.Diagnostics.Process.GetProcessesByName("corex-fixture").Length;
 
         var report = await hub.Orchestrator().RunAsync(
             hub.TaskId, OrchestrationHarness.ScriptedProfileName, CancellationToken.None);
 
         Assert.Equal(ExecutionState.TimedOut, report.State);
         Assert.Null(report.ResultCommitSha);
-
-        var after = System.Diagnostics.Process.GetProcessesByName("corex-fixture").Length;
-        Assert.True(after <= before, $"a fixture process survived the timeout ({before} -> {after})");
 
         var steps = await hub.Store.ListExecutionStepsAsync(report.ExecutionId, CancellationToken.None);
         Assert.Equal(ExecutionStepState.TimedOut, steps.Single(s => s.Kind == ExecutionStepKind.Agent).State);

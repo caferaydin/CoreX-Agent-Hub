@@ -30,12 +30,47 @@ public sealed partial class ExecutionOrchestrator
     private async Task<ExecutionRunReport> CloseCancelledAsync(Guid executionId, Guid taskId)
     {
         using var closing = new MandatoryWorkScope(_options.MandatoryWorkBudget, _clock);
-        var record = closing.Token;
 
         // A scope of its own, so neither the read nor the write can be contaminated by the
         // mutations of the save that was interrupted.
+        return await CloseDurablyAsync(_detached.Open(), executionId, taskId, closing.Token);
+    }
+
+    /// <summary>
+    /// Closes an attempt whose claim may or may not have reached the database.
+    ///
+    /// The start transaction writes the execution row, moves the task to Running and records
+    /// the audit together. A cancellation observed while it was saving leaves two
+    /// possibilities that the exception cannot distinguish, so the question is asked of the
+    /// database: is there an execution for this task that nobody is running?
+    ///
+    /// Null means there is not - the claim never landed, the task never left the queue, and
+    /// the cancellation is simply the answer. Nothing is written to say so, because nothing
+    /// happened.
+    /// </summary>
+    private async Task<ExecutionRunReport?> CloseStartedIfDurableAsync(Guid taskId)
+    {
+        using var closing = new MandatoryWorkScope(_options.MandatoryWorkBudget, _clock);
+        var record = closing.Token;
+
         var store = _detached.Open();
 
+        var executions = await store.ListExecutionsForTaskAsync(taskId, record);
+        var started = executions.FirstOrDefault(e => !e.IsTerminal);
+
+        // At most one can exist: the start refuses outright when a non terminal execution is
+        // already there, so anything found here is the attempt that was just claimed.
+        return started is null
+            ? null
+            : await CloseDurablyAsync(store, started.Id, taskId, record);
+    }
+
+    private async Task<ExecutionRunReport> CloseDurablyAsync(
+        IHubStore store,
+        Guid executionId,
+        Guid taskId,
+        CancellationToken record)
+    {
         var execution = await store.FindExecutionAsync(executionId, record);
         var task = await store.FindTaskAsync(taskId, record);
 

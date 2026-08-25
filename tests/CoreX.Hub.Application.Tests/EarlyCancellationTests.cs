@@ -211,25 +211,31 @@ public sealed class EarlyCancellationTests
     {
         // Cancellation racing the pipeline must not produce two transitions, and must not
         // leave the task Running behind a terminal execution.
+        //
+        // Stated as counts rather than staged through a second seam. An earlier version armed
+        // both the workspace and the context builder, but the first stops the run before the
+        // second is ever reached - the sibling test asserts exactly that - so the second seam
+        // proved nothing. What it meant to say is asserted here directly.
         await using var hub = await OrchestrationHarness.CreateAsync();
 
         using var cancellation = new CancellationTokenSource();
 
-        // Two chances to fire; the second must change nothing.
         hub.DecorateWorkspace = inner => new ScriptedWorkspace(inner)
         {
             BeforePrepare = cancellation.Cancel,
-        };
-
-        hub.DecorateContext = inner => new ScriptedContextBuilder(inner)
-        {
-            BeforeBuild = cancellation.Cancel,
         };
 
         var report = await hub.Orchestrator().RunAsync(
             hub.TaskId, OrchestrationHarness.ScriptedProfileName, cancellation.Token);
 
         Assert.Equal(ExecutionState.Cancelled, report.State);
+
+        // One terminal transition, written once.
+        var terminal = (await hub.AuditEventsAsync(report.ExecutionId))
+            .Where(a => a.EventType is "ExecutionTerminated" or "ExecutionCompleted")
+            .ToList();
+
+        Assert.Single(terminal);
 
         var execution = await hub.DurableExecutionAsync(report.ExecutionId);
 
@@ -259,13 +265,29 @@ public sealed class EarlyCancellationTests
 
         Task<TaskCancellationResult>? operatorDecision = null;
 
+        // The request travels through a named OS event and a thread pool wait, so it arrives
+        // some time after CancelAsync is called. Nothing used to make the pipeline wait for
+        // it, which left "the agent never launched" depending on which of the two won - and a
+        // slower machine or a faster context build would have flipped the result.
+        //
+        // So the seam waits for the stop it is supposed to observe. Bounded, because a signal
+        // that never arrives is a failure rather than something to hang on.
+        var requested = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
         // Fired inside the run, and deliberately not awaited there: the service waits for
         // this very run to terminalize, so awaiting it here would deadlock the thing it is
         // waiting for.
         hub.DecorateContext = inner => new ScriptedContextBuilder(inner)
         {
-            BeforeBuild = () => operatorDecision =
-                service.CancelAsync("HUB-001", null, "no longer wanted", CancellationToken.None),
+            BeforeBuild = () =>
+            {
+                operatorDecision =
+                    service.CancelAsync("HUB-001", null, "no longer wanted", CancellationToken.None);
+
+                Assert.True(
+                    requested.Task.Wait(TimeSpan.FromSeconds(30)),
+                    "the operator's request never reached the runner");
+            },
         };
 
         var agentLaunched = false;
@@ -279,7 +301,13 @@ public sealed class EarlyCancellationTests
                 hub.TaskId,
                 OrchestrationHarness.ScriptedProfileName,
                 stopping.Token,
-                executionId => listening = signal.Listen(executionId, stopping.Cancel));
+                executionId => listening = signal.Listen(
+                    executionId,
+                    () =>
+                    {
+                        stopping.Cancel();
+                        requested.TrySetResult();
+                    }));
 
             Assert.Equal(ExecutionState.Cancelled, report.State);
             Assert.Null(report.ResultCommitSha);

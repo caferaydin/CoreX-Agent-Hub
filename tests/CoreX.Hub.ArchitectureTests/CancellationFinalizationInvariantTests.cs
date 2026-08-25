@@ -40,8 +40,9 @@ public sealed class CancellationFinalizationInvariantTests
     [Fact]
     public void Cancellation_never_becomes_a_generic_failure()
     {
+        // The body that decides, not the wrapper that opens the scope for it.
         var closing = CodeOnly(Between(
-            Close(), "private async Task<ExecutionRunReport> CloseCancelledAsync", "\n    }"));
+            Close(), "private async Task<ExecutionRunReport> CloseDurablyAsync", "\n    }"));
 
         Assert.Contains("ExecutionState.Cancelled", closing, StringComparison.Ordinal);
         Assert.DoesNotContain("ExecutionState.Failed", closing, StringComparison.Ordinal);
@@ -134,6 +135,28 @@ public sealed class CancellationFinalizationInvariantTests
 
         Assert.Contains("agentRan", service, StringComparison.Ordinal);
         Assert.Contains("agentRan && capture is", service, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void The_write_that_claims_an_execution_is_covered_too()
+    {
+        var pipeline = CodeOnly(Pipeline());
+
+        // The claim is one transaction and the exception it can throw says nothing about
+        // whether it committed. Leaving that unguarded left an execution row nobody owned -
+        // measured, not imagined - so the start has a catch of its own that asks the database
+        // instead of guessing.
+        Assert.Contains("start = await PersistStartAsync(", pipeline, StringComparison.Ordinal);
+        Assert.Contains("CloseStartedIfDurableAsync(taskId)", pipeline, StringComparison.Ordinal);
+
+        // And when nothing was written there is nothing to account for: the cancellation is
+        // rethrown rather than turned into an attempt that never existed.
+        Assert.Contains("throw;", pipeline, StringComparison.Ordinal);
+
+        var close = CodeOnly(Close());
+
+        Assert.Contains("ListExecutionsForTaskAsync(taskId, record)", close, StringComparison.Ordinal);
+        Assert.Contains("started is null", close, StringComparison.Ordinal);
     }
 
     [Fact]
