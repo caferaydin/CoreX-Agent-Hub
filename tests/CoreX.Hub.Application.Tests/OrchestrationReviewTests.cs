@@ -207,10 +207,15 @@ public sealed class ScriptedReviewer : IExecutionReviewer
 
     public ExecutionReviewRequest? LastRequest { get; private set; }
 
+    /// <summary>Runs when the review is asked for, before it answers.</summary>
+    public Action? OnReview { get; set; }
+
     public Task<ExecutionReviewResult> ReviewAsync(ExecutionReviewRequest request, CancellationToken ct)
     {
         Calls++;
         LastRequest = request;
+
+        OnReview?.Invoke();
 
         return Task.FromResult(_result);
     }
@@ -257,6 +262,15 @@ public sealed class ScriptedReviewer : IExecutionReviewer
             new ReviewAttemptEvidence(1, "session-1", "reviewer stdout", string.Empty, null),
             new ReviewAttemptEvidence(2, "session-2", "reviewer stdout", string.Empty, null),
         ],
+    });
+
+    /// <summary>A reviewer the caller stopped. The absence of a review, not a clean one.</summary>
+    public static ScriptedReviewer Cancelled() => new(new ExecutionReviewResult
+    {
+        Verdict = ReviewVerdict.Unusable,
+        StepFate = ReviewStepFate.Cancelled,
+        Detail = "the review was cancelled before it produced a usable result",
+        Attempts = [new ReviewAttemptEvidence(1, "session-1", "reviewer stdout", string.Empty, null)],
     });
 
     public static ScriptedReviewer Disagreeing() => new(new ExecutionReviewResult

@@ -179,6 +179,7 @@ public sealed class ExecutionComposition
             new EvidenceGateway(evidenceStore),
             new ExecutionSafetyGates(new SecretGuard(new CatalogSecretScanner())),
             new LeaseWriter(session.OpenStore),
+            new DetachedStore(session.OpenStore),
             new ProcessLivenessProbe(),
             clock,
             new ExecutionOrchestratorOptions(),

@@ -31,6 +31,15 @@ internal sealed class ScriptedWorkspace(IExecutionWorkspace inner) : IExecutionW
     /// <summary>Whether preparation was reached at all.</summary>
     public bool PrepareAttempted { get; private set; }
 
+    /// <summary>
+    /// Makes preparation report that it could not produce a worktree.
+    ///
+    /// A refusal rather than a throw, because that is the shortest honest route to a
+    /// terminal transition: the pipeline closes the step and terminates, which is exactly
+    /// two writes and nothing external in between.
+    /// </summary>
+    public bool RefusePreparation { get; set; }
+
     /// <summary>Makes preparation claim a different base commit than the one that was pinned.</summary>
     public string? ReportPreparedBaseAs { get; set; }
 
@@ -69,6 +78,11 @@ internal sealed class ScriptedWorkspace(IExecutionWorkspace inner) : IExecutionW
         if (FailPreparation is { } failure)
         {
             throw failure;
+        }
+
+        if (RefusePreparation)
+        {
+            return null;
         }
 
         var prepared = await inner.PrepareAsync(repositoryId, preflight, taskKey, attemptNo, ct);
@@ -112,6 +126,9 @@ internal sealed class ScriptedVerifier(IExecutionVerifier inner) : IExecutionVer
 {
     public Action? BeforeVerify { get; set; }
 
+    /// <summary>Runs once the measurement is done and before anything about it is written.</summary>
+    public Action? AfterVerify { get; set; }
+
     /// <summary>Whether verification was given a token that had already been cancelled.</summary>
     public bool VerifySawCancellation { get; private set; }
 
@@ -132,7 +149,11 @@ internal sealed class ScriptedVerifier(IExecutionVerifier inner) : IExecutionVer
         BeforeVerify?.Invoke();
         VerifySawCancellation = ct.IsCancellationRequested;
 
-        return inner.VerifyAsync(repositoryId, baseCommitSha, resultCommitSha, ct);
+        var outcome = inner.VerifyAsync(repositoryId, baseCommitSha, resultCommitSha, ct);
+
+        AfterVerify?.Invoke();
+
+        return outcome;
     }
 }
 

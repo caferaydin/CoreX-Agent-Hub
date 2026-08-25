@@ -114,6 +114,15 @@ public sealed class OrchestrationHarness : IAsyncDisposable
     /// Wraps the production workspace port so a test can watch the handoff or interrupt it.
     /// The inner port is the real one, so what is being observed is the real sequence.
     /// </summary>
+    /// <summary>
+    /// Wraps the store the orchestrator writes through.
+    ///
+    /// Only one thing needs this: proving what happens when a save is interrupted after the
+    /// aggregate has already been mutated. That state cannot be produced from outside the
+    /// context, and it is the state the durable finalization exists for.
+    /// </summary>
+    public Func<IHubStore, IHubStore>? DecorateStore { get; set; }
+
     public Func<IExecutionWorkspace, IExecutionWorkspace>? DecorateWorkspace { get; set; }
 
     /// <summary>Wraps the production verification port, for the same reason.</summary>
@@ -183,7 +192,7 @@ public sealed class OrchestrationHarness : IAsyncDisposable
         IExecutionVerifier verifier = CreateVerificationGateway();
 
         return new ExecutionOrchestrator(
-            Store,
+            DecorateStore is { } decorateStore ? decorateStore(Store) : Store,
             DecorateWorkspace is { } decorateWorkspace ? decorateWorkspace(workspace) : workspace,
             Context(new ContextGateway(
                 new ContextPackBuilder(new FileSystemGuardContextPathGuard()),
@@ -196,6 +205,7 @@ public sealed class OrchestrationHarness : IAsyncDisposable
             new EvidenceGateway(EvidenceStore),
             GateFixtures.Gates,
             new LeaseWriter(OpenStore),
+            new DetachedStore(OpenStore),
             Liveness,
             Clock,
             new ExecutionOrchestratorOptions
@@ -284,6 +294,24 @@ public sealed class OrchestrationHarness : IAsyncDisposable
     public async Task<Domain.Executions.Execution> ExecutionAsync(Guid id) =>
         await Store.FindExecutionAsync(id, CancellationToken.None)
         ?? throw new InvalidOperationException("execution vanished");
+
+    /// <summary>
+    /// What the database says, read through a store that shares nothing with the run.
+    ///
+    /// Not the same question as <see cref="ExecutionAsync"/>. A run whose writes all landed
+    /// gives the same answer either way; a run whose last write was interrupted does not,
+    /// and the durable one is the answer that matters.
+    /// </summary>
+    public async Task<Domain.Executions.Execution> DurableExecutionAsync(Guid id) =>
+        await OpenStore().FindExecutionAsync(id, CancellationToken.None)
+        ?? throw new InvalidOperationException("execution vanished");
+
+    public async Task<HubTask> DurableTaskAsync() =>
+        await OpenStore().FindTaskAsync(TaskId, CancellationToken.None)
+        ?? throw new InvalidOperationException("task vanished");
+
+    public async Task<IReadOnlyList<ExecutionStep>> DurableStepsAsync(Guid executionId) =>
+        await OpenStore().ListExecutionStepsAsync(executionId, CancellationToken.None);
 
     /// <summary>The audit trail for one execution, read straight from the table.</summary>
     public async Task<IReadOnlyList<Domain.Audit.AuditEvent>> AuditEventsAsync(Guid executionId) =>

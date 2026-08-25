@@ -53,7 +53,11 @@ public sealed partial class ExecutionOrchestrator
             // It still has to end. An execution row that exists is a claim that work is in
             // flight, and leaving one behind makes the next process reconcile something this
             // process already knew the answer to. Cancelling is not a crash.
-            return await CloseCancelledAsync(execution, task);
+            //
+            // Identifiers, not the aggregates in hand: the cancellation may have landed
+            // inside the save of a transition, and the instances above would then describe a
+            // transition that never became durable.
+            return await CloseCancelledAsync(execution.Id, task.Id);
         }
     }
 
@@ -178,64 +182,4 @@ public sealed partial class ExecutionOrchestrator
         return await EvaluateAndFinishAsync(execution, task, workspace, capture, start.RepositoryId, ct, record);
     }
 
-    /// <summary>
-    /// Ends a run the caller cancelled, on a token the caller cannot cancel.
-    ///
-    /// The budget starts here rather than earlier because the caller has already stopped:
-    /// this is precisely the work a cancelled run still owes, and the same bounded
-    /// allowance every other mandatory section gets applies to it. A stuck write cannot
-    /// hold a cancelled run open for ever, and a cancelled caller cannot stop the record.
-    ///
-    /// Cancelled is not Failed. The distinction survives all the way to the row, because
-    /// "somebody stopped this" and "this went wrong" are different facts about the attempt
-    /// and only one of them is about the work.
-    /// </summary>
-    private async Task<ExecutionRunReport> CloseCancelledAsync(Execution execution, HubTask task)
-    {
-        using var closing = new MandatoryWorkScope(_options.MandatoryWorkBudget, _clock);
-        var record = closing.Token;
-
-        await CancelUnfinishedStepAsync(execution.Id, record);
-
-        // A commit that exists is never disowned to make a tidier story, and the aggregate
-        // refuses a terminal error state that would contradict it. The accepted rule for a
-        // committed attempt whose required work did not finish is the one used here.
-        if (execution.ResultCommitSha is not null)
-        {
-            return await CompleteAsync(
-                execution,
-                task,
-                ExecutionOutcome.VerificationFailed,
-                "the run was cancelled after its result commit was created",
-                null,
-                record);
-        }
-
-        return await TerminateAsync(
-            execution,
-            task,
-            ExecutionState.Cancelled,
-            "the run was cancelled before a result commit was created",
-            record);
-    }
-
-    /// <summary>
-    /// Closes whichever step was still running, so nothing is left mid flight.
-    ///
-    /// Only one can be: the pipeline starts a step and finishes it before starting the next.
-    /// Steps that never began stay Pending, which is honest - they did not run.
-    /// </summary>
-    private async Task CancelUnfinishedStepAsync(Guid executionId, CancellationToken record)
-    {
-        var steps = await _store.ListExecutionStepsAsync(executionId, record);
-        var running = steps.FirstOrDefault(s => s.State == ExecutionStepState.Running);
-
-        if (running is null)
-        {
-            return;
-        }
-
-        running.Cancel("the run was cancelled", _clock.GetUtcNow());
-        await _store.SaveChangesAsync(record);
-    }
 }

@@ -16,20 +16,21 @@ public sealed class CancellationFinalizationInvariantTests
 {
     private static string Pipeline() => Source("ExecutionOrchestrator.Pipeline.cs");
 
+    private static string Close() => Source("ExecutionOrchestrator.Close.cs");
+
     [Fact]
     public void The_writes_that_close_a_cancelled_run_are_not_driven_by_the_cancelled_token()
     {
-        var code = CodeOnly(Pipeline());
-
         // The catch exists and is about cancellation the caller asked for, not about failure
         // in general.
         Assert.Contains(
             "catch (OperationCanceledException) when (ct.IsCancellationRequested)",
-            code,
+            CodeOnly(Pipeline()),
             StringComparison.Ordinal);
 
         // And what it calls closes the run on a bounded token of its own rather than on ct.
-        var closing = Between(code, "private async Task<ExecutionRunReport> CloseCancelledAsync", "\n    }");
+        var closing = Between(
+            CodeOnly(Close()), "private async Task<ExecutionRunReport> CloseCancelledAsync", "\n    }");
 
         Assert.Contains("new MandatoryWorkScope(_options.MandatoryWorkBudget, _clock)", closing, StringComparison.Ordinal);
         Assert.DoesNotContain("ct)", closing, StringComparison.Ordinal);
@@ -40,22 +41,17 @@ public sealed class CancellationFinalizationInvariantTests
     public void Cancellation_never_becomes_a_generic_failure()
     {
         var closing = CodeOnly(Between(
-            Pipeline(), "private async Task<ExecutionRunReport> CloseCancelledAsync", "\n    }"));
+            Close(), "private async Task<ExecutionRunReport> CloseCancelledAsync", "\n    }"));
 
         Assert.Contains("ExecutionState.Cancelled", closing, StringComparison.Ordinal);
         Assert.DoesNotContain("ExecutionState.Failed", closing, StringComparison.Ordinal);
     }
 
-    [Fact]
-    public void No_unbounded_immunity_was_reintroduced_anywhere_in_orchestration()
-    {
-        // CancellationToken.None is immunity with no end to it. The bounded scope exists
-        // precisely so a stuck write cannot hold a cancelled run open for ever.
-        foreach (var file in OrchestrationSources())
-        {
-            Assert.DoesNotContain("CancellationToken.None", CodeOnly(File.ReadAllText(file)), StringComparison.Ordinal);
-        }
-    }
+    // Unbounded immunity - CancellationToken.None anywhere in orchestration - is guarded by
+    // OrchestratorInvariantTests.Cancellation_immunity_is_bounded_rather_than_absolute, which
+    // makes the same assertion over a strict superset of these files: it covers the Cli
+    // orchestration sources as well, and also proves the bounded alternative exists. A second
+    // narrower copy here added no boundary and gave one cause two failures.
 
     [Fact]
     public void A_cancelled_execution_cannot_carry_a_result_commit()
@@ -83,7 +79,7 @@ public sealed class CancellationFinalizationInvariantTests
     public void Closing_a_cancelled_run_never_reaches_the_agent_or_the_result_commit()
     {
         var closing = CodeOnly(Between(
-            Pipeline(), "private async Task<ExecutionRunReport> CloseCancelledAsync", "\n    }"));
+            Close(), "private async Task<ExecutionRunReport> CloseCancelledAsync", "\n    }"));
 
         foreach (var forbidden in new[] { "_agent.", "CreateResultCommitAsync", "_verifier.", "_workspace." })
         {
@@ -138,6 +134,101 @@ public sealed class CancellationFinalizationInvariantTests
 
         Assert.Contains("agentRan", service, StringComparison.Ordinal);
         Assert.Contains("agentRan && capture is", service, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void The_close_path_reasons_from_the_database_rather_than_from_a_mutated_aggregate()
+    {
+        var code = CodeOnly(Source("ExecutionOrchestrator.Close.cs"));
+
+        // Identifiers, not aggregates. A transition is a mutation followed by a save, and a
+        // save that was cancelled leaves the instance already mutated over a row that is
+        // not - so an aggregate crossing into the close would carry an intention that was
+        // abandoned, and asking it anything would get that intention back.
+        Assert.Contains(
+            "private async Task<ExecutionRunReport> CloseCancelledAsync(Guid executionId, Guid taskId)",
+            code,
+            StringComparison.Ordinal);
+
+        Assert.DoesNotContain("CloseCancelledAsync(Execution ", code, StringComparison.Ordinal);
+
+        // Everything it reads and everything it writes goes through a scope of its own. The
+        // orchestrator's own store is the one whose save was interrupted; saving through it
+        // would flush the mutations that were given up on.
+        Assert.Contains("_detached.Open()", code, StringComparison.Ordinal);
+        Assert.DoesNotContain("_store", code, StringComparison.Ordinal);
+
+        // The pipeline hands over identifiers too, so nothing tracked is even in scope.
+        Assert.Contains(
+            "return await CloseCancelledAsync(execution.Id, task.Id);",
+            CodeOnly(Pipeline()),
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void A_terminal_execution_is_never_terminalized_a_second_time()
+    {
+        var code = CodeOnly(Source("ExecutionOrchestrator.Close.cs"));
+
+        // The durable read comes first, and the answer it gives decides everything. Both
+        // transitions live behind it.
+        var read = code.IndexOf("await store.FindExecutionAsync(executionId, record)", StringComparison.Ordinal);
+        var terminalCheck = code.IndexOf("if (execution.IsTerminal)", StringComparison.Ordinal);
+
+        Assert.True(read > 0, "the close must read the execution durably");
+        Assert.True(terminalCheck > read, "the terminal check must read what the database says");
+
+        Assert.True(
+            code.IndexOf("execution.Terminate(", StringComparison.Ordinal) > terminalCheck,
+            "no terminal transition may be attempted before the durable state has been checked");
+
+        Assert.True(
+            code.IndexOf("ExecutionCompletion.Apply(", StringComparison.Ordinal) > terminalCheck,
+            "no completion may be attempted before the durable state has been checked");
+    }
+
+    [Fact]
+    public void A_commit_bearing_execution_can_never_be_closed_as_cancelled()
+    {
+        var code = CodeOnly(Source("ExecutionOrchestrator.Close.cs"));
+
+        // Every terminal error state asserts the attempt produced nothing. A commit is real
+        // in the repository whatever the row says, so the commit bearing branch returns
+        // before Cancelled is ever named.
+        var commitBearing = code.IndexOf(
+            "if (execution.ResultCommitSha is not null)", StringComparison.Ordinal);
+
+        var cancelled = code.IndexOf("ExecutionState.Cancelled", StringComparison.Ordinal);
+
+        Assert.True(commitBearing > 0, "the commit bearing branch must exist");
+        Assert.True(cancelled > commitBearing, "Cancelled must be unreachable for a commit bearing execution");
+
+        // And how far it actually got is read, not assumed: the two accepted post commit
+        // mappings are different answers and one of them would contradict the record.
+        Assert.Contains("ExecutionOutcome.ReviewUnusable", code, StringComparison.Ordinal);
+        Assert.Contains("ExecutionOutcome.VerificationFailed", code, StringComparison.Ordinal);
+        Assert.Contains("ExecutionStepKind.Verify", code, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void The_close_is_bounded_and_happens_once()
+    {
+        var code = CodeOnly(Source("ExecutionOrchestrator.Close.cs"));
+
+        // The same bounded allowance every other mandatory section gets, and no immunity.
+        Assert.Contains(
+            "new MandatoryWorkScope(_options.MandatoryWorkBudget, _clock)", code, StringComparison.Ordinal);
+
+        Assert.DoesNotContain("CancellationToken.None", code, StringComparison.Ordinal);
+
+        // One path, not a loop: a finalization that could call itself would turn a failed
+        // write into an unbounded retry of the thing that failed.
+        Assert.Single(
+            code.Split('\n'),
+            l => l.Contains("CloseCancelledAsync(", StringComparison.Ordinal));
+
+        // A durable truth that cannot be established is reported, never invented.
+        Assert.Contains("ExecutionFinalizationException", code, StringComparison.Ordinal);
     }
 
     [Fact]

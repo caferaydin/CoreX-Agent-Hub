@@ -32,6 +32,7 @@ public sealed partial class ExecutionOrchestrator
     private readonly IExecutionEvidenceWriter _evidence;
     private readonly ExecutionSafetyGates _gates;
     private readonly IExecutionLeaseWriter _lease;
+    private readonly IDetachedStore _detached;
     private readonly IProcessLivenessProbe _liveness;
     private readonly TimeProvider _clock;
     private readonly ExecutionOrchestratorOptions _options;
@@ -46,6 +47,7 @@ public sealed partial class ExecutionOrchestrator
         IExecutionEvidenceWriter evidence,
         ExecutionSafetyGates gates,
         IExecutionLeaseWriter lease,
+        IDetachedStore detached,
         IProcessLivenessProbe liveness,
         TimeProvider clock,
         ExecutionOrchestratorOptions options,
@@ -65,6 +67,11 @@ public sealed partial class ExecutionOrchestrator
         _evidence = evidence ?? throw new ArgumentNullException(nameof(evidence));
         _gates = gates ?? throw new ArgumentNullException(nameof(gates));
         _lease = lease ?? throw new ArgumentNullException(nameof(lease));
+
+        // Required, not optional. The work a cancelled run still owes has to be done from
+        // durable state, and there is no correct way to do that through the store whose save
+        // was interrupted.
+        _detached = detached ?? throw new ArgumentNullException(nameof(detached));
         _liveness = liveness ?? throw new ArgumentNullException(nameof(liveness));
         _clock = clock ?? throw new ArgumentNullException(nameof(clock));
         _options = options ?? throw new ArgumentNullException(nameof(options));

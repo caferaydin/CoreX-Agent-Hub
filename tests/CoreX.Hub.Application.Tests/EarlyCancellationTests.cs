@@ -231,12 +231,11 @@ public sealed class EarlyCancellationTests
 
         Assert.Equal(ExecutionState.Cancelled, report.State);
 
-        var executions = await hub.Store.ListExecutionsForTaskAsync(hub.TaskId, CancellationToken.None);
-        var execution = Assert.Single(executions);
+        var execution = await hub.DurableExecutionAsync(report.ExecutionId);
 
         Assert.Equal(ExecutionState.Cancelled, execution.State);
         Assert.Null(execution.Outcome);
-        Assert.Equal(TaskState.Ready, (await hub.TaskAsync()).State);
+        Assert.Equal(TaskState.Ready, (await hub.DurableTaskAsync()).State);
     }
 
     [Fact]
@@ -319,14 +318,17 @@ public sealed class EarlyCancellationTests
         ExecutionRunReport report,
         ExecutionStepKind? expectedRunningStep)
     {
-        var execution = await hub.ExecutionAsync(report.ExecutionId);
+        // Read durably. The close writes through a scope of its own, precisely so that a
+        // save interrupted mid transition cannot decide what the record says - which means
+        // the context the run used is not the place to ask what the record says either.
+        var execution = await hub.DurableExecutionAsync(report.ExecutionId);
 
         Assert.True(execution.IsTerminal);
         Assert.Equal(ExecutionState.Cancelled, execution.State);
         Assert.Null(execution.Outcome);
         Assert.Null(execution.ResultCommitSha);
 
-        var steps = await hub.Store.ListExecutionStepsAsync(report.ExecutionId, CancellationToken.None);
+        var steps = await hub.DurableStepsAsync(report.ExecutionId);
 
         // Nothing is left mid flight: a step that was running is closed as cancelled.
         Assert.DoesNotContain(steps, s => s.State == ExecutionStepState.Running);
@@ -342,6 +344,6 @@ public sealed class EarlyCancellationTests
             Assert.NotEqual(ExecutionStepState.Succeeded, steps.Single(s => s.Kind == never).State);
         }
 
-        Assert.Equal(TaskState.Ready, (await hub.TaskAsync()).State);
+        Assert.Equal(TaskState.Ready, (await hub.DurableTaskAsync()).State);
     }
 }

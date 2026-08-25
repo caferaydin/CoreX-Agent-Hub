@@ -402,15 +402,18 @@ public sealed class LoopZeroInvariantTests
     [Fact]
     public void Completion_means_the_same_thing_however_an_execution_reaches_it()
     {
-        // Two callers finish an execution - the pipeline and recovery - and a passing run has
-        // to hand the task to a person from either. The rule is written once.
+        // Three callers finish an execution - the pipeline, the durable close of a cancelled
+        // run, and recovery - and a passing run has to hand the task to a person from any of
+        // them. The rule is written once, and every one of them reaches it rather than
+        // restating what completion means.
         var callers = RepoLayout.ProductionSourceFiles
             .Where(f => CodeOnly(File.ReadAllText(f)).Contains("ExecutionCompletion.Apply(", StringComparison.Ordinal))
             .Select(RepoLayout.Relative)
             .ToList();
 
-        Assert.Equal(2, callers.Count);
+        Assert.Equal(3, callers.Count);
         Assert.Contains(callers, c => c.EndsWith("ExecutionOrchestrator.Finish.cs", StringComparison.Ordinal));
+        Assert.Contains(callers, c => c.EndsWith("ExecutionOrchestrator.Close.cs", StringComparison.Ordinal));
         Assert.Contains(callers, c => c.EndsWith("PostCommitRecoveryService.cs", StringComparison.Ordinal));
 
         // MarkAwaitingAcceptance has exactly one caller in the whole system, and it is that rule.
