@@ -392,3 +392,59 @@ export interface CancellationResultDto {
   readonly worktreePreserved: boolean;
   readonly detail: string;
 }
+
+// --- Human governance ----------------------------------------------------------------------
+
+/** The server's vocabulary, exactly. A person answers a Human criterion with one of these. */
+export type HumanVerdict = 'Met' | 'NotMet' | 'NotApplicable';
+
+export interface HumanVerdictRequest {
+  readonly criterionId: string;
+  readonly verdict: HumanVerdict;
+  readonly note: string | null;
+}
+
+/**
+ * Accepting by the ordinary route.
+ *
+ * There is deliberately no reason and no override flag here. The contract cannot express an
+ * override, which is what makes "the ordinary route cannot become one" a fact about the shape
+ * rather than a promise about the caller.
+ */
+export interface AcceptRequest {
+  readonly actor: string;
+  readonly humanVerdicts: readonly HumanVerdictRequest[];
+}
+
+/** Accepting despite a blocking review. Its own shape, and the reason is required. */
+export interface OverrideRequest {
+  readonly actor: string;
+  readonly reason: string;
+  readonly humanVerdicts: readonly HumanVerdictRequest[];
+}
+
+/** Sending work back, or ending it. Neither is an acceptance route. */
+export interface DecisionRequest {
+  readonly actor: string;
+  readonly reason: string | null;
+}
+
+/**
+ * What a recorded decision changed, and what it deliberately did not.
+ *
+ * `taskState` and `executionOutcome` are two different axes and the server keeps them apart:
+ * an overridden task becomes Accepted while its execution stays ReviewBlocked. Collapsing them
+ * would erase the fact that a review found something.
+ */
+export interface AcceptanceResultDto {
+  readonly taskKey: string;
+  readonly executionId: string;
+  readonly attemptNo: number;
+  readonly decision: string;
+  readonly overrideUsed: boolean;
+  readonly taskState: TaskState;
+  readonly executionState: ExecutionState;
+  readonly executionOutcome: ExecutionOutcome | null;
+  readonly reason: string | null;
+  readonly workspaceCleanup: string;
+}

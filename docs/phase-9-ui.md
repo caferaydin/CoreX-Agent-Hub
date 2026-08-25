@@ -1,7 +1,8 @@
-# Faz 9B–9C — Operatör arayüzü
+# Faz 9B–9D — Operatör arayüzü
 
 Faz 9B: React/TypeScript operatör kabuğu, salt okunur.
 Faz 9C: ilk durum değiştiren eylemler — **create, ready, run, cancel**.
+Faz 9D: insan kararları — **accept, review override, request-changes, reject**.
 
 Faz 9A sözleşmesi: `docs/phase-9-api.md`.
 
@@ -26,8 +27,9 @@ Faz 9A sözleşmesi: `docs/phase-9-api.md`.
 Bu arayüzün ihtiyacı: rota girişinde getir, canlı akış bir şey değiştiğini söyleyince tazele,
 panel başarısız olunca tekrar dene. Bu yaklaşık kırk satır (`src/api/useQuery.ts`). Bunu
 almak için gelen bir bağımlılık, beraberinde geçersizleştirme kuralları da getirirdi ve asıl
-akıl yürütülecek şey o olurdu. Faz 9C mutasyonlardan sonra ekranlar arası cache tutarlılığı
-isterse, yeniden değerlendirme anı orasıdır — öncesi değil.
+akıl yürütülecek şey o olurdu. Faz 9C ve 9D mutasyonları bunu değiştirmedi: her karardan sonra
+sayfa görevi yeniden çeker ve dayanıklı cevap sunucunundur. Ekranlar arası cache tutarlılığı
+gerçekten gerektiğinde yeniden değerlendirilir — öncesi değil.
 
 `useQuery` davranışının tek bariz olmayan yanı kasıtlı: **tazeleme sırasında önceki veri
 ekranda kalır**. Akış her tıkladığında boşalan bir execution sayfası kullanılamaz olurdu.
@@ -36,7 +38,9 @@ ekranda kalır**. Akış her tıkladığında boşalan bir execution sayfası ku
 
 Gereken: rozet, tablo, panel, üç durum. Bunları elde etmek için kurumsal bir çatı almak,
 beraberinde bir tema sistemi, bir bundle ve bu ürünün ihtiyacı olmayan bir yerleşim görüşü
-getirirdi. Faz 9C diyalog ve menü isterse, yeniden değerlendirme anı orasıdır.
+getirirdi. Faz 9C ve 9D'nin ihtiyaç duyduğu tek şey bir diyalogdu ve o da gerçek bir
+`<dialog>` ile karşılandı: modal semantiği, Escape, odak hapsi ve backdrop tarayıcıdan
+geliyor, ve bunların elle yazılan her sürümü bir klavye tuzağı adayı.
 
 ## 2. Barındırma ve geliştirme kökeni
 
@@ -67,7 +71,7 @@ dotnet run --project src/CoreX.Hub.Api
 npm install
 npm run dev          # 127.0.0.1:5178
 npm test             # vitest
-npm run typecheck    # tsc --noEmit
+npm run typecheck    # tsc --noEmit, her iki proje için
 npm run build        # tsc -b && vite build
 ```
 
@@ -94,6 +98,11 @@ Kenar çubuğu backend'i yansıtmaz: organizasyon ve proje, operatörün *gitti�
 
 İçerdiği: base URL, hata zarfı, `AbortSignal`, JSON/metin ayrımı. İçermediği: retry politikası,
 interceptor yığını, cache. SDK değil.
+
+Durum değiştiren yüzey **tam sekiz çağrıdır** — dördü yaşam döngüsü, dördü yönetişim — ve her
+biri yaptığı işlemin adını taşır. Genel bir `transition(path, body)` **yoktur ve olmayacaktır**:
+accept, override, request-changes ve reject dört farklı karardır ve fiili parametre olarak alan
+bir fonksiyon onları her çağırana birbirinin yerine geçebilirmiş gibi gösterirdi (guard).
 
 Savunmacı sınırlar: JSON olmayan gövde, sunucunun vaat etmediği hata şekli, kopan bağlantı,
 iptal edilen istek — her biri tipli bir başarısızlığa dönüşür. Ayrı bir şema kütüphanesi
@@ -247,22 +256,115 @@ olarak terminal olana kadar açık tutar. İptale özel EventSource yoktur.
 `hub:operator:ui`, tek yerde sabit (`src/lib/actor.ts`). Hub tek kullanıcılı yerel bir araçtır;
 oturum açma **eklenmedi** ve bir string'i doldurmak için eklenmeyecek.
 
-## 12. Ertelenen eylemler (Faz 9D)
+## 12. İnsan kararları (Faz 9D)
 
-Accept, ReviewBlocked override, request-changes, reject.
+Dört karar, dört ayrı uç. Hiçbiri Faz 9A/5D sunucu davranışını değiştirmez; bu dilim yalnızca
+mevcut uçları operatörün önüne koyar.
 
-Devre dışı "yakında" düğmesi bile **yok**: gri bir Accept, bu dilimin kanıtlamadığı bir şeyi
-vaat ederdi. Mevcut salt-okunur kabul görünümü — `overrideApplicable` dahil — yerinde kalır.
+| Karar | Uç | Gövde | Yanıt |
+|---|---|---|---|
+| Accept | `POST /tasks/{k}/attempts/{n}/accept` | `{actor, humanVerdicts[]}` | 200 `AcceptanceResultDto` |
+| Review override | `POST …/accept-override` | `{actor, reason, humanVerdicts[]}` | 200 |
+| Request changes | `POST …/request-changes` | `{actor, reason?}` | 200 |
+| Reject | `POST …/reject` | `{actor, reason?}` | 200 |
 
-## 13. Salt okunur kalanlar
+Reddetme: 409 `acceptance_refused`, 400 `invalid_request`. Her ikisi de sunucunun kendi
+cümlesiyle ve korelasyon kimliğiyle gösterilir.
 
-Faz 9B'de mutasyon **yok**: create, ready, run, cancel, accept, override, request-changes,
-reject — hiçbiri. Devre dışı "yakında" düğmesi bile yok.
+### Tek karar yüzeyi
 
-Bu bir vaat değil, kodun bir olgusu: `client.ts` tek istek noktasıdır ve orada GET dışında
-bir verb ya da bir mutasyon rotası yoktur (guard + testler).
+Tümü **Task detail** üzerindeki tek bir "Human decision" panelindedir. Görev listesine,
+execution listesine, bulgu satırına veya kenar çubuğuna dağıtılmadı — kararın bağlamı burada.
 
-Sayfalardaki tek düğmeler bir kimliği panoya kopyalar.
+Panel, herhangi bir şeye tıklanmadan **önce** şunları gösterir: görev durumu, son deneme
+numarası, son execution sonucu, verdict bekleyen Human kriter sayısı ve — override söz konusu
+ise — review'ın kendi özeti ile kapsam içi bulgular.
+
+Yaşam döngüsü paneli (`TaskActions`) ve yönetişim paneli (`TaskGovernance`) ayrı bileşenlerdir,
+ve kabul durumunun salt-okunur projeksiyonu (`Acceptance`) üçüncü bir yerde kalır. Bir görev
+projeksiyonu ile bir yönetişim formunu tek bileşende birleştirmek, ikisinin de gözden
+geçirilemez hale gelmesi demekti.
+
+### Makine gerçeği okunur, insan gerçeği verilir
+
+Bu panelin var olma sebebi olan sınır. Doğrulama verdict'leri, bulgular, severity'ler ve
+Hub'ın kendi kapsam hesabı **gösterilir ve dokunulamaz**. Operatörün eklediği tek şey Human
+kriterlerin verdict'leri ve — override için — gerekçedir.
+
+Yok: bulgu kapatma, severity değiştirme, false-positive işaretleme, gerekçe düzenleme,
+`outOfScope` çevirme. Guard, `MachineCriteria` ve `Findings` bölümlerinde tek bir kontrol
+olmadığını doğrular.
+
+### Verdict'ler öntanımlı değildir
+
+Her Human kriter **cevapsız** başlar. Radyo grubu, çünkü üç cevap eşittir ve hiçbiri bir
+menünün arkasında olmamalıdır. Hepsi cevaplanmadan form sormaz.
+
+Öndoldurulmuş bir "Met", operatör adına karar verip sonra o kararı operatörün adına yazardı.
+
+### Override — ayrı yol, ayrı etiket
+
+Etiket **"Accept with review override"**; hiçbir zaman sadece "Accept" değildir. Yalnızca
+görev `Ready` **ve** son execution sonucu `ReviewBlocked` iken sunulur.
+
+Neyin override edildiği **açık halde** gösterilir, bir disclosure arkasında değil: kapsam içi
+bulgular severity sırasıyla ve review'ın kendi özet cümlesiyle birlikte. Gerekçe zorunludur,
+boş başlar ve **şablonu yoktur** — hazır bir "false positive", Hub'ın hiç yazmamış birine mal
+edeceği bir gerekçe olurdu. Yalnızca boşluktan oluşan bir gerekçe gerekçe değildir.
+
+Başarıdan sonra görev **Accepted** olur, execution **ReviewBlocked kalır**. Bu iki eksen ayrı
+tutulur; UI hiçbir yerde execution'ı `Passed` göstermez. Onay diyaloğu bunu açıkça söyler.
+
+Reddedilirse yazılan hiçbir şey silinmez: gerekçe ve verdict'ler formda kalır.
+
+### Sunucunun altı ön koşulu React'te yoktur
+
+`src/lib/actions.ts` yalnızca **hangi düğmenin görüneceğine** karar verir. `canOfferOverride`
+iki değere bakar — görev durumu ve son execution sonucu — çünkü bloke bir review görevi
+`AwaitingAcceptance` değil `Ready` bırakır ve tek başına durum bu durumu hiç çalışmamış bir
+görevden ayırt edemez.
+
+Bunun ötesindeki her şey `AcceptanceService`'in cevabıdır: makine gerçeği kurulabildi mi,
+karar zaten var mı, execution en sonuncusu mu. Guard, kural dosyasının imzalarını okur ve
+`TaskState` ile `ExecutionOutcome` dışında bir tip almadığını doğrular.
+
+### Onaylar ve tekrar
+
+Dört kararın dördü de onay ister ve her biri **ne yapmadığını** söyler: bir karar kaydedilir,
+hiçbir şey merge/push/deploy edilmez. Request-changes denemenin yerinde kaldığını ve yeni bir
+denemenin **yanına** açılacağını; reject hiçbir şeyin silinmediğini söyler.
+
+Yönetişim mutasyonları **asla otomatik tekrarlanmaz** (guard: `retry`/`setTimeout` yok) ve bir
+karar uçarken diğer üçü kullanılamaz. Bu bir nezakettir; garanti sunucunun ikinci kararı
+reddetmesidir ve o da test edilir.
+
+Her karardan sonra — kaydedilmiş ya da reddedilmiş — sayfa görevi **yeniden çeker**. Yerel
+olarak hiçbir durum yazılmaz.
+
+Reject **cancel çağırarak yapılmaz**; kendi ucu vardır ve test bunu URL üzerinden doğrular.
+
+### Karar verildikten sonra
+
+Terminal bir görevde panel salt-okunur bir kayda dönüşür: tek bir düğme, tek bir radyo
+kalmaz. İkinci bir Accept yoktur, bir Reject'i geri alma yolu yoktur.
+
+### Bilinen eksik: kayıtlı kararın ayrıntısı
+
+`AcceptanceStateDto.existingDecision` yalnızca kararın **türünü** taşır — actor, zaman damgası,
+`overrideUsed`, gerekçe ve kaydedilen verdict'ler okuma sözleşmesinde yoktur. Bu yüzden
+gerekçe ve değişmemiş execution sonucu yalnızca **karar anında**, mutasyonun kendi yanıtından
+gösterilir; sayfa yenilenince kaybolur.
+
+Sunucu bu dilimde bilerek değiştirilmedi. Okuma sözleşmesini genişletmek Faz 9E'nin işidir.
+
+## 13. Faz 9B–9C'den taşınanlar
+
+Salt-okunur panellerin hiçbiri gerilemedi: kapsam, kriterler, denemeler, zaman çizelgesi,
+bulgular, diff, kanıt ve kabul projeksiyonu Faz 9B'deki gibi çalışır.
+
+Faz 9B'nin "GET dışında verb yok" guard'ı Faz 9C'de dörtlü bir listeye, Faz 9D'de sekizli bir
+listeye dönüştü. Özellik aynı kaldı: **arayüz tam olarak bu sekiz şeyi değiştirir, başkasını
+değil** — ve bu bir vaat değil, tek istek noktası üzerinden okunabilen bir olgudur.
 
 ## 14. Erişilebilirlik
 
@@ -275,9 +377,9 @@ duyurulan yükleme ve hata, renge bağlı olmayan durum. Div-button yok.
 Masaüstü öncelikli. 900px altında kenar çubuğu ikonlara daralır. Yatay taşma yalnızca kasıtlı
 kaydırılabilir alanlarda (tablolar, diff). Mobil optimizasyonu Faz 9 gereksinimi değildir.
 
-## 16. Faz 9D–9E'ye kalanlar
+## 16. Faz 9E'ye kalanlar
 
-- **9D:** kabul akışı. Override düğmesi **yalnızca** `overrideApplicable` true iken ve boş
-  olmayan gerekçe zorunlu. Sunucu zaten reddediyor; UI dürüst olmalı.
 - **9E:** gerçek tarayıcı E2E + yetkili tam sistem regresyonu.
+- Kayıtlı kararın ayrıntısı: `existingDecision` yanında actor, zaman, `overrideUsed` ve
+  gerekçe (yukarıdaki bilinen eksik).
 - Ayrıca: production SPA barındırma, ham kanıt görüntüleyici, OpenAPI'den istemci üretimi.

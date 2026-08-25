@@ -1,4 +1,4 @@
-import type { TaskState } from '../api/contracts';
+import type { ExecutionOutcome, TaskState } from '../api/contracts';
 
 /**
  * Which actions are worth showing, given a state.
@@ -35,3 +35,35 @@ export const canCancel = (state: TaskState): boolean =>
 /** Whether the Hub considers this task finished. Used to stop offering anything at all. */
 export const isTerminalTask = (state: TaskState): boolean =>
   state === 'Accepted' || state === 'Rejected' || state === 'Cancelled';
+
+// --- Human governance ------------------------------------------------------------------------
+
+/**
+ * Accepting by the ordinary route is offered while a task is waiting for a person.
+ *
+ * Coarse, like the rest. Whether this attempt actually may be accepted - the latest execution
+ * passed, machine truth could be established, no decision exists yet - is the acceptance
+ * service's answer, and asking it here would be keeping a second copy of it.
+ */
+export const canAccept = (state: TaskState): boolean => state === 'AwaitingAcceptance';
+
+export const canRequestChanges = (state: TaskState): boolean => state === 'AwaitingAcceptance';
+
+export const canReject = (state: TaskState): boolean => state === 'AwaitingAcceptance';
+
+/**
+ * Offering to override a blocking review.
+ *
+ * Two values, because two is what it takes to tell this situation apart from every other one:
+ * a blocked review leaves the task Ready rather than awaiting acceptance, so the state alone
+ * would offer this on a task that had simply never run.
+ *
+ * This is the one affordance rule worth being precise about, because getting it wrong is
+ * visible: an override offered on a passing execution would suggest the Hub thinks something
+ * blocked it. What it is not is the rule - the service checks six prerequisites this file
+ * knows nothing about, and any of them can still refuse.
+ */
+export const canOfferOverride = (
+  state: TaskState,
+  latestOutcome: ExecutionOutcome | null,
+): boolean => state === 'Ready' && latestOutcome === 'ReviewBlocked';

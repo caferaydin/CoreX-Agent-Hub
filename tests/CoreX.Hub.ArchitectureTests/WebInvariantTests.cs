@@ -64,31 +64,26 @@ public sealed class WebInvariantTests
     }
 
     [Fact]
-    public void The_ui_can_change_exactly_the_four_things_this_phase_added()
+    public void The_ui_can_change_exactly_the_eight_things_it_is_allowed_to()
     {
-        // Phase 9B forbade every verb but GET. That guard has done its job and is replaced
-        // rather than kept: the property now worth asserting is not "the UI changes nothing"
-        // but "the UI changes these four things and no others". Every request goes through one
-        // client, so the list is checkable rather than merely intended.
+        // Phase 9B forbade every verb but GET; Phase 9C replaced that with a list of four.
+        // The property is the same one and the list has grown: the UI changes these eight
+        // things and no others. Every request goes through one client, so the list stays
+        // checkable rather than merely intended.
         var client = File.ReadAllText(Path.Combine(WebRoot, "src", "api", "client.ts"));
 
         Assert.Equal(
-            ["cancelTask", "createTask", "markTaskReady", "runTask"],
+            [
+                "acceptTask", "cancelTask", "createTask", "markTaskReady",
+                "overrideReviewBlocked", "rejectTask", "requestChanges", "runTask",
+            ],
             MutationMethods(client));
-
-        // The acceptance decisions are Phase 9D. Not present, and not present-but-unused.
-        Assert.DoesNotMatch(
-            new Regex(@"/(accept|accept-override|reject|request-changes)[`\'""]", RegexOptions.CultureInvariant),
-            client);
-
-        foreach (var forbidden in new[] { "acceptTask", "overrideAcceptance", "requestChanges", "rejectTask" })
-        {
-            Assert.False(client.Contains(forbidden, StringComparison.Ordinal), forbidden);
-        }
 
         // POST is the only verb the Hub's mutation surface uses, so anything else here would
         // be a shape the API does not have.
-        Assert.DoesNotMatch(new Regex(@"method\s*:\s*[\'""](PUT|PATCH|DELETE)[\'""]", RegexOptions.IgnoreCase), client);
+        Assert.DoesNotMatch(
+            new Regex(@"method\s*:\s*['QQ'](PUT|PATCH|DELETE)['QQ']", RegexOptions.IgnoreCase),
+            client);
 
         // Non vacuous: it really is the client, and it really does call the Hub.
         Assert.Contains("/api/v1", client, StringComparison.Ordinal);
@@ -110,39 +105,219 @@ public sealed class WebInvariantTests
     }
 
     [Fact]
+    public void The_four_human_decisions_are_four_calls_and_never_one_generic_one()
+    {
+        // Accept, override, request-changes and reject have different prerequisites and leave
+        // different records. One call that took the verb as a parameter would make them look
+        // interchangeable to every caller, and the day one was passed the wrong string the UI
+        // would have recorded a decision nobody made.
+        var client = CodeOnly(File.ReadAllText(Path.Combine(WebRoot, "src", "api", "client.ts")));
+
+        // Each route is built in exactly one place. The trailing backtick is what keeps these
+        // apart: /accept is a prefix of /accept-override, and /acceptance is the read route.
+        foreach (var route in new[] { "/accept`", "/accept-override`", "/request-changes`", "/reject`" })
+        {
+            Assert.Equal(1, Occurrences(client, route));
+        }
+
+        // No verb-as-parameter, and no state-shaped endpoint to send one to. The words
+        // rather than the call shapes: a generic method would be declared
+        // `transition: (path, body) =>`, which a search for `transition(` would miss.
+        foreach (var generic in new[]
+                 {
+                     "transition", "/transition", "/decision", "/state",
+                     "applyDecision", "patchState", "decide",
+                 })
+        {
+            Assert.False(client.Contains(generic, StringComparison.Ordinal), generic);
+        }
+    }
+
+    [Fact]
+    public void An_override_carries_a_reason_or_it_cannot_be_built()
+    {
+        // Structural rather than a matter of remembering: an ordinary accept has nowhere to
+        // put an override reason, and an override cannot be constructed without one.
+        var contracts = File.ReadAllText(Path.Combine(WebRoot, "src", "api", "contracts.ts"));
+
+        Assert.Matches(
+            new Regex(@"interface OverrideRequest \{[^}]*readonly reason: string;", RegexOptions.Singleline),
+            contracts);
+
+        Assert.DoesNotMatch(
+            new Regex(@"interface AcceptRequest \{[^}]*reason", RegexOptions.Singleline),
+            contracts);
+
+        // And the two go to two different routes, which the call-site guard above pins down.
+        Assert.Contains("OverrideRequest",
+            File.ReadAllText(Path.Combine(WebRoot, "src", "api", "client.ts")),
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Which_actions_the_ui_offers_is_not_a_second_state_machine()
     {
-        // The affordance rules look at one value - the task's state - and nothing else. A
-        // frontend that reproduced the real conditions would be a second copy of the state
-        // machine, and the day the two disagreed the UI would be confidently wrong.
+        // The affordance rules look at what the server already said - a task's state, and for
+        // the override an execution's outcome - and at nothing else. A frontend that
+        // reproduced the real conditions would be a second copy of the state machine, and the
+        // day the two disagreed the UI would be confidently wrong.
         var rules = CodeOnly(File.ReadAllText(Path.Combine(WebRoot, "src", "lib", "actions.ts")));
 
-        // AwaitingAcceptance is deliberately not forbidden here: it is the name of a task
-        // state, and reading a state is exactly what these rules are allowed to do. What
-        // they must not read is the acceptance data behind it.
+        // Read off the signatures rather than from a word list, because the words that would
+        // need forbidding - "outcome", "override" - are also the names of two things these
+        // rules legitimately are. What they may take is two enums the server sent.
+        Assert.Equal(
+            ["ExecutionOutcome", "TaskState", "boolean"],
+            Regex
+                .Matches(rules, @":\s*(?<type>[A-Za-z]+)")
+                .Select(m => m.Groups["type"].Value)
+                .Distinct(StringComparer.Ordinal)
+                .Order(StringComparer.Ordinal)
+                .ToArray());
+
+        // So nothing here can reach the data behind those two words.
         foreach (var forbidden in new[]
                  {
                      "readyGate", "attempts", "criteria", "verification",
-                     "findings", "outcome", "override", "machineTruth",
+                     "findings", "machineTruth", "Threshold", "prerequisite",
                  })
         {
             Assert.False(rules.Contains(forbidden, StringComparison.OrdinalIgnoreCase), forbidden);
         }
 
-        // It offers the three task actions and says which states are terminal. Nothing else.
+        // Four lifecycle affordances, four governance ones, and one question about whether a
+        // task is finished with. Nothing else.
         Assert.Equal(
-            ["canCancel", "canMarkReady", "canRun", "isTerminalTask"],
+            [
+                "canAccept", "canCancel", "canMarkReady", "canOfferOverride",
+                "canReject", "canRequestChanges", "canRun", "isTerminalTask",
+            ],
             Exported(rules));
+    }
+
+    [Fact]
+    public void The_ui_keeps_no_copy_of_the_acceptance_rules()
+    {
+        // AcceptanceService decides whether an attempt may be accepted and ReviewFindingGate
+        // decides what blocks. Both are single authorities. A React form that re-derived
+        // either would be a second one, and the day they disagreed an operator would be shown
+        // a decision the Hub never made.
+        var governance = Governance();
+
+        foreach (var forbidden in new[]
+                 {
+                     "majorThreshold", "MajorThreshold", "blocks", "inScopeCountsBySeverity",
+                     "prerequisite", "canBeAccepted", "isAcceptable", "wouldBeRefused",
+                 })
+        {
+            Assert.False(governance.Contains(forbidden, StringComparison.Ordinal), forbidden);
+        }
+
+        // What it does instead: it sends, and it shows whatever came back.
+        Assert.Contains("acceptTask", governance, StringComparison.Ordinal);
+        Assert.Contains("ActionError", governance, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Machine_truth_is_read_and_a_finding_is_never_edited()
+    {
+        // The boundary this panel exists to hold. A person supplies verdicts on Human criteria
+        // and, for an override, a reason. Everything the machine established - verification
+        // verdicts, findings, severities, the Hub's own scope computation - is shown and
+        // cannot be touched from here.
+        var governance = Governance();
+
+        foreach (var forbidden in new[]
+                 {
+                     "dismissFinding", "falsePositive", "setSeverity", "setFindings",
+                     "outOfScope =", "severity =", "editRationale", "setVerificationStatus",
+                 })
+        {
+            Assert.False(governance.Contains(forbidden, StringComparison.Ordinal), forbidden);
+        }
+
+        // The two read-only sections have no control in them at all.
+        foreach (var section in new[]
+                 {
+                     Between(governance, "function MachineCriteria(", "function HumanCriteria("),
+                     Between(governance, "function Findings(", "function OverrideReason("),
+                 })
+        {
+            foreach (var control in new[] { "<input", "<select", "<textarea", "<button", "onChange" })
+            {
+                Assert.False(section.Contains(control, StringComparison.Ordinal), control);
+            }
+        }
+    }
+
+    [Fact]
+    public void A_human_verdict_is_never_answered_in_advance()
+    {
+        // A form that arrived pre-answered would decide for the operator and then record their
+        // name against it. Every criterion starts unanswered, and there is no stock wording for
+        // an override reason either - a prefilled "false positive" is a justification the Hub
+        // would attribute to someone who never wrote it.
+        var governance = Governance();
+
+        Assert.Contains("useState<ReadonlyMap<string, HumanVerdict>>(new Map())", governance,
+            StringComparison.Ordinal);
+        Assert.Contains("useState('')", governance, StringComparison.Ordinal);
+
+        foreach (var prefill in new[]
+                 {
+                     "defaultVerdict", "?? 'Met'", "|| 'Met'", "useState('Met')",
+                     "Approved", "False positive", "Known issue", "defaultValue",
+                 })
+        {
+            Assert.False(governance.Contains(prefill, StringComparison.Ordinal), prefill);
+        }
+    }
+
+    [Fact]
+    public void A_governance_decision_is_never_sent_twice_by_the_ui_itself()
+    {
+        // A mutation that failed for an unknown reason may or may not have happened. Sending it
+        // again is how one click becomes two decisions, so nothing on this path retries and the
+        // operator is the one who decides whether to try again.
+        foreach (var name in new[] { "useMutation.ts", "client.ts", "TaskGovernance.tsx" })
+        {
+            var code = CodeOnly(File.ReadAllText(WebSources().Single(f =>
+                f.EndsWith(Path.DirectorySeparatorChar + name, StringComparison.Ordinal))));
+
+            foreach (var forbidden in new[] { "retry", "setTimeout", "setInterval", "backoff" })
+            {
+                Assert.False(code.Contains(forbidden, StringComparison.OrdinalIgnoreCase), $"{name}: {forbidden}");
+            }
+        }
+    }
+
+    [Fact]
+    public void A_decision_never_becomes_a_second_live_channel()
+    {
+        // Governance is request and answer. There is no acceptance stream, and no way for one
+        // browser tab to tell another that a decision was made - the Hub is the only thing
+        // that knows, and the page asks it.
+        var governance = Governance();
+
+        foreach (var forbidden in new[]
+                 {
+                     "EventSource", "BroadcastChannel", "WebSocket", "useExecutionStream",
+                     "localStorage", "sessionStorage",
+                 })
+        {
+            Assert.False(governance.Contains(forbidden, StringComparison.Ordinal), forbidden);
+        }
     }
 
     [Fact]
     public void An_action_never_names_a_provider_or_a_runtime_setting()
     {
-        // Create, ready, run and cancel work the same whichever provider is configured. The
-        // operator names a task and, at run time, an implementer profile - never a runtime, a
-        // permission profile or a sandbox.
+        // Every action works the same whichever provider is configured, and that now includes
+        // deciding. The operator names a task and, at run time, an implementer profile - never
+        // a runtime, a permission profile or a sandbox, and never when accepting.
         foreach (var file in WebSources().Where(f =>
                      f.EndsWith("TaskActions.tsx", StringComparison.Ordinal)
+                     || f.EndsWith("TaskGovernance.tsx", StringComparison.Ordinal)
                      || f.EndsWith("CreateTaskPage.tsx", StringComparison.Ordinal)))
         {
             var code = CodeOnly(File.ReadAllText(file));
@@ -310,6 +485,36 @@ public sealed class WebInvariantTests
             .Select(m => m.Groups["name"].Value)
             .Order(StringComparer.Ordinal),
     ];
+
+    /// <summary>The governance panel's code, with its commentary removed.</summary>
+    private static string Governance() =>
+        CodeOnly(File.ReadAllText(Path.Combine(WebRoot, "src", "routes", "TaskGovernance.tsx")));
+
+    /// <summary>How many times a literal appears.</summary>
+    private static int Occurrences(string text, string value)
+    {
+        var count = 0;
+
+        for (var i = text.IndexOf(value, StringComparison.Ordinal); i >= 0;
+             i = text.IndexOf(value, i + value.Length, StringComparison.Ordinal))
+        {
+            count++;
+        }
+
+        return count;
+    }
+
+    /// <summary>One named region of a module, so a guard can read a single function's body.</summary>
+    private static string Between(string text, string from, string to)
+    {
+        var start = text.IndexOf(from, StringComparison.Ordinal);
+        var end = text.IndexOf(to, StringComparison.Ordinal);
+
+        Assert.True(start >= 0, from);
+        Assert.True(end > start, to);
+
+        return text[start..end];
+    }
 
     /// <summary>Source with its commentary removed, so a guard measures code.</summary>
     private static string CodeOnly(string source) =>

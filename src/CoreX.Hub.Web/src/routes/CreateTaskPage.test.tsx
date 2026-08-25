@@ -146,7 +146,15 @@ describe('CreateTaskPage', () => {
     const user = userEvent.setup();
     const sent: unknown[] = [];
 
-    stubFetch(catalogue({ '/api/v1/tasks': { status: 201, body: taskSummary({ taskKey: 'API-007' }) } }));
+    stubFetch(
+      catalogue({
+        // The detail route first: a create that succeeds navigates to it, and the substring
+        // stub would otherwise answer that GET with the summary and render a task page with
+        // no criteria on it.
+        '/api/v1/tasks/API-007': { body: taskDetail({ summary: taskSummary({ taskKey: 'API-007' }) }) },
+        '/api/v1/tasks': { status: 201, body: taskSummary({ taskKey: 'API-007' }) },
+      }),
+    );
 
     const original = globalThis.fetch;
     vi.stubGlobal('fetch', (input: RequestInfo | URL, init?: RequestInit) => {
@@ -213,7 +221,15 @@ describe('CreateTaskPage', () => {
     const user = userEvent.setup();
     let posts = 0;
 
-    stubFetch(catalogue({ '/api/v1/tasks': { status: 201, body: taskSummary() } }));
+    stubFetch(
+      catalogue({
+        // The detail route first: a create that succeeds navigates to it, and the substring
+        // stub would otherwise answer that GET with the summary and render a task page with
+        // no criteria on it.
+        '/api/v1/tasks/CXH-001': { body: taskDetail() },
+        '/api/v1/tasks': { status: 201, body: taskSummary() },
+      }),
+    );
 
     const original = globalThis.fetch;
     vi.stubGlobal('fetch', (input: RequestInfo | URL, init?: RequestInit) => {

@@ -29,7 +29,8 @@ Bağımsız review: [`docs/phase-7-review.md`](docs/phase-7-review.md).
 | Faz 9A | Yerel Minimal API + sorgu sözleşmesi + SSE temeli | **TAMAM** |
 | Faz 9B | React/TypeScript operatör kabuğu + salt-okunur görünümler | **TAMAM** |
 | Faz 9C | Operatör eylemleri: create / ready / run / cancel | **TAMAM** |
-| Faz 9D-E | İnsan kabul akışı (accept / override / reject), uçtan uca UI kabulü | uygulanmadı |
+| Faz 9D | İnsan yönetişimi arayüzü: accept / review override / request-changes / reject | **TAMAM** |
+| Faz 9E | Uçtan uca UI kabulü | uygulanmadı |
 | Faz 10 | Sertleştirme + WSL2 sert izolasyon + Kronos kapısı | uygulanmadı |
 
 Faz 1 kataloğu, görev modelini, Ready kapısını, kalıcılığı ve CLI'ı kurar.

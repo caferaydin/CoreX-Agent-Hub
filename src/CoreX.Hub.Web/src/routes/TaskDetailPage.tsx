@@ -18,6 +18,7 @@ import {
 import { durationBetween, formatDuration } from '../lib/format';
 import { lookOfOutcome, lookOfTaskState } from '../lib/status';
 import { TaskActions } from './TaskActions';
+import { TaskGovernance } from './TaskGovernance';
 
 /**
  * One task, in the order a person asks about it.
@@ -65,8 +66,11 @@ export function TaskDetailPage(): ReactNode {
       />
       <div className="content">
         <div className="page">
-          {/* Kept apart from the panels below: those render server truth, this changes it. */}
+          {/* Kept apart from the panels below: those render server truth, these change it.
+              Kept apart from each other too - moving a task through its lifecycle and deciding
+              its fate are different jobs done by a person in different frames of mind. */}
           <TaskActions task={task} onChanged={refetch} />
+          <TaskGovernance task={task} onDecided={refetch} />
 
           <Panel title="Overview">
             <p style={{ marginTop: 0, marginBottom: 'var(--space-4)' }}>{task.summary.objective}</p>
@@ -296,8 +300,9 @@ function Attempts({ attempts }: { attempts: readonly ExecutionSummaryDto[] }): R
 /**
  * Where the latest attempt stands with a person.
  *
- * Read-only: this says what the Hub is waiting for, and offers nothing to click. Deciding is
- * Phase 9D.
+ * Read-only, and it stays that way: this is the projection of acceptance state, and deciding
+ * happens in the Human decision panel above. Two components rather than one because a form
+ * that also owned the reading of server truth would grow until neither half was reviewable.
  */
 function Acceptance({ acceptance }: { acceptance: AcceptanceStateDto }): ReactNode {
   return (

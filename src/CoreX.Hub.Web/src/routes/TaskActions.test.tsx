@@ -118,11 +118,13 @@ describe('Task actions', () => {
         </MemoryRouter>,
       );
 
-      await screen.findByRole('region', { name: 'Actions' });
+      // Scoped to this panel, because since Phase 9D the page does offer decisions - in a
+      // different region, deliberately. What must stay true is that moving a task through its
+      // lifecycle and deciding its fate are never the same control sitting in the same row.
+      const lifecycle = within(await screen.findByRole('region', { name: 'Actions' }));
 
-      // Phase 9D. Not present, and not present-but-disabled either.
       for (const forbidden of [/accept/i, /override/i, /request changes/i, /reject/i]) {
-        expect(screen.queryByRole('button', { name: forbidden })).not.toBeInTheDocument();
+        expect(lifecycle.queryByRole('button', { name: forbidden })).not.toBeInTheDocument();
       }
 
       unmount();

@@ -1,10 +1,14 @@
 import type {
   AcceptanceStateDto,
   AgentProfileDto,
+  AcceptanceResultDto,
+  AcceptRequest,
   ApiErrorEnvelope,
   CancellationResultDto,
+  DecisionRequest,
   CreateTaskRequest,
   MarkReadyResultDto,
+  OverrideRequest,
   RunStartedDto,
   TaskSummaryDto,
   EvidenceDto,
@@ -28,9 +32,14 @@ import type {
  * envelope, and one function per thing a screen needs.
  *
  * Every request the UI makes goes through here, which is what makes what the UI can and
- * cannot do checkable rather than merely intended. Phase 9C adds exactly four state-changing
- * calls - create, ready, run, cancel - and no more: there is deliberately no accept, no
- * override, no reject, because Phase 9D has not happened yet.
+ * cannot do checkable rather than merely intended. After Phase 9D the state-changing surface
+ * is exactly eight calls - four lifecycle, four governance - each one named after the
+ * operation it performs.
+ *
+ * There is no generic `transition(path, body)` and there never should be. Accept, override,
+ * request-changes and reject are four different governance decisions with four different
+ * prerequisites, and a function that took the verb as a parameter would make them look
+ * interchangeable to every caller that used it.
  */
 
 /**
@@ -274,7 +283,7 @@ export const api = {
   /** Where the live stream for an execution lives. Opened by the SSE hook, not by fetch. */
   eventsUrl: (id: string) => `${apiBase}/executions/${id}/events`,
 
-  // --- The four things this phase can change -----------------------------------------------
+  // --- The four lifecycle steps --------------------------------------------------------------
 
   createTask: (request: CreateTaskRequest, signal?: AbortSignal) =>
     send<TaskSummaryDto>('/tasks', request, signal),
@@ -295,6 +304,64 @@ export const api = {
     send<CancellationResultDto>(
       `/tasks/${encodeURIComponent(taskKey)}/cancel`,
       { actor, reason },
+      signal,
+    ),
+
+  // --- The four human decisions ------------------------------------------------------------
+
+  /**
+   * Accepting by the ordinary route.
+   *
+   * The request cannot carry an override, because {@link AcceptRequest} has nowhere to put
+   * one. An execution a review blocked is refused here, by the server, and that refusal is
+   * what an operator sees.
+   */
+  acceptTask: (
+    taskKey: string,
+    attemptNo: number,
+    request: AcceptRequest,
+    signal?: AbortSignal,
+  ) =>
+    send<AcceptanceResultDto>(
+      `/tasks/${encodeURIComponent(taskKey)}/attempts/${attemptNo}/accept`,
+      request,
+      signal,
+    ),
+
+  /** Accepting despite a blocking review. A different route, on purpose. */
+  overrideReviewBlocked: (
+    taskKey: string,
+    attemptNo: number,
+    request: OverrideRequest,
+    signal?: AbortSignal,
+  ) =>
+    send<AcceptanceResultDto>(
+      `/tasks/${encodeURIComponent(taskKey)}/attempts/${attemptNo}/accept-override`,
+      request,
+      signal,
+    ),
+
+  requestChanges: (
+    taskKey: string,
+    attemptNo: number,
+    request: DecisionRequest,
+    signal?: AbortSignal,
+  ) =>
+    send<AcceptanceResultDto>(
+      `/tasks/${encodeURIComponent(taskKey)}/attempts/${attemptNo}/request-changes`,
+      request,
+      signal,
+    ),
+
+  rejectTask: (
+    taskKey: string,
+    attemptNo: number,
+    request: DecisionRequest,
+    signal?: AbortSignal,
+  ) =>
+    send<AcceptanceResultDto>(
+      `/tasks/${encodeURIComponent(taskKey)}/attempts/${attemptNo}/reject`,
+      request,
       signal,
     ),
 } as const;

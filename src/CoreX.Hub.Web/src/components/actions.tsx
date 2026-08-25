@@ -106,19 +106,27 @@ function describe(error: unknown): {
 }
 
 /**
- * A confirmation, for the one action that can stop work in progress.
+ * A confirmation, for an action whose consequences outlive the click.
  *
  * A real `<dialog>` rather than a div with a high z-index: the browser gives modal semantics,
  * Escape, focus containment and the backdrop for free, and every hand-rolled version of those
  * is a keyboard trap waiting to happen.
  *
- * Used once, for Cancel. Confirming everything would train an operator to dismiss dialogs
- * without reading them, which costs exactly the moment this one exists for.
+ * Used for cancelling a run and for the four human decisions - the actions that stop work or
+ * put a person's name against an outcome. Confirming everything would train an operator to
+ * dismiss dialogs without reading them, which costs exactly the moments these exist for, so
+ * the ordinary lifecycle steps deliberately have none.
+ *
+ * `dismissLabel` exists because the safe choice is not always "keep going": backing out of a
+ * decision is not backing out of an interruption, and a button that said the wrong thing would
+ * be the one an operator reads under time pressure.
  */
 export function ConfirmDialog({
   open,
   title,
   confirmLabel,
+  dismissLabel = 'Keep going',
+  tone = 'danger',
   busy,
   busyLabel,
   onConfirm,
@@ -128,6 +136,8 @@ export function ConfirmDialog({
   open: boolean;
   title: string;
   confirmLabel: string;
+  dismissLabel?: string;
+  tone?: 'primary' | 'danger';
   busy?: boolean;
   busyLabel?: string;
   onConfirm: () => void;
@@ -185,9 +195,9 @@ export function ConfirmDialog({
       <div className="dialog__body">{children}</div>
       <div className="dialog__actions">
         <button type="button" className="button" ref={dismiss} onClick={onDismiss}>
-          Keep going
+          {dismissLabel}
         </button>
-        <ActionButton variant="danger" busy={busy} busyLabel={busyLabel} onClick={onConfirm}>
+        <ActionButton variant={tone} busy={busy} busyLabel={busyLabel} onClick={onConfirm}>
           {confirmLabel}
         </ActionButton>
       </div>

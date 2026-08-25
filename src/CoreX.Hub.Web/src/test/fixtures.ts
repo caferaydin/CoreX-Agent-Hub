@@ -1,4 +1,6 @@
 import type {
+  AcceptanceResultDto,
+  AcceptanceStateDto,
   AgentProfileDto,
   OrganizationDto,
   ProjectDto,
@@ -265,5 +267,64 @@ export const project = (over: Partial<ProjectDto> = {}): ProjectDto => ({
   slug: 'agent-hub',
   name: 'Agent Hub',
   taskKeyPrefix: 'CXH',
+  ...over,
+});
+
+/**
+ * Where an attempt stands with a person.
+ *
+ * Defaults to the ordinary case - machine truth established, one Human criterion outstanding,
+ * nothing decided - so a test that is about the override says only what makes it an override.
+ */
+export const acceptanceState = (over: Partial<AcceptanceStateDto> = {}): AcceptanceStateDto => ({
+  taskState: 'AwaitingAcceptance',
+  executionId: '01a039bf-4fa9-7f71-9f09-f1c4cf41c0c3',
+  attemptNo: 2,
+  isLatestExecution: true,
+  executionState: 'Completed',
+  executionOutcome: 'Passed',
+  overrideApplicable: false,
+  existingDecision: null,
+  machineCriteria: [
+    {
+      criterionId: 'c1',
+      order: 1,
+      text: 'The solution builds in Release with warnings as errors.',
+      verificationRef: 'build',
+      verdict: 'Met',
+      verificationStatus: 'Passed',
+      required: true,
+      exitCode: 0,
+      testsPassed: null,
+      testsFailed: null,
+      testsSkipped: null,
+    },
+  ],
+  humanCriteria: [
+    {
+      criterionId: 'c2',
+      order: 2,
+      text: 'The document contains the requested semantic content.',
+      humanCheckHint: 'Read it and decide.',
+    },
+  ],
+  machineTruthProblems: [],
+  ...over,
+});
+
+/** What the Hub answers when a decision is recorded. */
+export const acceptanceResult = (
+  over: Partial<AcceptanceResultDto> = {},
+): AcceptanceResultDto => ({
+  taskKey: 'CXH-001',
+  executionId: '01a039bf-4fa9-7f71-9f09-f1c4cf41c0c3',
+  attemptNo: 2,
+  decision: 'Accept',
+  overrideUsed: false,
+  taskState: 'Accepted',
+  executionState: 'Completed',
+  executionOutcome: 'Passed',
+  reason: null,
+  workspaceCleanup: 'Released',
   ...over,
 });

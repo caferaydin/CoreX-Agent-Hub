@@ -1,4 +1,4 @@
-import { screen } from '@testing-library/react';
+import { screen, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { TaskDetailPage } from './TaskDetailPage';
 import { renderAt, stubFetch } from '../test/render';
@@ -108,15 +108,17 @@ describe('TaskDetailPage', () => {
 
     show();
 
-    await screen.findByText('Acceptance');
+    const projection = within(await screen.findByRole('region', { name: 'Acceptance' }));
 
-    // The server computed that overriding is the applicable route; the UI says so and stops
-    // there. Deciding is Phase 9D, and there is deliberately not even a disabled button.
-    expect(screen.getByText('Override applies')).toBeInTheDocument();
+    // The server computed that overriding is the applicable route, and this panel says so.
+    expect(projection.getByText('Override applies')).toBeInTheDocument();
 
-    for (const forbidden of [/accept/i, /override/i, /reject/i, /request changes/i]) {
-      expect(screen.queryByRole('button', { name: forbidden })).not.toBeInTheDocument();
-    }
+    // Scoped to this panel: since Phase 9D the page does offer decisions, in the Human
+    // decision panel. What this asserts is that the projection stayed a projection - it
+    // reports what the Hub is waiting for and offers nothing to click.
+    expect(projection.queryAllByRole('button')).toHaveLength(0);
+    expect(projection.queryAllByRole('radio')).toHaveLength(0);
+    expect(projection.queryAllByRole('textbox')).toHaveLength(0);
   });
 
   it('reports what the ready gate is holding back', async () => {
