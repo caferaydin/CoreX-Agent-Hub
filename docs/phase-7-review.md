@@ -198,3 +198,62 @@ Bu **bir** ölçümdür. Şunları kanıtlamaz ve kanıtladığı iddia edilmez:
 
 Ham reviewer transkripti (586 KB) repository'ye **girmez**; gerçek koşumlarda kanıt
 deposunda, Review adımına bağlı olarak saklanır.
+
+## 8. Faz 7C — gerçek uçtan uca kabul
+
+Zincirin tamamı iki kez, gerçek sağlayıcılarla, ayrı süreçlerde koşturuldu:
+
+```
+gerçek Claude implementer → Hub result commit → Hub doğrulaması
+  → bağımsız gerçek Claude reviewer → kanonik bulgular → ReviewFindingGate
+  → görev durumu → insan kararı
+```
+
+### Temiz yol — CXH-002#2
+
+| | |
+|---|---|
+| Result commit | `a38002c`, parent = base, tek Hub commit'i |
+| Implementer | session_id **= ExecutionId**; `Edit, Glob, Grep, Read, Write`; `acceptEdits`; MCP 0 |
+| Doğrulama | restore / build / test / ef-pending-model — dördü de Passed |
+| Reviewer | session_id = `DeterministicGuid("review", ExecutionId)`; `Glob, Grep, Read, StructuredOutput`; `plan`; MCP 0 |
+| Bulgular | 3 — Minor ×2, Info ×1; hepsi kapsam içi; **0 Critical, 0 Major** |
+| Kapsam uyuşmazlığı | 0 · tamper yok · snapshot artıksız |
+| Sonuç | Review `Succeeded` → `Completed(Passed)` → Task `AwaitingAcceptance` → düz insan kabulü → `Accepted` |
+
+### Bloklayan yol — CXH-003#1
+
+Reviewer'a hiçbir ipucu verilmedi; sözleşmesi normal üretim sözleşmesidir.
+
+| | |
+|---|---|
+| Result commit | `fc650ba`, tek dosya, derlenir, doğrulama **Passed** |
+| Bulgular | **Critical/Security/High** — *"IsAuthorized returns true for null/empty/whitespace token"*, ayrıca Major/Architecture ve Minor/TestCoverage |
+| Kapsam | üçü de Hub-türetimli `OutOfScope=false`, yol değişen dosyaya çözümlenir |
+| Sonuç | Review `Succeeded` → `Completed(ReviewBlocked)` → Task `Ready` |
+| Düz kabul | **reddedildi** (`exit 2`) |
+| Gerekçesiz / boş gerekçeli override | **reddedildi** (`exit 2`), sıfır karar |
+| Geçerli override | Task `Accepted`; Execution **hâlâ `ReviewBlocked`**; tek karar, `OverrideUsed=true`, gerekçe ve insan verdict'i korunur; bulgular silinmez |
+
+Hiçbir sonuç commit'i main'e girmedi; merge, push, deploy yok.
+
+### Kabulün bulduğu kusurlar
+
+Gerçek koşum, deterministik takımın göremediği dört şeyi buldu — hepsi düzeltildi:
+
+1. **Review snapshot kökü oluşturulmuyordu.** Snapshot kökü bir güven köküdür ve yol koruyucusu
+   var olmayan bir dizini reddeder. İlk gerçek koşum her aşamayı geçip review'de durdu. Dürüst
+   durdu — `ReviewUnusable`, asla "geçti" değil — ama bunu öğrenmek bütün bir gerçek execution'a
+   mal oldu: orchestration testleri reviewer'ı porttan enjekte eder ve bu gateway'i hiç kurmaz.
+2. **Kurtarma, bloklanmış bir review'ü `Passed` yapıyordu.** Artık kalıcı bulgulardan donmuş
+   kapıya sorularak yeniden kurulur.
+3. **Implementer kanıtı adıma bağlı değildi.** Review gerçek olduğundan beri `AgentStdout`'un iki
+   yazarı var; ayırt edici "adımı olmayan" olamaz. İkisi de kendi adımını taşır, CLI `STEP`
+   sütunuyla gösterir.
+4. **Atlanan review yanlış gerekçe söylüyordu.** Kapı blokladığında "yapılandırılmamış" demek,
+   reviewer'ı olan bir repository için yanlıştır. Her atlama kendi nedenini söyler.
+
+### Eşik
+
+İki koşum eşiği destekler: sağlam bir değişim 0 Critical / 0 Major aldı (yanlış bloklama yok),
+kusurlu bir değişim 1 Critical + 1 Major aldı. **`MajorThreshold = 1` sabit kalır.**

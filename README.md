@@ -5,7 +5,7 @@ Ticari bir ürün değildir; tek geliştirici iş istasyonunda, tek kullanıcı 
 
 Otoriter mimari doküman: [`docs/architecture/CoreX-Agent-Hub-Mimari-Plan-v1.1.1.md`](docs/architecture/CoreX-Agent-Hub-Mimari-Plan-v1.1.1.md)
 (durum: **ARCHITECTURE ACCEPTED — DISCOVERY CLOSED**).
-Kabul edilmiş kararlar: [`docs/adr/`](docs/adr/) (ADR-0001 … ADR-0022).
+Kabul edilmiş kararlar: [`docs/adr/`](docs/adr/) (ADR-0001 … ADR-0023).
 
 Bağımsız review: [`docs/phase-7-review.md`](docs/phase-7-review.md).
 
@@ -22,8 +22,8 @@ Bağımsız review: [`docs/phase-7-review.md`](docs/phase-7-review.md).
 | Faz 5B | K1 RuntimePolicyGate + K2 ScopeGuard + K3 SecretGuard | **TAMAM** |
 | Faz 5C | ExecutionOrchestrator + K0 + result commit + doğrulama + lease | **TAMAM** |
 | Faz 5D | AcceptanceService + insan kararları + `hub accept` / `request-changes` / `reject` / `evidence show` | **TAMAM** |
-| Faz 6 | ClaudeCodeRuntime | uygulanmadı |
-| Faz 7 | İnceleme adımı + inceleme override kabulü | uygulanmadı |
+| Faz 6 | ClaudeCodeRuntime + gerçek agent kabulü | **TAMAM** |
+| Faz 7 | Bağımsız review + inceleme override kabulü | **TAMAM** |
 | Faz 8 | CodexRuntime | uygulanmadı |
 | Faz 9 | Minimal API + React UI | uygulanmadı |
 | Faz 10 | Sertleştirme + WSL2 sert izolasyon + Kronos kapısı | uygulanmadı |
@@ -299,7 +299,7 @@ tests/                        Domain / Application / Integration / Execution / W
                               Verification / Architecture / LoopZero testleri +
                               corex-fixture (deterministik test yardımcı exe'si).
 docs/architecture             Otoriter mimari doküman + tarihçe.
-docs/adr                      ADR-0001 … ADR-0022.
+docs/adr                      ADR-0001 … ADR-0023.
 docs/phase-7-review.md        Bağımsız review: sınır, ölçümler, G7-1 kalibrasyonu.
 ```
 
@@ -749,7 +749,10 @@ eskisi ne kabul edilebilir ne override edilebilir.
 
 **`hub evidence show`** yalnızca kayıtlı `EvidenceArtifact` meta verisini ve blob deposunu
 okur. Commit'i olan execution `GitCommitDiff`, olmayan `GitWorktreeDiff` ile anlatılır ve
-hangisinin gösterildiği açıkça yazılır. Eksik artefakt **yeniden üretilmez** — mevcut
+hangisinin gösterildiği açıkça yazılır. Review gerçek olduğundan beri aynı türü **iki üretici**
+yazar — implementer'ın ve reviewer'ın transkripti de `AgentStdout`'tur — bu yüzden listede
+`STEP` sütunu vardır: sahiplik `ExecutionStepId`'dedir ve okuyucu hangisine baktığını
+tahmin etmez. Eksik artefakt **yeniden üretilmez** — mevcut
 çalışma ağacından diff üretmek aynı kelimelerle başka bir soruyu cevaplamak olurdu.
 Redaksiyon yazma zamanında olduğu için bu yolda ham tampon yoktur ve `--raw` gibi bir
 seçenek bilerek eklenmemiştir.
@@ -813,8 +816,28 @@ bir port görür; işletim sistemi tipi o portu geçmez.
 
 Execution gerçeği hiçbir zaman task'a uydurulmaz. Result commit'i olan bir deneme onu
 korur: doğrulama sırasında gelen iptal frozen davranışı izler — Verify adımı `Cancelled`,
-execution `VerificationFailed`, commit yerinde. Task terminal `Cancelled` olabilir; makine
-gerçeği `VerificationFailed` kalır ve `AcceptanceDecision` yazılmaz.
+execution `VerificationFailed`, commit yerinde. Verify adımı **zaten başarılı** olmuşsa
+doğru cevap `ReviewUnusable`'dır: doğrulanmış ama kimsenin incelemediği bir sonuç vardır ve
+ona `VerificationFailed` demek kayıttaki Verify adımıyla çelişirdi. Task terminal
+`Cancelled` olabilir; makine gerçeği yerinde kalır ve `AcceptanceDecision` yazılmaz.
+
+**Kesilen bir yazma sonrası otorite veritabanıdır.** Bir geçiş iki ayrı andır: aggregate
+değiştirilir, sonra satır kaydedilir. İptal ikisinin arasına düşerse bellekteki örnek zaten
+"terminal" der, satır ise demez — ve aynı context'e sorulduğunda kimlik haritası o
+değiştirilmiş örneği geri verir, yani sapma onu yaratan yerden **görünmez**.
+
+Bu yüzden iptali kapatan yol aggregate değil **kimlik** alır, ve durable satırları kendi
+kapsamında yeniden okur. Kesilen store üzerinden kaydetmek, vazgeçilmiş mutasyonları da
+diske yazmak olurdu. `SaveChanges`'ten gelen bir iptal, yazmanın gerçekleşip
+gerçekleşmediği hakkında **hiçbir şey söylemez**; iki ihtimal de yalnızca veritabanına
+sorularak ayrılır. Zaten terminal olan bir satır ikinci kez geçirilmez ve outcome'u
+çağıranın niyetine uydurulmaz. Aynı kural execution'ı **talep eden** ilk işlem için de
+geçerlidir: orada kesilen bir iptal, ya sahipsiz bir `Running` satırı bırakırdı ya da hiç
+satır bırakmazdı — cevabı yine veritabanı verir.
+
+Sınırlı `MandatoryWorkScope` her yazmayı yönetmeye devam eder: tek kapanış yolu vardır,
+kendini çağırmaz, ve durable gerçek kurulamıyorsa satır **uydurulmaz** — dürüstçe raporlanır
+ve son çare olarak uzlaştırıcı kalır. Normal bir iptal artık uzlaştırıcıya ihtiyaç duymaz.
 
 ### Çökmeden sonra
 
@@ -834,6 +857,13 @@ yorumlanmaz, **fail-closed** raporlanır.
 İkinci bir result commit yapmak dikkat meselesi değildir: kurtarma servisinde workspace
 portu **yoktur**, dolayısıyla oradan bir commit'e giden yol yoktur. Agent yeniden
 çalıştırılmaz, ref'e dokunulmaz, dosya silinmez.
+
+**Review de aynı kuralla kapanır.** Kurtarmada reviewer portu da yoktur, yani bir review
+elde edilemez — ama zaten elde edilmiş olan okunur. Host, review ile onun sonucunu yazan
+satır arasında ölebilir; o anda bulgular ve Review adımı kalıcıdır, ve tek doğru cevap
+bulguları okuyup **donmuş kapıya** sormaktır. Aksi hâlde bir reviewer'ın çoktan blokladığı
+iş `Passed` olarak kabul edilirdi. Reviewer'ın hiç bakmadığı bir sonuç ise `ReviewUnusable`
+olur: review edilen bir repository'de "kimse bakmadı" asla "geçti" değildir.
 
 ### Loop Zero kabul takımı
 

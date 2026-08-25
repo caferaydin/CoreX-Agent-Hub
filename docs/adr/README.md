@@ -32,6 +32,7 @@ v1.1.1 esas alınır.
 | ADR-0020 | Faz 6 native Windows gerçek-agent profili kabuk (Bash) açmaz | Accepted |
 | ADR-0021 | Faz 6 native Windows E1 kabul inceltmesi: araç yüzeyi ölçümü + deterministik K1 | Accepted |
 | ADR-0022 | Bağımsız review kanıt üretir, karar üretmez; kapı Hub'ındır | Accepted |
+| ADR-0023 | Kesilen bir yazmadan sonra otorite veritabanıdır | Accepted |
 
 ## Onaylanmış Faz 0 format kararları
 

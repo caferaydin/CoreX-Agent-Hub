@@ -138,6 +138,28 @@ public sealed class CancellationFinalizationInvariantTests
     }
 
     [Fact]
+    public void The_durable_authority_rule_is_written_down_where_decisions_live()
+    {
+        // A rule this easy to undo by accident - one tracked aggregate, one early return -
+        // is worth a record that says why, not only a guard that says no.
+        var adr = Directory
+            .EnumerateFiles(Path.Combine(RepoLayout.Root, "docs", "adr"), "ADR-0023-*.md")
+            .SingleOrDefault();
+
+        Assert.True(adr is not null, "the durable finalization authority must be recorded as an ADR");
+
+        var text = File.ReadAllText(adr!);
+
+        Assert.Contains("Accepted", text, StringComparison.Ordinal);
+        Assert.Contains("OperationCanceledException", text, StringComparison.Ordinal);
+        Assert.Contains("IDetachedStore", text, StringComparison.Ordinal);
+        Assert.Contains("MandatoryWorkScope", text, StringComparison.Ordinal);
+
+        Assert.Contains("ADR-0023", File.ReadAllText(
+            Path.Combine(RepoLayout.Root, "docs", "adr", "README.md")), StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void The_write_that_claims_an_execution_is_covered_too()
     {
         var pipeline = CodeOnly(Pipeline());
