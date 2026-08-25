@@ -4,7 +4,7 @@ using CoreX.Hub.Agents.Abstractions;
 using CoreX.Hub.Agents.Codex;
 using CoreX.Hub.Application.Catalog;
 using CoreX.Hub.Application.Configuration;
-using CoreX.Hub.Cli.Agents;
+using CoreX.Hub.Composition.Agents;
 using CoreX.Hub.Domain.Catalog;
 using CoreX.Hub.Infrastructure.Configuration;
 

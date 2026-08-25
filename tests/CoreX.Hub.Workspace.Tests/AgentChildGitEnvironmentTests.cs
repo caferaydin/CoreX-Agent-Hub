@@ -1,5 +1,5 @@
 using CoreX.Hub.Agents.Abstractions;
-using CoreX.Hub.Cli.Agents;
+using CoreX.Hub.Composition.Agents;
 using CoreX.Hub.Execution.Processes;
 using CoreX.Hub.Workspace.Abstractions;
 using CoreX.Hub.Workspace.Git;

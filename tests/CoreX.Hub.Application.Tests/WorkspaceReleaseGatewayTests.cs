@@ -1,7 +1,7 @@
 using System.Runtime.Versioning;
 using CoreX.Hub.Application.Acceptance;
 using CoreX.Hub.Application.Verification;
-using CoreX.Hub.Cli.Orchestration;
+using CoreX.Hub.Composition.Orchestration;
 using CoreX.Hub.Domain.Executions;
 using CoreX.Hub.Domain.Tasks;
 using CoreX.Hub.Workspace;

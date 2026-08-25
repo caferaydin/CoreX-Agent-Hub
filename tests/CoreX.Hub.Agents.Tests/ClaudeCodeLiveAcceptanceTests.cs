@@ -2,7 +2,7 @@ using System.Diagnostics;
 using System.Runtime.Versioning;
 using CoreX.Hub.Agents.Abstractions;
 using CoreX.Hub.Agents.ClaudeCode;
-using CoreX.Hub.Cli.Workspace;
+using CoreX.Hub.Composition.Workspace;
 
 namespace CoreX.Hub.Agents.Tests;
 

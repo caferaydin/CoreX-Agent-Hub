@@ -298,7 +298,7 @@ public sealed class LoopZeroInvariantTests
         var code = CodeOnly(File.ReadAllText(wiring));
 
         Assert.StartsWith(
-            Path.Combine(RepoLayout.SourceRoot, "CoreX.Hub.Cli"),
+            Path.Combine(RepoLayout.SourceRoot, "CoreX.Hub.Composition"),
             wiring,
             StringComparison.OrdinalIgnoreCase);
 
@@ -341,7 +341,7 @@ public sealed class LoopZeroInvariantTests
         return name switch
         {
             // The composition root's single runtime wiring seam, and the adapter factory it
-            // calls. Both are under CoreX.Hub.Cli, which is asserted above.
+            // calls. Both are under CoreX.Hub.Composition, which is asserted above.
             "AgentRuntimeRegistry.cs" or "ClaudeCodeRuntimeFactory.cs" or "CodexRuntimeFactory.cs" => true,
 
             // Where a runtime family declares what it needs to be installable.

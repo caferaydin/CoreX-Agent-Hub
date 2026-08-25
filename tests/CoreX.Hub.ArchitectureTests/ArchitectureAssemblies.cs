@@ -22,11 +22,27 @@ internal static class ArchitectureAssemblies
     public static Assembly ContextModule { get; } =
         typeof(global::CoreX.Hub.Context.ContextPackBuilder).Assembly;
 
+    /// <summary>
+    /// The composition root, which is no longer the CLI.
+    ///
+    /// Phase 9 gave the system a second adapter, and a composition root named after one of
+    /// its callers would have meant the API either duplicating the wiring or depending on a
+    /// console executable. Both callers now compose the same authorities from here.
+    /// </summary>
+    public static Assembly Composition { get; } = typeof(global::CoreX.Hub.Composition.HubSession).Assembly;
+
+    /// <summary>The console adapter.</summary>
     public static Assembly Cli { get; } = typeof(Cli.HubCli).Assembly;
 
-    /// <summary>Everything, including the composition root.</summary>
+    /// <summary>The local HTTP adapter.</summary>
+    public static Assembly Api { get; } = typeof(global::CoreX.Hub.Api.HubApi).Assembly;
+
+    /// <summary>Everything, including the composition root and both adapters.</summary>
     public static IReadOnlyList<Assembly> All { get; } =
-        [Domain, Application, Infrastructure, Execution, Workspace, Verification, Agents, ContextModule, Cli];
+    [
+        Domain, Application, Infrastructure, Execution, Workspace, Verification, Agents,
+        ContextModule, Composition, Cli, Api,
+    ];
 
     /// <summary>
     /// The layers that must stay provider blind. The composition root is excluded on

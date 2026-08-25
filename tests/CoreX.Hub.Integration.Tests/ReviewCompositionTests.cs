@@ -1,9 +1,10 @@
+using CoreX.Hub.Composition;
 using System.Runtime.Versioning;
 using System.Text;
 using CoreX.Hub.Application.Catalog;
 using CoreX.Hub.Application.Configuration;
 using CoreX.Hub.Cli;
-using CoreX.Hub.Cli.Orchestration;
+using CoreX.Hub.Composition.Orchestration;
 using CoreX.Hub.Domain.Catalog;
 using CoreX.Hub.Domain.Common;
 using CoreX.Hub.Infrastructure.Configuration;

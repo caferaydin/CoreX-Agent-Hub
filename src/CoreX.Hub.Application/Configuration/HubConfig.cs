@@ -61,6 +61,25 @@ public sealed class HubAgentsConfig
     /// developer machine has on PATH is usually not the accepted one.
     /// </summary>
     public List<CodexRuntimeConfig> CodexRuntimes { get; set; } = [];
+
+    /// <summary>
+    /// Every runtime key this installation declares, whatever family declared it.
+    ///
+    /// The sections above are per family because what a family needs to be installable
+    /// differs. The keys are not: a profile names one, and whether it resolves is the same
+    /// question for all of them. A caller that only wants that answer asks here rather than
+    /// enumerating the families itself - which is what keeps "which runtimes exist" from
+    /// becoming a list every new adapter has to remember to extend.
+    /// </summary>
+    public IReadOnlyList<string> DeclaredRuntimeKeys =>
+    [
+        .. ScriptedRuntimes.Select(r => r.Key)
+            .Concat(ClaudeCodeRuntimes.Select(r => r.Key))
+            .Concat(CodexRuntimes.Select(r => r.Key))
+            .Where(k => !string.IsNullOrWhiteSpace(k))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Order(StringComparer.Ordinal),
+    ];
 }
 
 public sealed class ScriptedRuntimeConfig

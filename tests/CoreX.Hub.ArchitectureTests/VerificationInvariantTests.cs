@@ -27,7 +27,7 @@ public sealed class VerificationInvariantTests
         foreach (var forbidden in new[]
                  {
                      "CoreX.Hub.Execution", "CoreX.Hub.Workspace",
-                     "CoreX.Hub.Infrastructure", "CoreX.Hub.Application", "CoreX.Hub.Cli",
+                     "CoreX.Hub.Infrastructure", "CoreX.Hub.Application", "CoreX.Hub.Composition",
                  })
         {
             Assert.DoesNotContain(references, r => r.StartsWith(forbidden, StringComparison.Ordinal));
@@ -58,12 +58,29 @@ public sealed class VerificationInvariantTests
     [Fact]
     public void Only_the_composition_layer_joins_verification_to_execution()
     {
-        var cli = typeof(Cli.HubCli).Assembly.GetReferencedAssemblies()
+        // The composition root, not the CLI. Phase 9 gave the system a second adapter, and
+        // the property being asserted was never about the console - it is that exactly one
+        // project is allowed to know both modules at once.
+        var composition = typeof(global::CoreX.Hub.Composition.HubSession).Assembly
+            .GetReferencedAssemblies()
             .Select(a => a.Name ?? string.Empty)
             .ToList();
 
-        Assert.Contains("CoreX.Hub.Verification", cli);
-        Assert.Contains("CoreX.Hub.Execution", cli);
+        Assert.Contains("CoreX.Hub.Verification", composition);
+        Assert.Contains("CoreX.Hub.Execution", composition);
+
+        // And the adapters reach neither directly, so neither of them can join the two.
+        foreach (var adapter in new[]
+                 {
+                     typeof(Cli.HubCli).Assembly,
+                     typeof(global::CoreX.Hub.Api.HubApi).Assembly,
+                 })
+        {
+            var references = adapter.GetReferencedAssemblies().Select(a => a.Name ?? string.Empty).ToList();
+
+            Assert.DoesNotContain("CoreX.Hub.Verification", references);
+            Assert.DoesNotContain("CoreX.Hub.Execution", references);
+        }
     }
 
     [Fact]

@@ -1,5 +1,6 @@
 using CoreX.Hub.Application.Acceptance;
 using CoreX.Hub.Cli;
+using CoreX.Hub.Composition;
 using CoreX.Hub.Domain.Executions;
 using CoreX.Hub.Domain.Tasks;
 using Microsoft.EntityFrameworkCore;

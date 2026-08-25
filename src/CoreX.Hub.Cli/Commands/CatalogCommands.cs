@@ -1,4 +1,5 @@
 using CoreX.Hub.Application.Abstractions;
+using CoreX.Hub.Composition;
 
 namespace CoreX.Hub.Cli.Commands;
 

@@ -1,5 +1,5 @@
 using System.Runtime.Versioning;
-using CoreX.Hub.Cli.Verification;
+using CoreX.Hub.Composition.Verification;
 using CoreX.Hub.Domain.Catalog;
 using CoreX.Hub.Infrastructure.Evidence;
 using CoreX.Hub.Verification;

@@ -4,7 +4,7 @@ using CoreX.Hub.Agents.Abstractions;
 using CoreX.Hub.Agents.Codex;
 using CoreX.Hub.Application.Review;
 using CoreX.Hub.Domain.Executions;
-using CoreX.Hub.Cli.Orchestration;
+using CoreX.Hub.Composition.Orchestration;
 
 namespace CoreX.Hub.Integration.Tests;
 

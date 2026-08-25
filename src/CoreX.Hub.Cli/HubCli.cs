@@ -3,6 +3,7 @@ using CoreX.Hub.Application.Catalog;
 using CoreX.Hub.Application.Orchestration;
 using CoreX.Hub.Application.Tasks;
 using CoreX.Hub.Cli.Commands;
+using CoreX.Hub.Composition;
 using CoreX.Hub.Domain.Common;
 
 namespace CoreX.Hub.Cli;

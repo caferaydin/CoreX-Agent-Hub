@@ -1,5 +1,6 @@
+using CoreX.Hub.Composition;
 using System.Globalization;
-using CoreX.Hub.Cli.Verification;
+using CoreX.Hub.Composition.Verification;
 using CoreX.Hub.Domain.Executions;
 
 // CoreX.Hub.Execution is an assembly namespace, so the domain type of the same short

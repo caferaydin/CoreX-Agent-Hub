@@ -303,7 +303,7 @@ public sealed class CodexInvariantTests
         File.ReadAllText(Path.Combine(RepoLayout.SourceRoot, "CoreX.Hub.Agents", "Codex", fileName));
 
     private static string Factory() =>
-        Path.Combine(RepoLayout.SourceRoot, "CoreX.Hub.Cli", "Agents", "CodexRuntimeFactory.cs");
+        Path.Combine(RepoLayout.SourceRoot, "CoreX.Hub.Composition", "Agents", "CodexRuntimeFactory.cs");
 
     private static string CodeOnly(string source) =>
         string.Join(

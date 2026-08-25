@@ -1,5 +1,6 @@
+using CoreX.Hub.Composition;
 using System.Runtime.Versioning;
-using CoreX.Hub.Cli.Workspace;
+using CoreX.Hub.Composition.Workspace;
 using CoreX.Hub.Infrastructure.Configuration;
 using CoreX.Hub.Workspace;
 using Microsoft.EntityFrameworkCore;

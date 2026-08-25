@@ -26,7 +26,8 @@ Bağımsız review: [`docs/phase-7-review.md`](docs/phase-7-review.md).
 | Faz 7 | Bağımsız review + inceleme override kabulü | **TAMAM** |
 | Faz 8A | Sabitlenmiş `CodexRuntime` (ikinci gerçek sağlayıcı, sağlayıcı-nötr temel) | **TAMAM** |
 | Faz 8B | Codex reviewer profil geçişi + gerçek ürün review kabulü | **TAMAM** |
-| Faz 9 | Minimal API + React UI | uygulanmadı |
+| Faz 9A | Yerel Minimal API + sorgu sözleşmesi + SSE temeli | **TAMAM** |
+| Faz 9B-E | React/TypeScript UI kabuğu + uçtan uca UI kabulü | uygulanmadı |
 | Faz 10 | Sertleştirme + WSL2 sert izolasyon + Kronos kapısı | uygulanmadı |
 
 Faz 1 kataloğu, görev modelini, Ready kapısını, kalıcılığı ve CLI'ı kurar.
@@ -66,6 +67,7 @@ dotnet test CoreX.Hub.slnx -c Release
 | `CoreX.Hub.Execution.Tests` | Gerçek süreçler: exit code, akış tahliyesi, UTF-8/ANSI, ortam izolasyonu, soft/idle/hard timeout, iptal, süreç ağacı ölümü, yol güven sınırı (gerçek NTFS junction ile) |
 | `CoreX.Hub.Workspace.Tests` | Gerçek git: repo ön kontrolü, commit sabitleme, kirli kaynak izolasyonu, repo hook'unun etkisizleştirilmesi, iki katmanlı push engeli, kanıt toplama, beklenmeyen commit tespiti, release/orphan/reconcile, ikincil süreç yürütme (filtre/textconv/fsmonitor/imzalama) kontrol ve sertleştirme testleri |
 | `CoreX.Hub.Verification.Tests` | Gerçek süreçler + gerçek dosya sistemi: adım sırası, zorunlu/isteğe bağlı semantiği, timeout, iptal, allowlist reddi, ortam izolasyonu, yol/rapor kaçış reddi, TRX/JUnit ayrıştırma, XXE/DTD reddi, profil hash'i, baseline önbelleği, kırık→düzeltilmiş uçtan uca, blob deposu (atomiklik/dedupe/eşzamanlılık) ve redaksiyon |
+| `CoreX.Hub.Api.Tests` | Gerçek HTTP + gerçek SQLite: sorgu sözleşmesi, mutasyon yetkileri, override ayrımı, SSE (snapshot/reconnect/disconnect/backpressure), yerel bağlanma ve kanıt erişim güvenliği |
 | `CoreX.Hub.ArchitectureTests` | Katman bağımlılık yönü, yasaklı kod yapıları (E.1 değişmezleri), domain sözlüğü |
 
 Testler yalnızca geçici dizinlerde ve fixture verisiyle çalışır. Hiçbir test gerçek bir

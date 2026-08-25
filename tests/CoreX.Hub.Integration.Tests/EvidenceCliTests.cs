@@ -1,5 +1,5 @@
 using CoreX.Hub.Cli;
-using CoreX.Hub.Cli.Verification;
+using CoreX.Hub.Composition.Verification;
 using CoreX.Hub.Domain.Executions;
 using Microsoft.EntityFrameworkCore;
 

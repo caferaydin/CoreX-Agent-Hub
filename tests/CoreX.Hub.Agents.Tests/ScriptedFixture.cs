@@ -1,7 +1,7 @@
 using System.Runtime.Versioning;
 using CoreX.Hub.Agents.Abstractions;
 using CoreX.Hub.Agents.Scripted;
-using CoreX.Hub.Cli.Agents;
+using CoreX.Hub.Composition.Agents;
 using CoreX.Hub.Domain.Catalog;
 using CoreX.Hub.Workspace.Git;
 

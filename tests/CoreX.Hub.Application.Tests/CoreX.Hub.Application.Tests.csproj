@@ -20,6 +20,7 @@
     <ProjectReference Include="..\..\src\CoreX.Hub.Infrastructure\CoreX.Hub.Infrastructure.csproj" />
     <ProjectReference Include="..\..\src\CoreX.Hub.Agents\CoreX.Hub.Agents.csproj" />
     <ProjectReference Include="..\..\src\CoreX.Hub.Workspace\CoreX.Hub.Workspace.csproj" />
+    <ProjectReference Include="..\..\src\CoreX.Hub.Composition\CoreX.Hub.Composition.csproj" />
     <ProjectReference Include="..\..\src\CoreX.Hub.Cli\CoreX.Hub.Cli.csproj" />
     <ProjectReference Include="..\CoreX.Hub.ProcessFixture\CoreX.Hub.ProcessFixture.csproj" />
   </ItemGroup>

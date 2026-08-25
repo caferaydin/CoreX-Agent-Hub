@@ -1,5 +1,5 @@
 using System.Text;
-using CoreX.Hub.Cli.Workspace;
+using CoreX.Hub.Composition.Workspace;
 using CoreX.Hub.Workspace;
 using CoreX.Hub.Workspace.Abstractions;
 using CoreX.Hub.Workspace.Git;

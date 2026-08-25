@@ -19,7 +19,9 @@ public sealed class LayerDependencyTests
     private static readonly Assembly Infrastructure = typeof(HubDbContext).Assembly;
     private static readonly Assembly Execution = typeof(FileSystemGuard).Assembly;
     private static readonly Assembly WorkspaceModule = typeof(WorkspaceManager).Assembly;
+    private static readonly Assembly Composition = typeof(global::CoreX.Hub.Composition.HubSession).Assembly;
     private static readonly Assembly Cli = typeof(Cli.HubCli).Assembly;
+    private static readonly Assembly Api = typeof(global::CoreX.Hub.Api.HubApi).Assembly;
 
     [Fact]
     public void Domain_depends_on_nothing_but_the_base_class_library()
@@ -39,7 +41,7 @@ public sealed class LayerDependencyTests
 
         Assert.Contains("CoreX.Hub.Domain", references);
         Assert.DoesNotContain(references, r => r.StartsWith("CoreX.Hub.Infrastructure", StringComparison.Ordinal));
-        Assert.DoesNotContain(references, r => r.StartsWith("CoreX.Hub.Cli", StringComparison.Ordinal));
+        AssertNoAdapter(references);
         Assert.DoesNotContain(references, r => r.StartsWith("Microsoft.EntityFrameworkCore", StringComparison.Ordinal));
         Assert.DoesNotContain(references, r => r.StartsWith("YamlDotNet", StringComparison.Ordinal));
     }
@@ -50,7 +52,7 @@ public sealed class LayerDependencyTests
         var references = ReferencedNames(Infrastructure);
 
         Assert.Contains("CoreX.Hub.Application", references);
-        Assert.DoesNotContain(references, r => r.StartsWith("CoreX.Hub.Cli", StringComparison.Ordinal));
+        AssertNoAdapter(references);
     }
 
     [Fact]
@@ -103,7 +105,7 @@ public sealed class LayerDependencyTests
     [Fact]
     public void Only_the_composition_layer_joins_workspace_and_execution()
     {
-        var cli = ReferencedNames(Cli);
+        var cli = ReferencedNames(Composition);
 
         Assert.Contains("CoreX.Hub.Execution", cli);
         Assert.Contains("CoreX.Hub.Workspace", cli);
@@ -134,6 +136,19 @@ public sealed class LayerDependencyTests
             {
                 Assert.DoesNotContain(references, r => r.StartsWith(name, StringComparison.OrdinalIgnoreCase));
             }
+        }
+    }
+
+    /// <summary>
+    /// Nothing inward may name an outward layer: not the composition root, and not either
+    /// adapter. Listed rather than prefix-matched on "CoreX.Hub." so the inner modules can
+    /// still reference each other where the architecture allows it.
+    /// </summary>
+    private static void AssertNoAdapter(HashSet<string> references)
+    {
+        foreach (var outward in new[] { "CoreX.Hub.Composition", "CoreX.Hub.Cli", "CoreX.Hub.Api" })
+        {
+            Assert.DoesNotContain(references, r => r.StartsWith(outward, StringComparison.Ordinal));
         }
     }
 

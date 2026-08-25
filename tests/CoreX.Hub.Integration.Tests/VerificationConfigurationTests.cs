@@ -1,4 +1,4 @@
-using CoreX.Hub.Cli.Verification;
+using CoreX.Hub.Composition.Verification;
 using CoreX.Hub.Infrastructure.Configuration;
 
 namespace CoreX.Hub.Integration.Tests;

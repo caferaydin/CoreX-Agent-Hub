@@ -1,10 +1,11 @@
+using CoreX.Hub.Composition;
 using System.Globalization;
 using System.Runtime.Versioning;
 using CoreX.Hub.Application.Catalog;
 using CoreX.Hub.Application.Configuration;
 using CoreX.Hub.Application.Orchestration;
 using CoreX.Hub.Application.Tasks;
-using CoreX.Hub.Cli.Orchestration;
+using CoreX.Hub.Composition.Orchestration;
 using CoreX.Hub.Domain.Catalog;
 using CoreX.Hub.Domain.Executions;
 using CoreX.Hub.Domain.Tasks;
@@ -46,35 +47,36 @@ public static class RunCommands
         // command would refuse for the wrong reason.
         await RecoverPendingAsync(session, output, ct);
 
-        var task = await ResolveTaskAsync(session, taskKey, args.GetOption("org"), ct);
+        // Resolved and composed by the shared planner, so a run started here and a run
+        // started over HTTP cannot disagree about which profile implements, which reviews, or
+        // whether this task is runnable at all.
+        PlannedExecution planned;
 
-        if (task.State != TaskState.Ready)
+        try
         {
-            throw new TaskOperationException(
-                $"Task '{task.TaskKey}' is {task.State}, not Ready, so there is nothing to run.");
+            planned = await ExecutionLaunchPlanner.PlanAsync(
+                session, taskKey, args.GetOption("org"), args.GetOption("agent"), ct);
+        }
+        catch (AmbiguousLaunchException ex)
+        {
+            // The console can tell the operator which flag to add; the API cannot. That is the
+            // only reason this distinction exists, and it is handled here rather than in the
+            // planner.
+            throw new UsageException(ex.Candidates.Count == 0
+                ? ex.Message
+                : ex.Message.Replace("name the one to use", "pass --agent <name>", StringComparison.Ordinal));
         }
 
-        var organization = await session.Store.FindOrganizationAsync(task.OrganizationId, ct)
-            ?? throw new TaskOperationException("The task's organization is no longer in the catalogue.");
-
-        var repository = await session.Store.FindRepositoryAsync(task.RepositoryId, ct)
-            ?? throw new TaskOperationException("The task's repository is no longer in the catalogue.");
-
-        var profile = await ResolveAgentProfileAsync(session, task, args.GetOption("agent"), ct);
+        var task = planned.Task;
+        var profile = planned.AgentProfile;
+        var composition = planned.Composition;
 
         // M5: an earlier attempt that produced no commit still owns its worktree, and this
         // says so once. It is not a reason to refuse - the work can be attempted again - and
         // nothing here deletes it.
         await WarnAboutPreservedWorktreesAsync(session, task, output, ct);
 
-        var config = new YamlHubConfigReader().Read(session.ConfigPath);
-
-        var verificationProfile = await session.Store.FindDefaultVerificationProfileAsync(repository.Id, ct);
-
-        var reviewer = await ResolveReviewerAsync(session, config, organization, repository, ct);
-
-        var composition = ExecutionComposition.Create(
-            session, config, organization, repository, verificationProfile, profile, reviewer, TimeProvider.System);
+        var organization = planned.Organization;
 
         // One execution at a time for this installation, across processes. The orchestrator
         // enforces the same rule inside this process; neither is a substitute for the other.
@@ -92,7 +94,7 @@ public static class RunCommands
         var execution = await session.Store.FindExecutionAsync(report.ExecutionId, ct)
             ?? throw new TaskOperationException("The execution disappeared as it finished.");
 
-        var finished = await ResolveTaskAsync(session, taskKey, args.GetOption("org"), ct);
+        var finished = await ExecutionLaunchPlanner.ResolveTaskAsync(session, taskKey, args.GetOption("org"), ct);
 
         await WriteSummaryAsync(
             session, output, finished, execution, report, profile.Name, organization.Slug.Value, ct);
@@ -221,7 +223,8 @@ public static class RunCommands
                 // there is no profile to resolve a runtime for. The reviewer is still resolved,
                 // because whether this repository is reviewed decides whether an unreviewed
                 // result may be called Passed - and recovery cannot review one.
-                var reviewer = await ResolveReviewerAsync(session, config, organization, repository, ct);
+                var reviewer = await ExecutionLaunchPlanner.ResolveReviewerAsync(
+                    session, config, organization, repository, ct);
 
                 var composition = ExecutionComposition.Create(
                     session, config, organization, repository, verificationProfile, null, reviewer,
@@ -406,117 +409,5 @@ public static class RunCommands
                 c.Order.ToString(CultureInfo.InvariantCulture),
                 c.Text,
             }));
-    }
-
-    private static async Task<HubTask> ResolveTaskAsync(
-        HubSession session,
-        string taskKey,
-        string? organizationSlug,
-        CancellationToken ct)
-    {
-        if (!TaskKey.TryParse(taskKey, out var parsed))
-        {
-            throw new UsageException(
-                $"'{taskKey}' is not a valid task key. Expected <PROJECT>-<3 digit>, for example HUB-001.");
-        }
-
-        var matches = await session.Store.FindTasksByKeyAsync(parsed.Value, ct);
-
-        if (!string.IsNullOrWhiteSpace(organizationSlug))
-        {
-            var organization = await session.Store.FindOrganizationBySlugAsync(organizationSlug, ct)
-                ?? throw new TaskOperationException($"Organization '{organizationSlug}' was not found.");
-
-            matches = [.. matches.Where(t => t.OrganizationId == organization.Id)];
-        }
-
-        return matches.Count switch
-        {
-            0 => throw new TaskOperationException($"Task '{parsed}' was not found."),
-            1 => matches[0],
-            _ => throw new TaskOperationException(
-                $"Task '{parsed}' exists in more than one organization; pass --org to say which."),
-        };
-    }
-
-    /// <summary>
-    /// Which runtime profile runs this attempt.
-    ///
-    /// Named explicitly when there is a choice. An organization with exactly one profile has
-    /// no choice to make, so the ordinary case needs no flag - but two profiles are two
-    /// different ways of doing the work, and picking one silently would decide something the
-    /// operator did not.
-    /// </summary>
-    /// <summary>
-    /// Which profile does the work.
-    ///
-    /// Only an Implementer is a candidate, whether it was asked for by name or picked
-    /// because it was the only one. A reviewer profile is declared read only precisely so it
-    /// cannot change anything, so running a task under one would produce an execution that
-    /// could never write the result it was asked for - and the failure would look like the
-    /// agent's rather than like the mistake it is.
-    /// </summary>
-    private static async Task<Domain.Catalog.AgentProfile> ResolveAgentProfileAsync(
-        HubSession session,
-        HubTask task,
-        string? requested,
-        CancellationToken ct)
-    {
-        if (!string.IsNullOrWhiteSpace(requested))
-        {
-            var named = await session.Store.FindAgentProfileByNameAsync(task.OrganizationId, requested, ct)
-                ?? throw new TaskOperationException($"Agent profile '{requested}' was not found.");
-
-            return named.Role == AgentRole.Implementer
-                ? named
-                : throw new TaskOperationException(
-                    $"Agent profile '{named.Name}' has the role {named.Role}; a task is run by an Implementer.");
-        }
-
-        var profiles = (await session.Store.ListAgentProfilesAsync(task.OrganizationId, ct))
-            .Where(p => p.Role == AgentRole.Implementer)
-            .ToList();
-
-        return profiles.Count switch
-        {
-            0 => throw new TaskOperationException(
-                "the task's organization declares no implementer agent profile, so there is nothing to run "
-                + "it with."),
-            1 => profiles[0],
-            _ => throw new UsageException(
-                "the organization declares more than one implementer agent profile; pass --agent <name> to "
-                + $"say which ({string.Join(", ", profiles.Select(p => p.Name).Order())})."),
-        };
-    }
-
-    /// <summary>
-    /// Which profile reviews this repository, from the catalogue the repository points at.
-    ///
-    /// The name comes from configuration and the profile from the seeded catalogue, and the
-    /// two are kept apart on purpose: a name with no profile behind it is a refusal that
-    /// composition reports, not a repository that quietly stops being reviewed.
-    /// </summary>
-    private static async Task<ReviewerSelection> ResolveReviewerAsync(
-        HubSession session,
-        HubConfig config,
-        Domain.Catalog.Organization organization,
-        Domain.Catalog.Repository repository,
-        CancellationToken ct)
-    {
-        var declared = config.Organizations
-            .FirstOrDefault(o => string.Equals(o.Slug, organization.Slug.Value, StringComparison.OrdinalIgnoreCase))
-            ?.Projects
-            .SelectMany(project => project.Repositories)
-            .FirstOrDefault(r => string.Equals(r.Slug, repository.Slug.Value, StringComparison.OrdinalIgnoreCase))
-            ?.ReviewerProfile;
-
-        if (string.IsNullOrWhiteSpace(declared))
-        {
-            return ReviewerSelection.None;
-        }
-
-        return new ReviewerSelection(
-            declared,
-            await session.Store.FindAgentProfileByNameAsync(organization.Id, declared, ct));
     }
 }

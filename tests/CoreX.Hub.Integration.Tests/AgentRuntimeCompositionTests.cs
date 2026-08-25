@@ -3,7 +3,7 @@ using System.Text;
 using CoreX.Hub.Agents.Abstractions;
 using CoreX.Hub.Agents.ClaudeCode;
 using CoreX.Hub.Application.Catalog;
-using CoreX.Hub.Cli.Agents;
+using CoreX.Hub.Composition.Agents;
 using CoreX.Hub.Domain.Catalog;
 using CoreX.Hub.Infrastructure.Configuration;
 

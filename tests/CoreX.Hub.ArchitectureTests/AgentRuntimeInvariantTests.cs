@@ -313,18 +313,34 @@ public sealed class AgentRuntimeInvariantTests
             Assert.DoesNotMatch(declarations, File.ReadAllText(file));
         }
 
-        // And nothing under src is an API surface or a user interface yet.
-        foreach (var file in RepoLayout.ProductionSourceFiles)
+        // Phase 9 gave the system an HTTP surface, so this is no longer "no API anywhere".
+        // What it still is: the API lives in exactly one project, and nothing below it knows
+        // an HTTP concept exists. A Minimal API route in the orchestrator would work fine and
+        // would have merged two layers that must not merge.
+        var apiRoot = Path.Combine(RepoLayout.SourceRoot, "CoreX.Hub.Api") + Path.DirectorySeparatorChar;
+
+        foreach (var file in RepoLayout.ProductionSourceFiles.Where(f => !f.StartsWith(apiRoot, StringComparison.Ordinal)))
         {
             var text = File.ReadAllText(file);
 
-            foreach (var forbidden in new[] { "WebApplication", "ControllerBase", "MapGet(", "IHostedService" })
+            foreach (var forbidden in new[]
+                     {
+                         "WebApplication", "ControllerBase", "MapGet(", "MapPost(", "IHostedService",
+                         "HttpContext", "HttpRequest", "HttpResponse", "IResult",
+                     })
             {
                 Assert.False(
                     text.Contains(forbidden, StringComparison.Ordinal),
                     $"{RepoLayout.Relative(file)}: {forbidden}");
             }
         }
+
+        // Non vacuous: the API project really does exist and really does serve routes, so the
+        // exclusion above cannot quietly become "there is nothing to check".
+        Assert.Contains(
+            RepoLayout.ProductionSourceFiles,
+            f => f.StartsWith(apiRoot, StringComparison.Ordinal)
+                 && File.ReadAllText(f).Contains("MapGet(", StringComparison.Ordinal));
     }
 
     private static string Read(string fileName) =>

@@ -1,9 +1,10 @@
+using CoreX.Hub.Composition;
 using System.Diagnostics;
 using System.Globalization;
 using System.Text;
 using CoreX.Hub.Application.Abstractions;
 using CoreX.Hub.Cli;
-using CoreX.Hub.Cli.Workspace;
+using CoreX.Hub.Composition.Workspace;
 using CoreX.Hub.Infrastructure.Persistence;
 
 namespace CoreX.Hub.LoopZero.Tests;

@@ -13,6 +13,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\CoreX.Hub.Verification\CoreX.Hub.Verification.csproj" />
+    <ProjectReference Include="..\..\src\CoreX.Hub.Composition\CoreX.Hub.Composition.csproj" />
     <ProjectReference Include="..\..\src\CoreX.Hub.Cli\CoreX.Hub.Cli.csproj" />
     <ProjectReference Include="..\CoreX.Hub.ProcessFixture\CoreX.Hub.ProcessFixture.csproj" />
   </ItemGroup>

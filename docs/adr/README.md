@@ -35,6 +35,7 @@ v1.1.1 esas alınır.
 | ADR-0023 | Kesilen bir yazmadan sonra otorite veritabanıdır | Accepted |
 | ADR-0024 | Sabitlenmiş sağlayıcı sürümü çalışma zamanının parçasıdır | Accepted |
 | ADR-0025 | Reviewer sözleşmesi mekanizma değil etki adlandırır | Accepted |
+| ADR-0026 | Composition root adaptörlerden ayrıldı | Accepted |
 
 ## Onaylanmış Faz 0 format kararları
 

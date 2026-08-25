@@ -228,7 +228,7 @@ public sealed class ReviewInvariantTests
     public void Which_profile_reviews_is_a_catalogue_answer_rather_than_a_coded_one()
     {
         var composition = CodeOnly(File.ReadAllText(Path.Combine(
-            RepoLayout.SourceRoot, "CoreX.Hub.Cli", "Orchestration", "ExecutionComposition.cs")));
+            RepoLayout.SourceRoot, "CoreX.Hub.Composition", "Orchestration", "ExecutionComposition.cs")));
 
         // The reviewer is resolved from a named profile, exactly as the implementer's runtime
         // is. Naming a provider here would make swapping the reviewer a code change.
@@ -337,7 +337,7 @@ public sealed class ReviewInvariantTests
         Path.Combine(RepoLayout.SourceRoot, "CoreX.Hub.Application", "Review", fileName);
 
     private static string Gateways() =>
-        Path.Combine(RepoLayout.SourceRoot, "CoreX.Hub.Cli", "Orchestration", "ReviewGateways.cs");
+        Path.Combine(RepoLayout.SourceRoot, "CoreX.Hub.Composition", "Orchestration", "ReviewGateways.cs");
 
     private static string Between(string source, string from, string to)
     {

@@ -1,7 +1,9 @@
 <Solution>
   <Folder Name="/src/">
     <Project Path="src/CoreX.Hub.Application/CoreX.Hub.Application.csproj" />
+    <Project Path="src/CoreX.Hub.Composition/CoreX.Hub.Composition.csproj" />
     <Project Path="src/CoreX.Hub.Cli/CoreX.Hub.Cli.csproj" />
+    <Project Path="src/CoreX.Hub.Api/CoreX.Hub.Api.csproj" />
     <Project Path="src/CoreX.Hub.Agents/CoreX.Hub.Agents.csproj" />
     <Project Path="src/CoreX.Hub.Context/CoreX.Hub.Context.csproj" />
     <Project Path="src/CoreX.Hub.Domain/CoreX.Hub.Domain.csproj" />
@@ -12,6 +14,7 @@
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/CoreX.Hub.Application.Tests/CoreX.Hub.Application.Tests.csproj" />
+    <Project Path="tests/CoreX.Hub.Api.Tests/CoreX.Hub.Api.Tests.csproj" />
     <Project Path="tests/CoreX.Hub.ClaudeFixture/CoreX.Hub.ClaudeFixture.csproj" />
     <Project Path="tests/CoreX.Hub.ArchitectureTests/CoreX.Hub.ArchitectureTests.csproj" />
     <Project Path="tests/CoreX.Hub.Agents.Tests/CoreX.Hub.Agents.Tests.csproj" />
