@@ -241,6 +241,32 @@ public sealed class CodexInvariantTests
     }
 
     [Fact]
+    public void The_switch_that_made_this_provider_active_touched_no_decision_code()
+    {
+        // The Phase 8 claim, asserted against history rather than against intent: between the
+        // commit that added the adapter and the commit that made it the reviewer, no file
+        // under Orchestration, Review or Acceptance changed at all.
+        //
+        // Written as a shape check rather than a git call, because the guard has to keep
+        // holding after those commits are ancient: whatever else happens, these three areas
+        // never learn which provider they got.
+        foreach (var file in DecisionSources())
+        {
+            var code = CodeOnly(File.ReadAllText(file));
+            var name = RepoLayout.Relative(file);
+
+            foreach (var branch in new[]
+                     {
+                         "IAgentRuntime runtime", "is CodexRuntime", "is ClaudeCodeRuntime",
+                         "GetType()", "RuntimeKey ==", "Provider ==", "nameof(Codex",
+                     })
+            {
+                Assert.False(code.Contains(branch, StringComparison.Ordinal), $"{name}: {branch}");
+            }
+        }
+    }
+
+    [Fact]
     public void Later_phase_work_still_has_not_arrived()
     {
         foreach (var file in CodexSources().Concat([Factory()]))
