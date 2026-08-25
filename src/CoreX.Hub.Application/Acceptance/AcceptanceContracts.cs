@@ -93,7 +93,42 @@ public sealed record AcceptancePreview
     public IReadOnlyList<string> MachineTruthProblems { get; init; } = [];
 
     /// <summary>Set once a decision exists, because there is only ever one.</summary>
-    public AcceptanceDecisionKind? ExistingDecision { get; init; }
+    public RecordedDecision? ExistingDecision { get; init; }
+}
+
+/// <summary>
+/// A decision that was taken, read back from the row that holds it.
+///
+/// Every field here is persisted and none of it is derived. It exists because a decision that
+/// can only be seen in the response to the request that made it is not a record - a person who
+/// reloads the page, or who was not the one who clicked, would have no way to learn who
+/// accepted what, when, or on what grounds.
+///
+/// There is exactly one of these per execution, so this is a projection of one row rather than
+/// an audit history. Nothing here is a list of what might have happened.
+/// </summary>
+public sealed record RecordedDecision
+{
+    public required AcceptanceDecisionKind Decision { get; init; }
+
+    public required string Actor { get; init; }
+
+    public required DateTimeOffset DecidedAtUtc { get; init; }
+
+    /// <summary>True only for the ReviewBlocked acceptance override (ADR-0014).</summary>
+    public required bool OverrideUsed { get; init; }
+
+    /// <summary>
+    /// Why, where one was given.
+    ///
+    /// Mandatory for an override and optional for everything else, which is a domain rule
+    /// rather than a projection one - <see cref="AcceptanceDecision"/> refuses to exist with
+    /// <see cref="OverrideUsed"/> set and no reason.
+    /// </summary>
+    public string? Reason { get; init; }
+
+    /// <summary>What the person answered, exactly as it was recorded.</summary>
+    public IReadOnlyList<HumanCriterionVerdictRecord> HumanVerdicts { get; init; } = [];
 }
 
 /// <summary>

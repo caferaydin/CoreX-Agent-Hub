@@ -1,8 +1,10 @@
-# Faz 9B–9D — Operatör arayüzü
+# Faz 9B–9E — Operatör arayüzü
 
 Faz 9B: React/TypeScript operatör kabuğu, salt okunur.
 Faz 9C: ilk durum değiştiren eylemler — **create, ready, run, cancel**.
 Faz 9D: insan kararları — **accept, review override, request-changes, reject**.
+Faz 9E: **tek origin production barındırma**, **kalıcı karar geri okuması** ve
+**gerçek tarayıcı kabulü**.
 
 Faz 9A sözleşmesi: `docs/phase-9-api.md`.
 
@@ -64,7 +66,12 @@ edilmedi (guard).
 ## 3. Komutlar
 
 ```
-# API (kök dizinde)
+# Tek surec, tek origin (kok dizinde) - once UI derlenir, sonra publish edilir
+cd src/CoreX.Hub.Web && npm ci && npm run build && cd ../..
+dotnet publish src/CoreX.Hub.Api -c Release -o .artifacts/hub
+.artifacts/hub/hub-api.exe          # http://127.0.0.1:5177 - SPA + API
+
+# Yalnizca API (gelistirme)
 dotnet run --project src/CoreX.Hub.Api
 
 # Arayüz (src/CoreX.Hub.Web içinde)
@@ -73,7 +80,20 @@ npm run dev          # 127.0.0.1:5178
 npm test             # vitest
 npm run typecheck    # tsc --noEmit, her iki proje için
 npm run build        # tsc -b && vite build
+
+# Gerçek tarayıcı kabulü (Faz 9E)
+npm run e2e:prepare  # UI derle + API publish (wwwroot dahil) + fixture derle
+npm run e2e          # dogrulama Hub'ini sifirla, sonra playwright test
 ```
+
+`npm run e2e:prepare` uc sey uretir ve sirasi onemlidir:
+
+1. `dist/` — production bundle.
+2. `e2e/.artifacts/host/` — `dotnet publish` ciktisi; `wwwroot/` icinde (1) vardir.
+3. `corex-fixture.exe` — deterministik agent ve dogrulama araci.
+
+`dotnet build` **asla** npm calistirmaz. Iki derleme yalnizca `dotnet publish` adiminda
+bulusur; dist yoksa publish sessizce API-only bir host uretmek yerine **hata verir**.
 
 Global kurulu Vite veya TypeScript gerekmez; hepsi paket script'leri üzerinden.
 
@@ -348,14 +368,15 @@ Reject **cancel çağırarak yapılmaz**; kendi ucu vardır ve test bunu URL üz
 Terminal bir görevde panel salt-okunur bir kayda dönüşür: tek bir düğme, tek bir radyo
 kalmaz. İkinci bir Accept yoktur, bir Reject'i geri alma yolu yoktur.
 
-### Bilinen eksik: kayıtlı kararın ayrıntısı
+### Kapatıldı (Faz 9E): kayıtlı kararın ayrıntısı
 
 `AcceptanceStateDto.existingDecision` yalnızca kararın **türünü** taşır — actor, zaman damgası,
 `overrideUsed`, gerekçe ve kaydedilen verdict'ler okuma sözleşmesinde yoktur. Bu yüzden
 gerekçe ve değişmemiş execution sonucu yalnızca **karar anında**, mutasyonun kendi yanıtından
 gösterilir; sayfa yenilenince kaybolur.
 
-Sunucu bu dilimde bilerek değiştirilmedi. Okuma sözleşmesini genişletmek Faz 9E'nin işidir.
+Faz 9E bu sözleşmeyi genişletti; §15'e bakınız. Yukarıdaki paragraf Faz 9D'nin durumunu
+anlatır ve tarih olarak bırakılmıştır.
 
 ## 13. Faz 9B–9C'den taşınanlar
 
@@ -366,20 +387,151 @@ Faz 9B'nin "GET dışında verb yok" guard'ı Faz 9C'de dörtlü bir listeye, Fa
 listeye dönüştü. Özellik aynı kaldı: **arayüz tam olarak bu sekiz şeyi değiştirir, başkasını
 değil** — ve bu bir vaat değil, tek istek noktası üzerinden okunabilen bir olgudur.
 
-## 14. Erişilebilirlik
+## 14. Production barındırma (Faz 9E)
+
+Tek süreç, tek origin, tek port. Vite production'da **yok**.
+
+```
+http://127.0.0.1:5177/            -> SPA
+http://127.0.0.1:5177/tasks/...   -> SPA (fallback)
+http://127.0.0.1:5177/api/v1/...  -> API
+```
+
+`src/CoreX.Hub.Api/SpaHosting.cs` — tek yer. Üç kural, hepsi test edilmiştir.
+
+**Bir API yolu asla sayfaya dönüşmez.** `/api` ile başlayan istek bu dalı hiç görmez;
+haritalanmamış bir uç sıradan bir 404 ile cevap verir. JSON isteyip HTML alan bir istemci
+belgeyi ayrıştırır, kendi içinde bir yerde patlar ve gerçek sorunla ilgisi olmayan bir şey
+raporlar. `MapFallbackToFile` **kullanılmaz**: onun kuralına göre uzantısız her yol bir
+"sayfa"dır ve bilinmeyen bir API yolu da uzantısızdır.
+
+**Eksik bir dosya da sayfaya dönüşmez.** Son segmentinde nokta olan her istek ya static
+file middleware tarafından cevaplanır ya da hiç. Eksik bir script yerine index.html vermek,
+tarayıcının HTML'i JavaScript olarak çalıştırdığı ve asıl hatanın (bayat derleme, yanlış
+publish) görünmez kaldığı senaryodur.
+
+**Geri kalan her şey bir tarayıcı rotasıdır.** `/tasks/CXH-001` doğrudan açılabilir ve
+yenilenebilir.
+
+### Cache
+
+| Ne | Politika | Neden |
+|---|---|---|
+| Hash'li asset (`.js`/`.css`/`.woff2`) | `public, max-age=31536000` | Vite içerik hash'i yazar: değişen dosya farklı URL'dir |
+| `index.html` ve her tarayıcı rotası | `no-cache` | Güncel bundle'ları isimlendiren tek dosya |
+
+CDN stratejisi yok. Yerel uygulama.
+
+### Bağlanma ve CORS
+
+Tek origin **uzaktan barındırma değildir**. `HubApiOptions.Bind()` hâlâ loopback dışını
+reddeder; `COREX_HUB_LISTEN_URL` yalnızca **port** seçtirir ve o da aynı kontrolden geçer.
+Aynı origin production'da CORS gereksinimi bırakmadığından mevcut politika gevşetilmedi.
+
+### Paketleme
+
+`dotnet publish`, `ComputeFilesToPublish` öncesinde `../CoreX.Hub.Web/dist` içeriğini
+`wwwroot/` altına koyar. `dist` yoksa publish **hata verir**. `-p:PublishOperatorUi=false`
+ile bilerek API-only publish edilebilir. `node_modules` ve `dist` commit **edilmez**.
+
+Host UI'yi şu sırayla arar: açık seçenek → `COREX_HUB_WEB_ROOT` → yanındaki `wwwroot/`.
+Hiçbiri yoksa **yalnızca API** sunar; bu desteklenen bir yapılandırmadır ve tüm API
+testleri o şekilde koşar.
+
+## 15. Kararın kalıcı geri okuması (Faz 9E)
+
+Faz 9D'nin bilinen eksiği kapatıldı. `AcceptanceStateDto.existingDecision` artık kararın
+**türünü değil, satırın kendisini** taşır:
+
+```
+existingDecision: {
+  decision, actor, decidedAtUtc, overrideUsed, reason,
+  humanVerdicts: [{ criterionId, verdict, note }]
+}
+```
+
+Hiçbir alan türetilmedi: hepsi `AcceptanceDecisions` tablosunda zaten yazılıydı.
+**Migration yok**, şema değişmedi, `AcceptanceService` semantiği değişmedi — değişen tek
+satır `PreviewAsync`'in yalnızca `.Decision` alıp gerisini atmasıydı.
+
+Execution sonucu bu DTO'da **bilerek yoktur**. Kabul, execution'ın ne olduğunu yeniden
+yazmaz; override edilmiş bir execution hâlâ `ReviewBlocked`'dır ve bu execution'dan
+okunur. Bir kararın outcome taşıması, istemciyi ikisini tek olgu gibi göstermeye davet
+ederdi.
+
+Arayüz tarafında: yenilemeden sonra panel karar / actor / zaman / override / gerekçe ve
+kaydedilen verdict'leri **REST'ten** gösterir. Mutasyon yanıtından gösterilen bildirim bir
+nezakettir, kayıt değildir.
+
+## 16. Gerçek tarayıcı kabulü (Faz 9E)
+
+Playwright + Chromium. `src/CoreX.Hub.Web/e2e/`.
+
+Neye karşı koşar: **publish edilmiş** host, **derlenmiş** bundle, tek loopback origin,
+gerçek SQLite, gerçek git deposu, gerçek `ProcessRunner`. jsdom değil, Vite dev server
+değil, mock değil.
+
+### Doğrulama ortamı
+
+`e2e/validation-hub.mjs` — tek kullanımlık, her koşuda sıfırlanan bir Hub kurulumu: kendi
+data dizini, kendi `hub.config.yaml`, kendi git deposu. Operatörün gerçek Hub'ına ve
+makinesine hiçbir şey karışmaz. `tests/CoreX.Hub.LoopZero.Tests/LoopZeroHub.cs`
+konvansiyonunun aynısıdır: aynı config dosyası, aynı scripted runtime anahtarı, aynı
+fixture binary'si.
+
+Tohumlanan tek şey **yapılandırmadır** — operatörün zaten yazmış olacağı şey. Hiçbir test
+veritabanına Task, Execution, doğrulama sonucu ya da karar yazmaz; hepsi uygulamanın
+kendisi tarafından üretilir (guard).
+
+İki scripted runtime: `apply-patch` (sıradan koşu) ve `hang` (iptal edilecek bir şey
+olması için). İkisi de config dosyasında bir bildirimdir; Hub hangisinin "test" olduğunu
+bilmez. Repository **reviewer bildirmez**, dolayısıyla temiz koşu `Passed` biter.
+
+### Kanıtlanan senaryolar
+
+| Senaryo | Ne kanıtlar |
+|---|---|
+| Temiz yaşam döngüsü | create → ready → run → canlı ilerleme → Passed → verdict → Accept, tamamı UI'dan |
+| Temiz yenileme | Accepted + Passed + karar/actor/zaman/verdict, sunucudan |
+| Canlı akış | Gerçek `EventSource`, yenileme olmadan güncelleme, sayfadan ayrılmak koşuyu durdurmaz |
+| Request changes | AwaitingAcceptance → Ready, deneme yerinde kalır, kendiliğinden yeni koşu başlamaz |
+| Reject | Kendi ucundan (`/reject`), `/cancel` değil; geçmiş durur |
+| Cancel | Running → iptal isteği → Hub'ın verdiği cevap neyse o; `CancellationRequested` terminal gösterilmez |
+| Override görünürlüğü | `Passed` üzerinde override **yok**, sıradan Accept var; hiç koşmamış görevde hiçbiri yok |
+| Production host | Kök, doğrudan rota, yenileme, bilinmeyen API 404'ü, eksik asset 404'ü, cache başlıkları |
+
+Ekran görüntüleri `e2e/.artifacts/screenshots/` altındadır ve **commit edilmez**.
+
+### Kapsanmayan: tarayıcıda ReviewBlocked override
+
+Deterministik bir `ReviewBlocked` **üretilemedi**, ve nedeni yapısaldır:
+
+`ExecutionComposition`, reviewer runtime'ından `SupportsReadOnlyMode` **ve**
+`SupportsStructuredSchema` bildirmesini ister (ADR-0008). `ScriptedAgentRuntime` ikisini de
+`false` bildirir — ve bu doğrudur, çünkü şemayı okumaz. Yani scripted runtime bir reviewer
+olarak **composition anında reddedilir**.
+
+Bunu aşmanın tek yolu `src/CoreX.Hub.Agents` içinde üretim kodu değiştirmek (yeni bir
+scripted mod + yetenek bildirimi) ya da ücretli gerçek reviewer'ı (Codex 0.130.0) canlı
+çağırmaktır. Ikisi de bu dilimin sınırları dışındadır.
+
+Override yolu **kanıtsız değildir**, yalnızca tarayıcıda kanıtlanmamıştır: API seviyesinde
+(`MutationEndpointTests`, `DecisionReadbackTests`) ve bileşen seviyesinde
+(`TaskGovernance.test.tsx`) tam olarak kanıtlıdır.
+
+## 17. Erişilebilirlik
 
 Semantik navigasyon (`nav` + gerçek `a[href]`), tablo semantiği (`caption`, `th scope`),
 görünür odak, ikon-only öğelerde erişilebilir ad, `role="status"` / `role="alert"` ile
 duyurulan yükleme ve hata, renge bağlı olmayan durum. Div-button yok.
 
-## 15. Duyarlılık
+## 18. Duyarlılık
 
 Masaüstü öncelikli. 900px altında kenar çubuğu ikonlara daralır. Yatay taşma yalnızca kasıtlı
 kaydırılabilir alanlarda (tablolar, diff). Mobil optimizasyonu Faz 9 gereksinimi değildir.
 
-## 16. Faz 9E'ye kalanlar
+## 19. Kalanlar
 
-- **9E:** gerçek tarayıcı E2E + yetkili tam sistem regresyonu.
-- Kayıtlı kararın ayrıntısı: `existingDecision` yanında actor, zaman, `overrideUsed` ve
-  gerekçe (yukarıdaki bilinen eksik).
-- Ayrıca: production SPA barındırma, ham kanıt görüntüleyici, OpenAPI'den istemci üretimi.
+- Tarayıcıda ReviewBlocked override (yukarıdaki yapısal neden).
+- Ham kanıt görüntüleyici.
+- OpenAPI'den istemci üretimi.

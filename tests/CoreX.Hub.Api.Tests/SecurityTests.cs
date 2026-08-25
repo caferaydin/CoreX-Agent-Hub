@@ -70,14 +70,42 @@ public sealed class SecurityTests
         await using var hub = await HubApiFixture.CreateAsync();
 
         // No route anywhere takes a filesystem path, so there is nothing to traverse.
-        var source = Directory.EnumerateFiles(
-                Path.Combine(RepositoryRoot(), "src", "CoreX.Hub.Api"), "*.cs")
-            .Select(File.ReadAllText)
+        var files = Directory
+            .EnumerateFiles(Path.Combine(RepositoryRoot(), "src", "CoreX.Hub.Api"), "*.cs")
             .ToList();
+
+        var source = files.Select(File.ReadAllText).ToList();
 
         Assert.All(source, s => Assert.DoesNotContain("{path}", s, StringComparison.Ordinal));
         Assert.All(source, s => Assert.DoesNotContain("{*path", s, StringComparison.Ordinal));
-        Assert.All(source, s => Assert.DoesNotContain("Path.Combine(root", s, StringComparison.Ordinal));
+
+        // Nothing builds a path under a root - except the one file whose job is serving files
+        // from one, and which is checked below for the thing that would actually be dangerous.
+        Assert.All(
+            files.Where(f => !f.EndsWith("SpaHosting.cs", StringComparison.Ordinal)).Select(File.ReadAllText),
+            s => Assert.DoesNotContain("Path.Combine(root", s, StringComparison.Ordinal));
+
+        var spa = File.ReadAllText(
+            Path.Combine(RepositoryRoot(), "src", "CoreX.Hub.Api", "SpaHosting.cs"));
+
+        // The UI branch reads the request path to decide whether this is a page, and never to
+        // build a file name from it. What it sends is one constant file under a configured
+        // root; the static file middleware serves everything else, with its own traversal
+        // protection and its own view of what is inside the provider.
+        Assert.Contains("SendFileAsync(index", spa, StringComparison.Ordinal);
+        Assert.Contains("Path.Combine(root, IndexFileName)", spa, StringComparison.Ordinal);
+
+        foreach (var dangerous in new[]
+                 {
+                     "Path.Combine(root, request",
+                     "Path.Combine(root, path",
+                     "Path.Combine(root, context",
+                     "SendFileAsync(path",
+                     "SendFileAsync(request",
+                 })
+        {
+            Assert.DoesNotContain(dangerous, spa, StringComparison.OrdinalIgnoreCase);
+        }
 
         // The attempts a caller might make against the route that does exist.
         var task = await hub.SeedTaskAsync("API-300");

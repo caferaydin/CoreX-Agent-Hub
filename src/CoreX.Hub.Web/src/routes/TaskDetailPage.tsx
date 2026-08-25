@@ -56,6 +56,7 @@ export function TaskDetailPage(): ReactNode {
   const task = state.data;
   const machine = task.criteria.filter((c) => c.kind === 'Machine');
   const human = task.criteria.filter((c) => c.kind === 'Human');
+  const undeclared = task.criteria.filter((c) => c.kind === 'Undeclared');
 
   return (
     <>
@@ -154,8 +155,13 @@ export function TaskDetailPage(): ReactNode {
               </div>
             </Panel>
 
-            <Panel title="Acceptance criteria" hint={`${machine.length} machine · ${human.length} human`}>
-              <Criteria machine={machine} human={human} />
+            <Panel
+              title="Acceptance criteria"
+              hint={`${machine.length} machine · ${human.length} human${
+                undeclared.length > 0 ? ` · ${undeclared.length} undeclared` : ''
+              }`}
+            >
+              <Criteria machine={machine} human={human} undeclared={undeclared} />
             </Panel>
           </div>
 
@@ -186,11 +192,13 @@ export function TaskDetailPage(): ReactNode {
 function Criteria({
   machine,
   human,
+  undeclared,
 }: {
   machine: readonly CriterionDto[];
   human: readonly CriterionDto[];
+  undeclared: readonly CriterionDto[];
 }): ReactNode {
-  if (machine.length === 0 && human.length === 0) {
+  if (machine.length === 0 && human.length === 0 && undeclared.length === 0) {
     return <Empty title="No criteria declared" />;
   }
 
@@ -214,6 +222,31 @@ function Criteria({
                 {criterion.verificationRef ? (
                   <span className="path">{criterion.verificationRef}</span>
                 ) : null}
+              </li>
+            ))}
+          </ul>
+        </section>
+      ) : null}
+
+      {undeclared.length > 0 ? (
+        <section aria-label="Undeclared criteria">
+          {/* Shown rather than hidden or quietly filed under one of the other two. This is
+              what the ready gate is refusing the task for, and the operator is reading this
+              panel to find out why. */}
+          <div className="field__label">Undeclared · nobody has said how</div>
+          <ul className="stack" style={{ listStyle: 'none', margin: 0, padding: 0 }}>
+            {undeclared.map((criterion) => (
+              <li key={criterion.id} className="row" style={{ alignItems: 'baseline' }}>
+                <Badge
+                  look={{
+                    label: 'Undeclared',
+                    tone: 'bad',
+                    shape: 'striped',
+                    meaning:
+                      'No verification kind has been declared, so the ready gate will hold this task back.',
+                  }}
+                />
+                <span>{criterion.text}</span>
               </li>
             ))}
           </ul>

@@ -270,7 +270,15 @@ public sealed record AcceptanceStateDto
     /// </summary>
     public required bool OverrideApplicable { get; init; }
 
-    public string? ExistingDecision { get; init; }
+    /// <summary>
+    /// The decision a person recorded, or null while none exists.
+    ///
+    /// Read from the persisted row on every request. A client that showed only what came back
+    /// from the request that made the decision would have nothing to show after a reload, and
+    /// "who accepted this and why" is exactly the question asked later rather than at the
+    /// moment of clicking.
+    /// </summary>
+    public RecordedDecisionDto? ExistingDecision { get; init; }
 
     public IReadOnlyList<MachineCriterionDto> MachineCriteria { get; init; } = [];
 
@@ -278,6 +286,33 @@ public sealed record AcceptanceStateDto
 
     public IReadOnlyList<string> MachineTruthProblems { get; init; } = [];
 }
+
+/// <summary>
+/// One recorded decision. There is exactly one per execution, so this is a row and not a log.
+///
+/// The execution outcome is deliberately absent: accepting a task never rewrites what its
+/// execution was, and a decision that carried an outcome would invite a client to render the
+/// two as one fact. An overridden execution is still ReviewBlocked, and that is read from the
+/// execution.
+/// </summary>
+public sealed record RecordedDecisionDto
+{
+    public required string Decision { get; init; }
+
+    public required string Actor { get; init; }
+
+    public required DateTimeOffset DecidedAtUtc { get; init; }
+
+    public required bool OverrideUsed { get; init; }
+
+    /// <summary>Mandatory for an override, optional otherwise. Never invented.</summary>
+    public string? Reason { get; init; }
+
+    public IReadOnlyList<RecordedVerdictDto> HumanVerdicts { get; init; } = [];
+}
+
+/// <summary>One human verdict as it was recorded, with the criterion it answered.</summary>
+public sealed record RecordedVerdictDto(Guid CriterionId, string Verdict, string? Note);
 
 public sealed record MachineCriterionDto
 {

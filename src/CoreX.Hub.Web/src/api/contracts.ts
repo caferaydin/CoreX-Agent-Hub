@@ -95,7 +95,15 @@ export interface TaskPageDto {
   readonly limit: number;
 }
 
-export type CriterionKind = 'Machine' | 'Human';
+/**
+ * How a criterion is answered, or that nobody has said yet.
+ *
+ * `Undeclared` is a real state and not an error shape: a criterion can be written before its
+ * verification method is decided, and the ready gate is what refuses to let the task run until
+ * it is. The UI has to be able to show that, because the alternative - picking one - is how a
+ * task ends up looking complete on the screen that is explaining why it is not.
+ */
+export type CriterionKind = 'Machine' | 'Human' | 'Undeclared';
 
 export interface CriterionDto {
   readonly id: string;
@@ -277,6 +285,36 @@ export interface HumanCriterionDto {
   readonly humanCheckHint: string | null;
 }
 
+/**
+ * A decision that was taken, read back from the row that holds it.
+ *
+ * Every field is persisted. This is what makes a recorded decision survive a reload: a panel
+ * that could only show what came back from the request that made the decision would have
+ * nothing to show to the person who opens the task tomorrow, and "who accepted this and why"
+ * is asked later far more often than at the moment of clicking.
+ *
+ * There is exactly one per execution, so this is a row rather than a history. What it
+ * deliberately does not carry is an execution outcome - accepting never rewrites what an
+ * execution was, and the outcome is read from the execution.
+ */
+export interface RecordedDecisionDto {
+  readonly decision: string;
+  readonly actor: string;
+  readonly decidedAtUtc: string;
+  readonly overrideUsed: boolean;
+
+  /** Mandatory for an override, optional otherwise. Never invented by either side. */
+  readonly reason: string | null;
+  readonly humanVerdicts: readonly RecordedVerdictDto[];
+}
+
+/** One human verdict as it was recorded, with the criterion it answered. */
+export interface RecordedVerdictDto {
+  readonly criterionId: string;
+  readonly verdict: string;
+  readonly note: string | null;
+}
+
 export interface AcceptanceStateDto {
   readonly taskState: TaskState;
   readonly executionId: string;
@@ -293,7 +331,7 @@ export interface AcceptanceStateDto {
    * decide anything.
    */
   readonly overrideApplicable: boolean;
-  readonly existingDecision: string | null;
+  readonly existingDecision: RecordedDecisionDto | null;
   readonly machineCriteria: readonly MachineCriterionDto[];
   readonly humanCriteria: readonly HumanCriterionDto[];
   readonly machineTruthProblems: readonly string[];

@@ -29,14 +29,22 @@ public sealed class WebInvariantTests
 
         Assert.DoesNotContain("CoreX.Hub.Web", solution, StringComparison.Ordinal);
 
-        // And nothing injects npm into the build, which would make a .NET build fail on a
+        // And nothing runs npm from the build, which would make a .NET build fail on a
         // machine that has no node and would tie two toolchains together for no gain.
+        //
+        // What is checked is execution, not the word: the API project's publish step tells a
+        // human which npm command to run when the UI has not been built, and a guard that
+        // matched that sentence would be refusing the instruction rather than the coupling.
         foreach (var file in Directory.EnumerateFiles(RepoLayout.SourceRoot, "*.csproj", SearchOption.AllDirectories)
                      .Concat([Path.Combine(RepoLayout.Root, "Directory.Build.props")]))
         {
             var text = File.ReadAllText(file);
 
-            foreach (var forbidden in new[] { "npm ", "npx ", "node ", "vite" })
+            Assert.DoesNotMatch(
+                new Regex(@"<Exec[^>]*(npm|npx|node|vite)", RegexOptions.IgnoreCase),
+                text);
+
+            foreach (var forbidden in new[] { "node_modules", "PackageReference Include=\"Vite" })
             {
                 Assert.False(text.Contains(forbidden, StringComparison.OrdinalIgnoreCase), $"{file}: {forbidden}");
             }

@@ -69,9 +69,13 @@ public static class Dtos
         c.Id,
         c.Order,
 
-        // The model's own word for it. An earlier version of this line inferred the kind
-        // from whether one was set, which quietly reported every Human criterion as Machine.
-        c.Kind?.ToString() ?? "Human",
+        // The model's own word for it, and "Undeclared" where the model has none.
+        //
+        // Two earlier versions of this line invented a kind: one inferred it from which field
+        // was set and reported every Human criterion as Machine, and the next defaulted to
+        // Human and reported an undeclared criterion as a complete one - which hid the reason
+        // the ready gate was refusing the task, on the very screen that shows the refusal.
+        c.Kind?.ToString() ?? "Undeclared",
         c.Text,
         c.VerificationRef,
         c.HumanCheckHint);
@@ -201,11 +205,29 @@ public static class Dtos
                              && p.ExecutionState == ExecutionState.Completed
                              && p.ExecutionOutcome == ExecutionOutcome.ReviewBlocked,
 
-        ExistingDecision = p.ExistingDecision?.ToString(),
+        ExistingDecision = RecordedDecision(p.ExistingDecision),
         MachineCriteria = [.. p.MachineCriteria.Select(MachineCriterion)],
         HumanCriteria = [.. p.HumanCriteria.Select(h => new HumanCriterionDto(h.CriterionId, h.Order, h.Text, h.HumanCheckHint))],
         MachineTruthProblems = p.MachineTruthProblems,
     };
+
+    /// <summary>The persisted decision, copied outward. Null stays null.</summary>
+    public static RecordedDecisionDto? RecordedDecision(Application.Acceptance.RecordedDecision? d) =>
+        d is null
+            ? null
+            : new RecordedDecisionDto
+            {
+                Decision = d.Decision.ToString(),
+                Actor = d.Actor,
+                DecidedAtUtc = d.DecidedAtUtc,
+                OverrideUsed = d.OverrideUsed,
+                Reason = d.Reason,
+                HumanVerdicts =
+                [
+                    .. d.HumanVerdicts.Select(v =>
+                        new RecordedVerdictDto(v.CriterionId, v.Verdict.ToString(), v.Note)),
+                ],
+            };
 
     public static MachineCriterionDto MachineCriterion(MachineCriterionResult m) => new()
     {

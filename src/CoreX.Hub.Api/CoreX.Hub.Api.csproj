@@ -10,4 +10,49 @@
     <ProjectReference Include="..\CoreX.Hub.Composition\CoreX.Hub.Composition.csproj" />
   </ItemGroup>
 
+  <!--
+    Packaging the operator UI.
+
+    The two builds stay separate commands, as they have since Phase 9B. `dotnet build` never
+    runs npm: a restore that reached a package registry every time someone compiled the backend
+    would make an offline build impossible and would tie the compile of a C# file to the health
+    of a network. So the frontend is built by whoever is building the frontend:
+
+        cd src/CoreX.Hub.Web && npm ci && npm run build
+
+    and only `dotnet publish` picks the result up. Publish is the step whose whole job is
+    producing something runnable, which is exactly where "and the UI it serves" belongs.
+
+    A publish with no dist is refused rather than quietly producing an API-only executable that
+    answers every page with 404. That failure would surface as a blank browser, hours later,
+    with nothing pointing at the missing step.
+  -->
+  <PropertyGroup>
+    <WebProjectDirectory>$(MSBuildThisFileDirectory)..\CoreX.Hub.Web</WebProjectDirectory>
+    <WebDistDirectory>$(WebProjectDirectory)\dist</WebDistDirectory>
+
+    <!-- Set false to publish the API on its own, deliberately. -->
+    <PublishOperatorUi Condition="'$(PublishOperatorUi)' == ''">true</PublishOperatorUi>
+  </PropertyGroup>
+
+  <Target Name="PublishOperatorUi"
+          BeforeTargets="ComputeFilesToPublish"
+          Condition="'$(PublishOperatorUi)' == 'true'">
+
+    <Error Condition="!Exists('$(WebDistDirectory)\index.html')"
+           Text="The operator UI has not been built. Run 'npm ci &amp;&amp; npm run build' in $(WebProjectDirectory), or publish with -p:PublishOperatorUi=false to ship the API alone." />
+
+    <ItemGroup>
+      <OperatorUiAsset Include="$(WebDistDirectory)\**\*.*" />
+
+      <!-- Named where the host looks for them, which is a wwwroot beside its own executable. -->
+      <ResolvedFileToPublish Include="@(OperatorUiAsset)">
+        <RelativePath>wwwroot\%(RecursiveDir)%(Filename)%(Extension)</RelativePath>
+        <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+      </ResolvedFileToPublish>
+    </ItemGroup>
+
+    <Message Importance="high" Text="Operator UI: @(OperatorUiAsset->Count()) files from $(WebDistDirectory)" />
+  </Target>
+
 </Project>

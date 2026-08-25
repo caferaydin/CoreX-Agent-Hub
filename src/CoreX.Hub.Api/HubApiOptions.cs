@@ -61,6 +61,24 @@ public sealed record HubApiOptions
     public IReadOnlyList<string> DevelopmentCorsOrigins { get; init; } = [];
 
     /// <summary>
+    /// Where the built operator UI is, or null for the ordinary resolution order.
+    ///
+    /// Null does not mean "no UI": <see cref="SpaHosting.Resolve"/> also looks at
+    /// COREX_HUB_WEB_ROOT and at the wwwroot beside this executable, which is what a publish
+    /// produces. A host that finds none of those serves the API alone, which is a supported
+    /// configuration and the one every API test runs in.
+    /// </summary>
+    public string? WebRoot { get; init; }
+
+    /// <summary>
+    /// Whether to serve the operator UI at all.
+    ///
+    /// True in normal use. Off for the tests that must prove what an API-only host does,
+    /// because "there happened to be no build on this machine" is not a proof.
+    /// </summary>
+    public bool ServeOperatorUi { get; init; } = true;
+
+    /// <summary>
     /// Whether an execution may actually be started by this host.
     ///
     /// True in normal use. Tests that only exercise the query surface turn it off so a

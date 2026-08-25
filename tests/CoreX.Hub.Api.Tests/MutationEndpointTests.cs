@@ -266,6 +266,90 @@ public sealed class MutationEndpointTests
         Assert.Contains("Met", body.GetProperty("message").GetString()!, StringComparison.Ordinal);
     }
 
+    [Theory]
+    [InlineData("Machine")]
+    [InlineData("machine")]
+    [InlineData("Human")]
+    [InlineData("human")]
+    public async Task A_criterion_is_created_with_the_kind_that_was_named(string kind)
+    {
+        // Both kinds, because the API offers both. An earlier version recognised only Machine
+        // and silently turned a Human criterion into an undeclared one - which the ready gate
+        // then refused forever, for a reason nothing on the way in had mentioned.
+        await using var hub = await HubApiFixture.CreateAsync();
+
+        var (status, created) = await hub.PostAsync("/api/v1/tasks", new
+        {
+            organizationSlug = "test-org",
+            projectSlug = "test-project",
+            repositorySlug = "test-repo",
+            objective = "a task whose criteria say how they are answered",
+            allowedScope = new[] { "docs/**" },
+            criteria = new[]
+            {
+                new
+                {
+                    kind,
+                    text = "the criterion under test",
+                    verificationRef = kind.Equals("machine", StringComparison.OrdinalIgnoreCase) ? "build" : null,
+                    humanCheckHint = (string?)null,
+                },
+            },
+            actor = "fixture",
+        });
+
+        Assert.Equal(201, status);
+
+        var key = created.GetProperty("taskKey").GetString()!;
+        var (_, detail) = await hub.GetAsync($"/api/v1/tasks/{key}");
+
+        var criterion = Assert.Single(detail.GetProperty("criteria").EnumerateArray());
+
+        // The model's own word, not one inferred from which field happened to be filled in.
+        Assert.Equal(
+            kind.Equals("machine", StringComparison.OrdinalIgnoreCase) ? "Machine" : "Human",
+            criterion.GetProperty("kind").GetString());
+
+        // And the gate has nothing to say about it.
+        Assert.DoesNotContain(
+            detail.GetProperty("readyGateProblems").EnumerateArray().Select(p => p.GetString()!),
+            problem => problem.Contains("VerificationKind", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task A_criterion_with_no_kind_reads_back_as_undeclared_rather_than_as_a_guess()
+    {
+        // Undeclared is a real state: a criterion may be written before its verification
+        // method is decided. Reporting it as Machine or as Human would make the task look
+        // complete on the very screen that is explaining why the gate is holding it back.
+        await using var hub = await HubApiFixture.CreateAsync();
+
+        var (status, created) = await hub.PostAsync("/api/v1/tasks", new
+        {
+            organizationSlug = "test-org",
+            projectSlug = "test-project",
+            repositorySlug = "test-repo",
+            objective = "a task with an undecided criterion",
+            allowedScope = new[] { "docs/**" },
+            criteria = new[] { new { kind = "", text = "nobody has said how yet" } },
+            actor = "fixture",
+        });
+
+        Assert.Equal(201, status);
+
+        var (_, detail) = await hub.GetAsync(
+            $"/api/v1/tasks/{created.GetProperty("taskKey").GetString()}");
+
+        var criterion = Assert.Single(detail.GetProperty("criteria").EnumerateArray());
+
+        Assert.Equal("Undeclared", criterion.GetProperty("kind").GetString());
+        Assert.False(detail.GetProperty("readyGateSatisfied").GetBoolean());
+
+        Assert.Contains(
+            detail.GetProperty("readyGateProblems").EnumerateArray().Select(p => p.GetString()!),
+            problem => problem.Contains("VerificationKind", StringComparison.Ordinal));
+    }
+
     [Fact]
     public async Task A_host_that_may_not_launch_refuses_to_start_a_run()
     {

@@ -5,6 +5,7 @@ import { useQuery } from '../api/useQuery';
 import type {
   AcceptanceResultDto,
   AcceptanceStateDto,
+  CriterionDto,
   ExecutionOutcome,
   HumanCriterionDto,
   HumanVerdict,
@@ -13,7 +14,7 @@ import type {
   TaskDetailDto,
 } from '../api/contracts';
 import { ActionButton, ActionError, ActionNotice, ConfirmDialog } from '../components/actions';
-import { Badge, Empty, Failed, Field, Loading, Panel } from '../components/primitives';
+import { Badge, Empty, Failed, Field, Loading, Panel, Timestamp } from '../components/primitives';
 import { canAccept, canOfferOverride, canReject, canRequestChanges } from '../lib/actions';
 import { OPERATOR_ACTOR } from '../lib/actor';
 import { lookOfOutcome, lookOfSeverity, lookOfTaskState, severityRank } from '../lib/status';
@@ -61,7 +62,11 @@ export function TaskGovernance({
   if (!anything) {
     // Decided, cancelled, or simply not at a point where a person is in the loop.
     return task.acceptance?.existingDecision ? (
-      <RecordedDecision acceptance={task.acceptance} outcome={outcome} />
+      <RecordedDecision
+        acceptance={task.acceptance}
+        outcome={outcome}
+        criteria={task.criteria}
+      />
     ) : null;
   }
 
@@ -82,28 +87,41 @@ type Decision = 'accept' | 'override' | 'changes' | 'reject';
 /**
  * What was decided, once it has been.
  *
+ * Read from the server on every load, not from what the mutation happened to return. A person
+ * asking "who accepted this, when, and on what grounds" is almost never the person who
+ * clicked, and almost never asking in the same minute - so a panel whose only source was
+ * component state would be empty exactly when the question gets asked.
+ *
  * Read-only, and offering nothing: a task that has been accepted must not present a second
- * Accept, and a rejected one must not present a way to un-reject it. What the read contract
- * carries about a past decision is its kind - not the actor, the timestamp or an override
- * reason - so that is what this shows rather than inventing the rest.
+ * Accept, and a rejected one must not present a way to un-reject it.
  */
 function RecordedDecision({
   acceptance,
   outcome,
+  criteria,
 }: {
   acceptance: AcceptanceStateDto;
   outcome: ExecutionOutcome | null;
+  criteria: readonly CriterionDto[];
 }): ReactNode {
+  const decision = acceptance.existingDecision;
   const executionLook = lookOfOutcome(outcome);
 
+  if (decision === null) {
+    return null;
+  }
+
   return (
-    <Panel title="Human decision" hint="Recorded">
+    <Panel
+      title="Human decision"
+      hint={decision.overrideUsed ? 'Recorded with a review override' : 'Recorded'}
+    >
       <div className="fields">
         <Field label="Decision">
           <Badge
             look={{
-              label: acceptance.existingDecision ?? 'None',
-              tone: acceptance.existingDecision === 'Reject' ? 'bad' : 'good',
+              label: decision.decision,
+              tone: decision.decision === 'Reject' ? 'bad' : 'good',
               shape: 'solid',
               meaning: 'The decision a person recorded against this attempt.',
             }}
@@ -118,10 +136,75 @@ function RecordedDecision({
               execution was, and an overridden one is still ReviewBlocked. */}
           {executionLook ? <Badge look={executionLook} /> : <span className="muted">—</span>}
         </Field>
+        <Field label="By">{decision.actor}</Field>
+        <Field label="When">
+          <Timestamp value={decision.decidedAtUtc} />
+        </Field>
+        <Field label="Review override">
+          {decision.overrideUsed ? (
+            <Badge
+              look={{
+                label: 'Used',
+                tone: 'warn',
+                shape: 'striped',
+                meaning:
+                  'This attempt was accepted despite a blocking review, with a stated reason.',
+              }}
+            />
+          ) : (
+            <span className="muted">No</span>
+          )}
+        </Field>
       </div>
+
+      {decision.reason ? (
+        <div className="form__field" style={{ marginTop: 'var(--space-5)' }}>
+          <div className="field__label">
+            {decision.overrideUsed ? 'Why this was accepted anyway' : 'Reason'}
+          </div>
+          {/* Text, always. What a person typed is rendered as what they typed. */}
+          <p className="timeline__reason" style={{ margin: 0 }}>
+            {decision.reason}
+          </p>
+        </div>
+      ) : null}
+
+      {decision.humanVerdicts.length > 0 ? (
+        <section aria-label="Recorded verdicts" style={{ marginTop: 'var(--space-5)' }}>
+          <div className="field__label">What the person answered</div>
+          <ul className="stack" style={{ listStyle: 'none', margin: 0, padding: 0 }}>
+            {decision.humanVerdicts.map((verdict) => (
+              <li key={verdict.criterionId} className="row" style={{ alignItems: 'baseline' }}>
+                <Badge
+                  look={{
+                    label: labelOf(verdict.verdict),
+                    tone: verdict.verdict === 'Met' ? 'good' : verdict.verdict === 'NotMet' ? 'bad' : 'neutral',
+                    shape: 'outline',
+                    meaning: 'The verdict recorded with the decision.',
+                  }}
+                />
+                <div className="stack">
+                  <span>{textOf(criteria, verdict.criterionId)}</span>
+                  {verdict.note ? <span className="muted">{verdict.note}</span> : null}
+                </div>
+              </li>
+            ))}
+          </ul>
+        </section>
+      ) : null}
     </Panel>
   );
 }
+
+/**
+ * The criterion a verdict answered, by its own text where the task still declares it.
+ *
+ * A decision outlives an edit to the task it was about, so the identifier is what is
+ * guaranteed and the sentence is what is useful. Where the two disagree the identifier wins
+ * and is shown, rather than a sentence that may no longer be the one that was answered.
+ */
+const textOf = (criteria: readonly CriterionDto[], criterionId: string): string =>
+  criteria.find((criterion) => criterion.id === criterionId)?.text ?? criterionId;
 
 // --- Deciding ---------------------------------------------------------------------------------
 
@@ -484,8 +567,8 @@ function HumanCriteria({
 
 const VERDICTS = ['Met', 'NotMet', 'NotApplicable'] as const;
 
-const labelOf = (verdict: HumanVerdict): string =>
-  verdict === 'NotMet' ? 'Not met' : verdict === 'NotApplicable' ? 'Not applicable' : 'Met';
+const labelOf = (verdict: string): string =>
+  verdict === 'NotMet' ? 'Not met' : verdict === 'NotApplicable' ? 'Not applicable' : verdict;
 
 // --- Override ---------------------------------------------------------------------------------
 
@@ -728,11 +811,12 @@ function Confirmation({
 }
 
 /**
- * What the Hub recorded, in its own answer's words.
+ * What the Hub just recorded, in its own answer's words.
  *
- * Read from the mutation result rather than from the page, because this is the one moment the
- * override reason and the unchanged execution outcome are both available - a later load
- * carries only the decision kind.
+ * A courtesy and not the record. The durable version arrives with the refetch this decision
+ * triggered and is what the panel shows from then on, including after a reload - this exists
+ * so the operator gets an answer in the same instant they clicked rather than one render
+ * later.
  */
 function Recorded({ result }: { result: AcceptanceResultDto }): ReactNode {
   return (

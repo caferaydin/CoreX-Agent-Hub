@@ -44,7 +44,10 @@ public sealed class HubApiFixture : IAsyncDisposable
 
     public HubRuntime Runtime => _app.Services.GetRequiredService<HubRuntime>();
 
-    public static async Task<HubApiFixture> CreateAsync(bool allowExecutionLaunch = false)
+    public static async Task<HubApiFixture> CreateAsync(
+        bool allowExecutionLaunch = false,
+        string? webRoot = null,
+        bool serveOperatorUi = false)
     {
         var root = Path.Combine(Path.GetTempPath(), "corex-api-tests", Guid.CreateVersion7().ToString("N"));
         Directory.CreateDirectory(root);
@@ -63,6 +66,11 @@ public sealed class HubApiFixture : IAsyncDisposable
             // Off unless a test is about starting one. A misrouted request must never be able
             // to launch a real agent from a test run.
             AllowExecutionLaunch = allowExecutionLaunch,
+
+            // Off unless a test supplies a build. Left on, a stray wwwroot beside the test
+            // binaries would quietly change what an unmapped route answers.
+            ServeOperatorUi = serveOperatorUi || webRoot is not null,
+            WebRoot = webRoot,
         });
 
         await app.StartAsync();

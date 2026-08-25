@@ -32,6 +32,11 @@ export default defineConfig({
   },
   test: {
     environment: 'jsdom',
+
+    // The browser acceptance is Playwright's. These two suites answer different questions and
+    // the runners are not interchangeable - vitest would load a Playwright spec and fail on an
+    // import it has no business resolving.
+    exclude: ['node_modules/**', 'dist/**', 'e2e/**'],
     globals: true,
     setupFiles: ['./src/test/setup.ts'],
     css: false,

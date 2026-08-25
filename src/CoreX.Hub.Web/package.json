@@ -9,6 +9,8 @@
     "preview": "vite preview",
     "typecheck": "tsc --noEmit -p tsconfig.app.json && tsc --noEmit -p tsconfig.node.json",
     "test": "vitest run",
+    "e2e:prepare": "node e2e/prepare.mjs",
+    "e2e": "node e2e/reset.mjs && playwright test",
     "test:watch": "vitest"
   },
   "dependencies": {
@@ -17,6 +19,7 @@
     "react-router-dom": "7.9.4"
   },
   "devDependencies": {
+    "@playwright/test": "^1.62.1",
     "@testing-library/dom": "10.4.1",
     "@testing-library/jest-dom": "6.9.1",
     "@testing-library/react": "16.3.0",

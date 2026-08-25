@@ -70,9 +70,29 @@ public sealed partial class AcceptanceService
             MachineCriteria = machine.Results,
             MachineTruthProblems = machine.Problems,
             HumanCriteria = HumanCriteriaOf(target.Task),
-            ExistingDecision = (await _store.FindAcceptanceDecisionAsync(target.Execution.Id, ct))?.Decision,
+            ExistingDecision = Recorded(await _store.FindAcceptanceDecisionAsync(target.Execution.Id, ct)),
         };
     }
+
+    /// <summary>
+    /// The persisted decision, as a projection.
+    ///
+    /// Copies and nothing else - no defaulting, no inference, no synthesised history. If a
+    /// field is null here it is null in the row, and the caller learns that rather than being
+    /// handed something plausible.
+    /// </summary>
+    private static RecordedDecision? Recorded(AcceptanceDecision? decision) =>
+        decision is null
+            ? null
+            : new RecordedDecision
+            {
+                Decision = decision.Decision,
+                Actor = decision.Actor,
+                DecidedAtUtc = decision.DecidedAtUtc,
+                OverrideUsed = decision.OverrideUsed,
+                Reason = decision.Reason,
+                HumanVerdicts = decision.HumanCriterionVerdicts,
+            };
 
     /// <summary>
     /// Accepts an execution, by the ordinary route or by explicitly overriding a blocking

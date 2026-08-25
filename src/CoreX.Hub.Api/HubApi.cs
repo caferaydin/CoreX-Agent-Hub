@@ -16,6 +16,10 @@ namespace CoreX.Hub.Api;
 /// local tool that drives real agents against real repositories can defensibly skip identity
 /// - but only while nothing off the machine can reach it, so the binding is the security
 /// model and it is not a setting.
+///
+/// It also serves the built operator UI, on the same origin and the same port, when there is
+/// one to serve. One origin is not a step towards remote hosting: the address this binds is
+/// still loopback, and still cannot be configured to be anything else.
 /// </summary>
 [SupportedOSPlatform("windows")]
 public static class HubApi
@@ -86,6 +90,14 @@ public static class HubApi
         if (options.DevelopmentCorsOrigins.Count > 0 && app.Environment.IsDevelopment())
         {
             app.UseCors(DevelopmentCorsPolicy);
+        }
+
+        // Before anything that could answer an API request, and it excludes API paths itself.
+        // Both halves matter: the branch has to see a browser route before routing decides
+        // nothing matches, and it must never be what an /api request meets first.
+        if (options.ServeOperatorUi)
+        {
+            app.UseOperatorUi(options.WebRoot);
         }
 
         var api = app.MapGroup(RoutePrefix);

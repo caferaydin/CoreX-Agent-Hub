@@ -355,11 +355,32 @@ public sealed class ApiInvariantTests
             foreach (var forbidden in new[]
                      {
                          "RepairLoop", "RepairEngine", "AddRazorPages", "AddControllersWithViews",
-                         "MapRazorPages", "UseStaticFiles", "React", "BillingAccount",
+                         "MapRazorPages", "React", "BillingAccount",
                      })
             {
                 Assert.False(text.Contains(forbidden, StringComparison.Ordinal), forbidden);
             }
+        }
+
+        // Phase 9E made this host serve the built UI, so "no static files anywhere" is no
+        // longer the property. The one that replaced it is narrower and still worth having:
+        // the API hands over files that a separate build produced, and renders nothing itself.
+        // A view engine here would mean HTML assembled from server state, which is exactly the
+        // coupling the separate frontend exists to avoid.
+        foreach (var file in ApiSources().Where(f => !f.EndsWith("SpaHosting.cs", StringComparison.Ordinal)))
+        {
+            Assert.DoesNotContain("UseStaticFiles", File.ReadAllText(file), StringComparison.Ordinal);
+        }
+
+        var spa = File.ReadAllText(Source("SpaHosting.cs"));
+
+        Assert.Contains("UseStaticFiles", spa, StringComparison.Ordinal);
+
+        // Files, not markup: the only HTML that leaves this process is a file on disk that
+        // nothing here composed.
+        foreach (var rendering in new[] { "<html", "<body", "StringBuilder", "$\"<" })
+        {
+            Assert.False(spa.Contains(rendering, StringComparison.Ordinal), rendering);
         }
     }
 

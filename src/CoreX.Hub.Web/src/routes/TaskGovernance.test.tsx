@@ -10,6 +10,7 @@ import {
   agentProfile,
   executionSummary,
   finding,
+  recordedDecision,
   review,
   taskDetail,
   taskSummary,
@@ -280,7 +281,10 @@ describe('Human governance', () => {
         if (init?.method === 'POST') {
           detail = taskDetail({
             summary: taskSummary({ state: 'Accepted' }),
-            acceptance: acceptanceState({ taskState: 'Accepted', existingDecision: 'Accept' }),
+            acceptance: acceptanceState({
+              taskState: 'Accepted',
+              existingDecision: recordedDecision(),
+            }),
           });
 
           return new Response(JSON.stringify(acceptanceResult()), {
@@ -748,12 +752,15 @@ describe('Human governance', () => {
   it.each([
     ['Accepted', 'Accept'],
     ['Rejected', 'Reject'],
-  ] as const)('offers nothing once a task is %s', async (state, existingDecision) => {
+  ] as const)('offers nothing once a task is %s', async (state, kind) => {
     stubFetch(
       routes(
         taskDetail({
           summary: taskSummary({ state }),
-          acceptance: acceptanceState({ taskState: state, existingDecision }),
+          acceptance: acceptanceState({
+            taskState: state,
+            existingDecision: recordedDecision({ decision: kind }),
+          }),
         }),
       ),
     );
@@ -762,9 +769,134 @@ describe('Human governance', () => {
 
     const decision = await panel();
 
-    expect(decision.getByText(existingDecision)).toBeInTheDocument();
+    expect(decision.getByText(kind)).toBeInTheDocument();
     expect(decision.queryAllByRole('button')).toHaveLength(0);
     expect(decision.queryAllByRole('radio')).toHaveLength(0);
+  });
+
+  // --- Reading a decision back ------------------------------------------------------------------
+
+  it('shows a normal decision from a fresh load, with no mutation behind it', async () => {
+    // Nothing was clicked in this test. Everything on screen came from the REST body, which is
+    // what a person opening the task tomorrow sees.
+    stubFetch(
+      routes(
+        taskDetail({
+          summary: taskSummary({ state: 'Accepted' }),
+          acceptance: acceptanceState({
+            taskState: 'Accepted',
+            existingDecision: recordedDecision(),
+          }),
+        }),
+      ),
+    );
+
+    show();
+
+    const decision = await panel();
+
+    expect(decision.getByText('Accept')).toBeInTheDocument();
+    expect(decision.getByText('hub:operator:ui')).toBeInTheDocument();
+    expect(decision.getByText('No')).toBeInTheDocument();
+    expect(decision.getByRole('time')).toHaveAttribute(
+      'title',
+      expect.stringContaining('2026'),
+    );
+
+    // The verdict, named by the criterion it answered rather than by a bare identifier.
+    expect(decision.getByText('Met')).toBeInTheDocument();
+    expect(
+      decision.getByText('The document contains the requested semantic content.'),
+    ).toBeInTheDocument();
+    expect(decision.getByText('read it and it is fine')).toBeInTheDocument();
+  });
+
+  it('shows an override reason from the persisted decision, not from component state', async () => {
+    stubFetch(
+      routes(
+        taskDetail({
+          summary: taskSummary({
+            state: 'Accepted',
+            latestExecutionOutcome: 'ReviewBlocked',
+          }),
+          acceptance: acceptanceState({
+            taskState: 'Accepted',
+            executionOutcome: 'ReviewBlocked',
+            existingDecision: recordedDecision({
+              overrideUsed: true,
+              reason: 'the finding is about generated code we do not own',
+              humanVerdicts: [{ criterionId: 'c2', verdict: 'NotApplicable', note: null }],
+            }),
+          }),
+        }),
+      ),
+    );
+
+    show();
+
+    const decision = await panel();
+
+    expect(decision.getByText('Used')).toBeInTheDocument();
+    expect(
+      decision.getByText('the finding is about generated code we do not own'),
+    ).toBeInTheDocument();
+    expect(decision.getByText('Not applicable')).toBeInTheDocument();
+
+    // The two axes stay apart on a reload as well.
+    expect(decision.getByText('Accepted')).toBeInTheDocument();
+    expect(decision.getByText('Review blocked')).toBeInTheDocument();
+    expect(decision.queryByText('Passed')).not.toBeInTheDocument();
+
+    // And there is nothing left to decide.
+    expect(decision.queryAllByRole('button')).toHaveLength(0);
+  });
+
+  it('names a verdict by its identifier when the task no longer declares the criterion', async () => {
+    // A decision outlives an edit to the task it was about. The identifier is the guarantee;
+    // the sentence is the convenience, and showing a sentence that was never answered would be
+    // worse than showing neither.
+    stubFetch(
+      routes(
+        taskDetail({
+          summary: taskSummary({ state: 'Accepted' }),
+          criteria: [],
+          acceptance: acceptanceState({
+            taskState: 'Accepted',
+            existingDecision: recordedDecision({
+              humanVerdicts: [{ criterionId: 'c-removed', verdict: 'Met', note: null }],
+            }),
+          }),
+        }),
+      ),
+    );
+
+    show();
+
+    expect((await panel()).getByText('c-removed')).toBeInTheDocument();
+  });
+
+  it('renders a persisted reason as text, never as markup', async () => {
+    stubFetch(
+      routes(
+        taskDetail({
+          summary: taskSummary({ state: 'Accepted' }),
+          acceptance: acceptanceState({
+            taskState: 'Accepted',
+            existingDecision: recordedDecision({
+              overrideUsed: true,
+              reason: '<img src=x onerror=alert(1)> accepted anyway',
+            }),
+          }),
+        }),
+      ),
+    );
+
+    show();
+
+    expect(
+      (await panel()).getByText('<img src=x onerror=alert(1)> accepted anyway'),
+    ).toBeInTheDocument();
+    expect(document.querySelector('img')).toBeNull();
   });
 
   // --- What is never on offer ------------------------------------------------------------------

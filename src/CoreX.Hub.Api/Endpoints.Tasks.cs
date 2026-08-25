@@ -261,10 +261,16 @@ public static class TaskEndpoints
     private static IReadOnlyList<string> Problems(ReadyGateResult gate) =>
         [.. gate.Violations.Select(v => v.ToString() ?? string.Empty)];
 
+    /// <summary>
+    /// One declared criterion, with the kind the caller actually named.
+    ///
+    /// Both kinds are read, and anything else stays undeclared. An earlier version of this
+    /// recognised only "Machine" and turned every other value into null, which made a Human
+    /// criterion an undeclared one - and the ready gate, correctly, refused the task for the
+    /// rest of its life. The API offers two kinds, so it has to understand two.
+    /// </summary>
     private static CriterionInput Criterion(CriterionBody body) => new(
-        string.Equals(body.Kind, "Machine", StringComparison.OrdinalIgnoreCase)
-            ? VerificationKind.Machine
-            : null,
+        Enum.TryParse<VerificationKind>(body.Kind, ignoreCase: true, out var kind) ? kind : null,
         body.Text,
         body.VerificationRef,
         body.HumanCheckHint);

@@ -4,6 +4,7 @@ import type {
   AgentProfileDto,
   OrganizationDto,
   ProjectDto,
+  RecordedDecisionDto,
   EvidenceDto,
   ExecutionDetailDto,
   ExecutionSummaryDto,
@@ -326,5 +327,23 @@ export const acceptanceResult = (
   executionOutcome: 'Passed',
   reason: null,
   workspaceCleanup: 'Released',
+  ...over,
+});
+
+/**
+ * A decision as the server hands it back on a fresh read.
+ *
+ * Separate from `acceptanceResult` on purpose: one is what a mutation answered and the other
+ * is what the row says, and the tests that matter are the ones where only the second exists.
+ */
+export const recordedDecision = (
+  over: Partial<RecordedDecisionDto> = {},
+): RecordedDecisionDto => ({
+  decision: 'Accept',
+  actor: 'hub:operator:ui',
+  decidedAtUtc: '2026-08-26T09:15:00.000Z',
+  overrideUsed: false,
+  reason: null,
+  humanVerdicts: [{ criterionId: 'c2', verdict: 'Met', note: 'read it and it is fine' }],
   ...over,
 });

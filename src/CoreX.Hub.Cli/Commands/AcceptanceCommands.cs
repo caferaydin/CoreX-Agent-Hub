@@ -304,7 +304,9 @@ public static class AcceptanceCommands
 
         if (preview.ExistingDecision is { } already)
         {
-            output.WriteLine($"note: this attempt already has a recorded decision ({already}).");
+            output.WriteLine(
+                $"note: this attempt already has a recorded decision ({already.Decision} by {already.Actor} "
+                + $"at {already.DecidedAtUtc:u}{(already.OverrideUsed ? ", review override" : string.Empty)}).");
         }
 
         output.WriteLine();
