@@ -27,7 +27,8 @@ Bağımsız review: [`docs/phase-7-review.md`](docs/phase-7-review.md).
 | Faz 8A | Sabitlenmiş `CodexRuntime` (ikinci gerçek sağlayıcı, sağlayıcı-nötr temel) | **TAMAM** |
 | Faz 8B | Codex reviewer profil geçişi + gerçek ürün review kabulü | **TAMAM** |
 | Faz 9A | Yerel Minimal API + sorgu sözleşmesi + SSE temeli | **TAMAM** |
-| Faz 9B-E | React/TypeScript UI kabuğu + uçtan uca UI kabulü | uygulanmadı |
+| Faz 9B | React/TypeScript operatör kabuğu + salt-okunur görünümler | **TAMAM** |
+| Faz 9C-E | Operatör eylemleri, kabul akışı, uçtan uca UI kabulü | uygulanmadı |
 | Faz 10 | Sertleştirme + WSL2 sert izolasyon + Kronos kapısı | uygulanmadı |
 
 Faz 1 kataloğu, görev modelini, Ready kapısını, kalıcılığı ve CLI'ı kurar.

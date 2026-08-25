@@ -1,0 +1,155 @@
+/*
+ * The whole visual vocabulary, in one place.
+ *
+ * This is an engineering control plane, so the palette is quiet on purpose: one dark surface
+ * family, one accent, and semantic colours that only appear where something has a state. The
+ * point of a screen like this is that the eye goes to the one row that is wrong, which only
+ * works if everything else stays out of the way.
+ *
+ * Every status colour has a matching border and text token, because status is never carried by
+ * fill alone - the badge shape and the label carry it too.
+ */
+
+:root {
+  color-scheme: dark;
+
+  /* Surfaces, from the page backwards. */
+  --surface-page: #0d1117;
+  --surface-raised: #151b23;
+  --surface-inset: #0b0f14;
+  --surface-hover: #1c232c;
+  --surface-active: #222b36;
+
+  --border: #2a323d;
+  --border-strong: #3d4754;
+  --border-subtle: #1f262f;
+
+  /* Text, from most to least important. */
+  --text: #e6edf3;
+  --text-muted: #9aa7b4;
+  --text-faint: #6b7783;
+  --text-inverse: #0d1117;
+
+  --accent: #4c8dff;
+  --accent-muted: #23375c;
+  --focus: #6aa2ff;
+
+  /* Semantic status. Each has a fill, a border and a foreground. */
+  --good-fg: #4ec98a;
+  --good-bg: #10301f;
+  --good-border: #1f6b45;
+
+  --warn-fg: #e3b341;
+  --warn-bg: #33280c;
+  --warn-border: #7a5c17;
+
+  --bad-fg: #f26d6d;
+  --bad-bg: #3a1618;
+  --bad-border: #8a2f33;
+
+  --info-fg: #6aa2ff;
+  --info-bg: #14233d;
+  --info-border: #2d4b80;
+
+  --running-fg: #a78bfa;
+  --running-bg: #241d3d;
+  --running-border: #4c3d80;
+
+  --neutral-fg: #b6c2ce;
+  --neutral-bg: #1b222b;
+  --neutral-border: #333d49;
+
+  --muted-fg: #7d8894;
+  --muted-bg: #161c24;
+  --muted-border: #2a323d;
+
+  /* Spacing: a 4px scale, used everywhere so nothing is eyeballed. */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+  --space-7: 48px;
+
+  --radius-sm: 4px;
+  --radius: 6px;
+  --radius-lg: 10px;
+
+  --font: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Inter', 'Helvetica Neue', Arial,
+    sans-serif;
+  --font-mono: 'JetBrains Mono', 'Cascadia Mono', 'SF Mono', Consolas, 'Liberation Mono', monospace;
+
+  --text-xs: 11px;
+  --text-sm: 12px;
+  --text-base: 13px;
+  --text-md: 14px;
+  --text-lg: 17px;
+  --text-xl: 22px;
+
+  --sidebar-width: 232px;
+  --header-height: 52px;
+
+  --shadow: 0 1px 2px rgb(0 0 0 / 40%), 0 4px 12px rgb(0 0 0 / 25%);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--surface-page);
+  color: var(--text);
+  font-family: var(--font);
+  font-size: var(--text-base);
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* One visible focus treatment everywhere, never removed. */
+:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}
+
+a {
+  color: var(--accent);
+  text-decoration: none;
+}
+
+a:hover {
+  text-decoration: underline;
+}
+
+code,
+pre,
+.mono {
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+}
+
+h1,
+h2,
+h3 {
+  margin: 0;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

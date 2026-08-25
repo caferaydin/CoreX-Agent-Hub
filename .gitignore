@@ -16,3 +16,8 @@ data/
 
 # Local overrides
 hub.config.local.yaml
+
+# Frontend
+node_modules/
+dist/
+*.tsbuildinfo
