@@ -255,6 +255,80 @@ public sealed class ReviewInvariantTests
         Assert.Contains("ExecutionOutcome.ReviewUnusable", recovery, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void A_review_that_already_happened_is_read_back_rather_than_assumed_clean()
+    {
+        var recovery = CodeOnly(File.ReadAllText(Path.Combine(
+            RepoLayout.SourceRoot, "CoreX.Hub.Application", "Orchestration", "PostCommitRecoveryService.cs")));
+
+        // A host can die between the review and the row that records its verdict. The
+        // findings are already durable then, and reading them is the only answer that agrees
+        // with what the pipeline would have written - assuming a pass would accept work a
+        // reviewer had already blocked.
+        Assert.Contains("await store.ListFindingsAsync(execution.Id, ct)", recovery, StringComparison.Ordinal);
+        Assert.Contains("ReviewFindingGate.HasBlockingFindings(findings)", recovery, StringComparison.Ordinal);
+        Assert.Contains("ExecutionOutcome.ReviewBlocked", recovery, StringComparison.Ordinal);
+
+        // And it asks the gate rather than restating what blocks.
+        foreach (var forbidden in new[] { "MajorThreshold", "FindingSeverity" })
+        {
+            Assert.False(recovery.Contains(forbidden, StringComparison.Ordinal), forbidden);
+        }
+
+        // Nothing here can obtain a review: there is no provider, no workspace and no engine.
+        foreach (var forbidden in new[] { "IExecutionReviewer", "ReviewEngine", "IReviewWorkspace", "_agent" })
+        {
+            Assert.False(recovery.Contains(forbidden, StringComparison.Ordinal), forbidden);
+        }
+    }
+
+    [Fact]
+    public void Both_producers_of_the_same_evidence_kind_name_the_step_they_belong_to()
+    {
+        var orchestration = Path.Combine(RepoLayout.SourceRoot, "CoreX.Hub.Application", "Orchestration");
+
+        var agent = CodeOnly(File.ReadAllText(Path.Combine(orchestration, "ExecutionOrchestrator.Evidence.cs")));
+        var review = CodeOnly(File.ReadAllText(Path.Combine(orchestration, "ExecutionOrchestrator.Review.cs")));
+
+        // Since the review became real, AgentStdout has two authors. "The one with no step"
+        // is not an answer to which of them a reader is looking at.
+        Assert.Contains("FindStepAsync(execution.Id, ExecutionStepKind.Agent, ct)", agent, StringComparison.Ordinal);
+        Assert.Contains("EvidenceKind.AgentStdout, \"text/plain\", ct, step?.Id", agent, StringComparison.Ordinal);
+        Assert.Contains("EvidenceKind.AgentStdout, \"text/plain\", ct, stepId", review, StringComparison.Ordinal);
+
+        // And the operator surface says so rather than leaving the reader to guess.
+        var evidence = CodeOnly(File.ReadAllText(Path.Combine(
+            RepoLayout.SourceRoot, "CoreX.Hub.Cli", "Commands", "EvidenceCommands.cs")));
+
+        Assert.Contains("\"STEP\"", evidence, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void A_skipped_review_says_why_it_was_skipped()
+    {
+        var gates = CodeOnly(File.ReadAllText(Path.Combine(
+            RepoLayout.SourceRoot, "CoreX.Hub.Application", "Orchestration", "ExecutionOrchestrator.Gates.cs")));
+
+        // Every skip names its own cause. "Not configured" is a claim about the repository,
+        // and on one that has a reviewer it is false - so it is used only where it is true.
+        var notConfigured = gates.Split('\n')
+            .Count(l => l.Contains("ExecutionStepKind.Review, ReviewNotConfigured", StringComparison.Ordinal));
+
+        Assert.Equal(1, notConfigured);
+
+        foreach (var reason in new[]
+                 {
+                     "ExecutionStepKind.Review, \"blocked by \" + blocked.Kind",
+                     "ExecutionStepKind.Review, CancelledBeforeCommit",
+                     "ExecutionStepKind.Review, \"no result commit\"",
+                     "ExecutionStepKind.Review, WorktreeNotAtResultCommit",
+                     "ExecutionStepKind.Review, ReviewSkippedVerificationFailed",
+                 })
+        {
+            Assert.Contains(reason, gates, StringComparison.Ordinal);
+        }
+    }
+
     private static IEnumerable<string> ReviewSources() =>
         Directory.EnumerateFiles(
             Path.Combine(RepoLayout.SourceRoot, "CoreX.Hub.Application", "Review"), "*.cs");

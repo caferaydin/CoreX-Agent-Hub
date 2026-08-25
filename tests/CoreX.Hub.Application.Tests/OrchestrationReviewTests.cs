@@ -1,4 +1,5 @@
 using System.Runtime.Versioning;
+using CoreX.Hub.Agents.Scripted;
 using CoreX.Hub.Application.Review;
 using CoreX.Hub.Domain.Executions;
 using CoreX.Hub.Domain.Tasks;
@@ -121,10 +122,14 @@ public sealed class OrchestrationReviewTests
 
         var stdout = evidence.Where(e => e.Kind == EvidenceKind.AgentStdout).ToList();
 
+        var agent = steps.Single(s => s.Kind == ExecutionStepKind.Agent);
+
         // Both producers stored one, and the step they belong to is what separates them.
+        // Neither is attributed to the execution at large: "the one with no step" is not an
+        // answer to "which of these did the reviewer write".
         Assert.Equal(2, stdout.Count);
         Assert.Single(stdout, e => e.ExecutionStepId == review.Id);
-        Assert.Single(stdout, e => e.ExecutionStepId is null);
+        Assert.Single(stdout, e => e.ExecutionStepId == agent.Id);
 
         // The canonical findings document is the reviewer's, and it is step scoped too.
         var findings = Assert.Single(evidence, e => e.Kind == EvidenceKind.ReviewFindings);
@@ -180,8 +185,38 @@ public sealed class OrchestrationReviewTests
         var report = await hub.Orchestrator().RunAsync(
             hub.TaskId, OrchestrationHarness.ScriptedProfileName, CancellationToken.None);
 
+        // A gate that blocked produced no result commit, so there is nothing to review and
+        // nothing to review it in: no reviewer is asked and no snapshot is prepared.
         Assert.Equal(ExecutionOutcome.ScopeViolation, report.Outcome);
+        Assert.Null(report.ResultCommitSha);
         Assert.Equal(0, reviewer.Calls);
+
+        var review = await ReviewStepAsync(hub, report.ExecutionId);
+
+        Assert.Equal(ExecutionStepState.Skipped, review.State);
+        Assert.Equal("blocked by Scope", review.StateReason);
+    }
+
+    /// <summary>
+    /// A reviewer that ran out of time. The step says what happened to it, and the execution
+    /// says what that leaves: a verified result nobody reviewed.
+    /// </summary>
+    [Fact]
+    public async Task A_reviewer_that_timed_out_keeps_its_commit_and_reports_no_usable_review()
+    {
+        await using var hub = await OrchestrationHarness.CreateAsync();
+        hub.Mode = ScriptedAgentMode.ApplyPatch;
+        hub.Reviewer = ScriptedReviewer.TimedOut();
+
+        var report = await hub.Orchestrator().RunAsync(
+            hub.TaskId, OrchestrationHarness.ScriptedProfileName, CancellationToken.None);
+
+        Assert.Equal(ExecutionState.Completed, report.State);
+        Assert.Equal(ExecutionOutcome.ReviewUnusable, report.Outcome);
+        Assert.NotNull(report.ResultCommitSha);
+
+        Assert.Equal(ExecutionStepState.TimedOut, (await ReviewStepAsync(hub, report.ExecutionId)).State);
+        Assert.Equal(TaskState.Ready, (await hub.TaskAsync()).State);
     }
 
     private static async Task<ExecutionStep> ReviewStepAsync(OrchestrationHarness hub, Guid executionId) =>
@@ -262,6 +297,15 @@ public sealed class ScriptedReviewer : IExecutionReviewer
             new ReviewAttemptEvidence(1, "session-1", "reviewer stdout", string.Empty, null),
             new ReviewAttemptEvidence(2, "session-2", "reviewer stdout", string.Empty, null),
         ],
+    });
+
+    /// <summary>A reviewer that ran out of time. Not a schema problem, so never retried.</summary>
+    public static ScriptedReviewer TimedOut() => new(new ExecutionReviewResult
+    {
+        Verdict = ReviewVerdict.Unusable,
+        StepFate = ReviewStepFate.TimedOut,
+        Detail = "the reviewer ran out of time",
+        Attempts = [new ReviewAttemptEvidence(1, "session-1", "reviewer stdout", string.Empty, null)],
     });
 
     /// <summary>A reviewer the caller stopped. The absence of a review, not a clean one.</summary>

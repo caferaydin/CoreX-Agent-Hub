@@ -56,15 +56,23 @@ public static class EvidenceCommands
 
         // Deterministic order: kind, then hash. Two runs of this command over the same
         // execution print the same rows in the same sequence.
+        // The step is a column rather than an implication. Since the review became real two
+        // producers write the same kinds - the implementer's transcript and the reviewer's are
+        // both AgentStdout - and a reader who cannot tell them apart is reading the wrong one
+        // half the time.
+        var steps = (await session.Store.ListExecutionStepsAsync(execution.Id, ct))
+            .ToDictionary(s => s.Id, s => s.Kind.ToString());
+
         Output.WriteTable(
             output,
-            ["KIND", "BYTES", "MEDIA TYPE", "REDACTIONS", "SHA256"],
+            ["KIND", "STEP", "BYTES", "MEDIA TYPE", "REDACTIONS", "SHA256"],
             artifacts
                 .OrderBy(a => a.Kind)
                 .ThenBy(a => a.Sha256, StringComparer.Ordinal)
                 .Select(a => new[]
                 {
                     a.Kind.ToString(),
+                    a.ExecutionStepId is { } id && steps.TryGetValue(id, out var kind) ? kind : "(execution)",
                     a.SizeBytes.ToString(CultureInfo.InvariantCulture),
                     a.MediaType,
                     a.RedactionCount.ToString(CultureInfo.InvariantCulture),

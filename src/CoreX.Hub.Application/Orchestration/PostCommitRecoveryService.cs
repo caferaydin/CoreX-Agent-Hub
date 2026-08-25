@@ -328,17 +328,35 @@ public sealed class PostCommitRecoveryService
 
         var reviewed = review is { State: ExecutionStepState.Succeeded };
 
-        if (review is { State: ExecutionStepState.Pending })
+        if (review is { State: ExecutionStepState.Pending or ExecutionStepState.Running })
         {
             review.Skip(_reviewRequired ? ReviewNotRunAfterHostLoss : ReviewNotConfigured, now);
         }
 
-        if (_reviewRequired && !reviewed && outcome == ExecutionOutcome.Passed)
+        if (_reviewRequired && outcome == ExecutionOutcome.Passed)
         {
-            // The machine verification stands and is recorded; what is missing is the review,
-            // and its absence is stated rather than stepped over.
-            outcome = ExecutionOutcome.ReviewUnusable;
-            detail = detail + "; the host was lost before this result was reviewed, so no review exists";
+            if (reviewed)
+            {
+                // The review really happened before the host died, and its findings are on
+                // the record. They are read rather than re-derived, and the frozen gate is
+                // asked exactly as the pipeline would have asked it - because a second place
+                // that decided what blocks is how two answers start to exist.
+                var findings = await store.ListFindingsAsync(execution.Id, ct);
+
+                if (ReviewFindingGate.HasBlockingFindings(findings))
+                {
+                    outcome = ExecutionOutcome.ReviewBlocked;
+                    detail = detail + "; " + ReviewFindingGate.Describe(findings);
+                }
+            }
+            else
+            {
+                // The machine verification stands and is recorded; what is missing is the
+                // review, and its absence is stated rather than stepped over. Recovery holds
+                // no reviewer, so it cannot obtain one - and it never invents a pass.
+                outcome = ExecutionOutcome.ReviewUnusable;
+                detail = detail + "; the host was lost before this result was reviewed, so no review exists";
+            }
         }
 
         ExecutionCompletion.Apply(execution, task, outcome, detail, now);

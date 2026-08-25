@@ -210,6 +210,28 @@ public sealed class ReviewEngineTests
     }
 
     [Fact]
+    public async Task A_critical_the_reviewer_exempted_still_blocks_when_the_execution_changed_that_file()
+    {
+        var workspace = new FakeReviewWorkspace().InspectingClean(5);
+        var runtime = new FakeReviewRuntime().Returning(ReviewDocuments.Document(
+            "nothing to see here",
+            ReviewDocuments.Finding(severity: "Critical", file: "src/One.cs", outOfScope: true)));
+
+        var result = await ReviewDocuments.Engine(workspace, runtime)
+            .ReviewAsync(ReviewDocuments.Request(Execution, ["src/One.cs"]), CancellationToken.None);
+
+        // The severity that blocks on its own, and the flag that would have exempted it. The
+        // flag is evidence about the reviewer; the changed paths are the answer.
+        Assert.Equal(ReviewVerdict.Blocked, result.Verdict);
+
+        var finding = Assert.Single(result.Findings);
+
+        Assert.Equal(FindingSeverity.Critical, finding.Severity);
+        Assert.False(finding.OutOfScope);
+        Assert.Single(result.ScopeDisagreements);
+    }
+
+    [Fact]
     public async Task Paths_are_compared_the_way_the_scope_gates_compare_them()
     {
         var workspace = new FakeReviewWorkspace().InspectingClean(5);

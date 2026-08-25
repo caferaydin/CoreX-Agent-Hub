@@ -142,9 +142,15 @@ public sealed class OrchestrationGateTests
 
         Assert.Equal(ExecutionStepState.Skipped, steps.Single(s => s.Kind == ExecutionStepKind.Verify).State);
 
+        // Both steps name the same cause, because it is the same cause. Saying the review was
+        // "not configured" would be a different claim, and a false one on a repository that
+        // has a reviewer.
+        var verify = steps.Single(s => s.Kind == ExecutionStepKind.Verify);
         var review = steps.Single(s => s.Kind == ExecutionStepKind.Review);
+
         Assert.Equal(ExecutionStepState.Skipped, review.State);
-        Assert.Equal("ReviewNotConfigured", review.StateReason);
+        Assert.StartsWith("blocked by ", review.StateReason);
+        Assert.Equal(verify.StateReason, review.StateReason);
 
         Assert.Equal(TaskState.Ready, (await hub.TaskAsync()).State);
 

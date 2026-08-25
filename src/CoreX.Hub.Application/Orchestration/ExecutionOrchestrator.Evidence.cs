@@ -13,13 +13,18 @@ public sealed partial class ExecutionOrchestrator
         AgentExecutionResult result,
         CancellationToken ct)
     {
-        await WriteEvidenceAsync(execution, result.Stdout, EvidenceKind.AgentStdout, "text/plain", ct);
-        await WriteEvidenceAsync(execution, result.Stderr, EvidenceKind.AgentStderr, "text/plain", ct);
+        // Scoped to the step that produced it, exactly as the reviewer's transcript is. Two
+        // producers now write the same kinds, and "which of these did I ask for" has to have
+        // an answer that is not "the one with no step".
+        var step = await FindStepAsync(execution.Id, ExecutionStepKind.Agent, ct);
+
+        await WriteEvidenceAsync(execution, result.Stdout, EvidenceKind.AgentStdout, "text/plain", ct, step?.Id);
+        await WriteEvidenceAsync(execution, result.Stderr, EvidenceKind.AgentStderr, "text/plain", ct, step?.Id);
 
         if (result.StructuredOutput is { Length: > 0 } structured)
         {
             await WriteEvidenceAsync(
-                execution, structured, EvidenceKind.AgentStructuredResult, "application/json", ct);
+                execution, structured, EvidenceKind.AgentStructuredResult, "application/json", ct, step?.Id);
         }
 
         await RecordEventAsync(

@@ -45,8 +45,10 @@ public sealed partial class ExecutionOrchestrator
 
         if (gates.BlockingVerdict is { } blocked)
         {
+            // Both steps say why they did not run, and they say the same thing, because it
+            // is the same reason. "Not configured" would be a different claim and a false one.
             await SkipAsync(execution.Id, ExecutionStepKind.Verify, "blocked by " + blocked.Kind, record);
-            await SkipAsync(execution.Id, ExecutionStepKind.Review, ReviewNotConfigured, record);
+            await SkipAsync(execution.Id, ExecutionStepKind.Review, "blocked by " + blocked.Kind, record);
 
             // No result commit, no verification, and the worktree stays exactly as the
             // agent left it: whatever it wrote is the evidence for the block.
@@ -62,7 +64,7 @@ public sealed partial class ExecutionOrchestrator
         if (ct.IsCancellationRequested)
         {
             await SkipAsync(execution.Id, ExecutionStepKind.Verify, CancelledBeforeCommit, record);
-            await SkipAsync(execution.Id, ExecutionStepKind.Review, ReviewNotConfigured, record);
+            await SkipAsync(execution.Id, ExecutionStepKind.Review, CancelledBeforeCommit, record);
 
             return await TerminateAsync(
                 execution,
@@ -81,7 +83,7 @@ public sealed partial class ExecutionOrchestrator
         if (!commit.Created || commit.CommitSha is null)
         {
             await SkipAsync(execution.Id, ExecutionStepKind.Verify, "no result commit", record);
-            await SkipAsync(execution.Id, ExecutionStepKind.Review, ReviewNotConfigured, record);
+            await SkipAsync(execution.Id, ExecutionStepKind.Review, "no result commit", record);
 
             return await TerminateAsync(execution, task, ExecutionState.Failed,
                 "the result commit was not created: " + commit.Detail, record);
@@ -115,7 +117,7 @@ public sealed partial class ExecutionOrchestrator
                 : "the worktree state could not be read after the result commit";
 
             await SkipAsync(execution.Id, ExecutionStepKind.Verify, WorktreeNotAtResultCommit, record);
-            await SkipAsync(execution.Id, ExecutionStepKind.Review, ReviewNotConfigured, record);
+            await SkipAsync(execution.Id, ExecutionStepKind.Review, WorktreeNotAtResultCommit, record);
 
             return await CompleteAsync(
                 execution, task, ExecutionOutcome.VerificationFailed, why + ", so nothing was verified",
