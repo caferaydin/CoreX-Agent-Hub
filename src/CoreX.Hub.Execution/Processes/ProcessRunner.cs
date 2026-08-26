@@ -1,6 +1,5 @@
 using System.Diagnostics;
 using System.Runtime.Versioning;
-using System.Text;
 using CoreX.Hub.Execution.FileSystem;
 using CoreX.Hub.Execution.Interop;
 using CoreX.Hub.Execution.Text;
@@ -25,10 +24,13 @@ namespace CoreX.Hub.Execution.Processes;
 ///   * stdout and stderr are drained concurrently from the moment the process starts;
 ///   * three explicit deadlines - soft, idle and hard.
 ///
-/// Accepted residual risk (frozen architecture F.5 #1): there is a small window between
-/// Process.Start and AssignProcessToJobObject. A descendant created inside that window
-/// could escape the job. Phase 10 closes it with suspended process creation; Phase 2
-/// deliberately does not pull that work forward.
+/// The child is inside the job before it executes anything. Until Phase 10 this was the one
+/// hole in the list above: <c>Process.Start</c> returns a process that is already running, so
+/// the job could only be attached afterwards, and anything the child spawned in that window
+/// escaped it. The window was small and real, and it was documented as accepted rather than
+/// pretended away. It is now closed - the child is created suspended, assigned, and only then
+/// resumed (see <see cref="Interop.NativeProcessLauncher"/>) - and there is no remaining path
+/// that starts a child without a job.
 /// </summary>
 [SupportedOSPlatform("windows")]
 public sealed class ProcessRunner
@@ -45,9 +47,24 @@ public sealed class ProcessRunner
     private static readonly TimeSpan DrainWindow = TimeSpan.FromSeconds(5);
 
     private readonly FileSystemGuard _guard;
+    private readonly ProcessLaunchFaults _faults;
 
-    public ProcessRunner(FileSystemGuard guard) =>
+    public ProcessRunner(FileSystemGuard guard) : this(guard, ProcessLaunchFaults.None)
+    {
+    }
+
+    /// <summary>
+    /// Used only by this assembly's tests, to make one native launch step fail on purpose.
+    ///
+    /// The guarantees worth having here are about the failure paths, and those cannot be
+    /// reached by hoping the machine misbehaves. Carried per instance rather than as a static
+    /// switch so an injected fault cannot leak into a run happening beside it.
+    /// </summary>
+    internal ProcessRunner(FileSystemGuard guard, ProcessLaunchFaults faults)
+    {
         _guard = guard ?? throw new ArgumentNullException(nameof(guard));
+        _faults = faults ?? throw new ArgumentNullException(nameof(faults));
+    }
 
     /// <summary>Values forced onto every child regardless of the allowlist.</summary>
     public static IReadOnlyDictionary<string, string> ForcedEnvironment { get; } =
@@ -92,7 +109,8 @@ public sealed class ProcessRunner
             return StartFailure(startedAtUtc, $"Working directory '{workingDirectory.CanonicalPath}' does not exist.");
         }
 
-        return await ExecuteAsync(request, executable!, workingDirectory.CanonicalPath!, startedAtUtc, cancellationToken);
+        return await ExecuteAsync(
+            request, executable!, workingDirectory.CanonicalPath!, _faults, startedAtUtc, cancellationToken);
     }
 
     private static bool TryResolveExecutable(string candidate, out string? executable, out string? failure)
@@ -101,7 +119,7 @@ public sealed class ProcessRunner
         failure = null;
 
         // E.1 #3 runtime boundary. Classification happens first and is purely lexical, so
-        // a shell is refused before Process.Start and regardless of whether it is even
+        // a shell is refused before the child is created and regardless of whether it is even
         // installed on this machine.
         if (ShellExecutablePolicy.IsShellOrScript(candidate, out var shellReason))
         {
@@ -144,37 +162,87 @@ public sealed class ProcessRunner
         ProcessRequest request,
         string executable,
         string workingDirectory,
+        ProcessLaunchFaults faults,
         DateTimeOffset startedAtUtc,
         CancellationToken cancellationToken)
     {
         var stdout = new BoundedOutputBuffer(request.MaxCapturedCharactersPerStream);
         var stderr = new BoundedOutputBuffer(request.MaxCapturedCharactersPerStream);
 
-        using var job = JobObjectHandle.CreateKillOnClose();
-        using var process = new Process { StartInfo = BuildStartInfo(request, executable, workingDirectory) };
+        // Step one, before anything can be launched. A job that could not be created is a
+        // tree that could not be bounded, so nothing is started at all - there is deliberately
+        // no path that falls back to an unbounded child.
+        JobObjectHandle job;
 
         try
         {
-            if (!process.Start())
+            job = faults.FailJobCreation
+                ? throw new InvalidOperationException("CreateJobObject failed with Win32 error 5.")
+                : JobObjectHandle.CreateKillOnClose();
+        }
+        catch (InvalidOperationException ex)
+        {
+            return StartFailure(startedAtUtc, $"The process job could not be created: {ex.Message}");
+        }
+
+        using (job)
+        {
+            var environment = WindowsEnvironmentBlock.Compose(
+                request.EnvironmentAllowlist,
+                Environment.GetEnvironmentVariable,
+                request.AdditionalEnvironment,
+                ForcedEnvironment);
+
+            var launch = NativeProcessLauncher.Launch(
+                executable,
+                request.Arguments,
+                workingDirectory,
+                environment,
+                job,
+                faults,
+                cancellationToken);
+
+            if (launch.Child is not { } child)
             {
-                return StartFailure(startedAtUtc, $"Windows refused to start '{executable}'.");
+                // Nothing is running. The launcher terminated whatever it had created before
+                // returning, so there is no tree left to reap - but the job is ended anyway
+                // because doing so twice costs nothing and missing it once would not.
+                job.Terminate(1);
+
+                return launch.Failure == NativeLaunchFailure.CancelledBeforeResume
+                    ? new ProcessRunResult
+                    {
+                        TerminationReason = ProcessTerminationReason.Cancelled,
+                        StartedAtUtc = startedAtUtc,
+                        EndedAtUtc = DateTimeOffset.UtcNow,
+                        JobTerminated = true,
+                    }
+                    : StartFailure(startedAtUtc, launch.Message ?? $"'{executable}' could not be started.");
             }
-        }
-        catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or InvalidOperationException)
-        {
-            return StartFailure(startedAtUtc, $"Failed to start '{executable}': {ex.Message}");
-        }
 
-        // Accepted Phase 2 race: a descendant created between Start and this assignment
-        // could escape the job. Phase 10 replaces this with suspended creation.
-        if (!job.TryAssign(process.SafeHandle, out var assignError) && !process.HasExited)
-        {
-            job.Terminate(1);
-            return StartFailure(
-                startedAtUtc,
-                $"AssignProcessToJobObject failed with Win32 error {assignError}; the process tree could not be bounded.");
-        }
+            using var process = child;
 
+            return await SuperviseRunAsync(
+                request, process, job, stdout, stderr, startedAtUtc, cancellationToken);
+        }
+    }
+
+    /// <summary>
+    /// Watches a child that is already running and already inside the job.
+    ///
+    /// Unchanged by Phase 10 on purpose: how a run is supervised, when it is given up on and
+    /// what is reported are the same decisions they were, and replacing how a child is created
+    /// was not an excuse to revisit any of them.
+    /// </summary>
+    private static async Task<ProcessRunResult> SuperviseRunAsync(
+        ProcessRequest request,
+        NativeChildProcess process,
+        JobObjectHandle job,
+        BoundedOutputBuffer stdout,
+        BoundedOutputBuffer stderr,
+        DateTimeOffset startedAtUtc,
+        CancellationToken cancellationToken)
+    {
         var state = new RunState(request);
         var stdoutPump = PumpAsync(process.StandardOutput, stdout, state, request.StandardOutputObserver);
         var stderrPump = PumpAsync(process.StandardError, stderr, state, observer: null);
@@ -196,68 +264,6 @@ public sealed class ProcessRunner
         job.Terminate(1);
 
         return BuildResult(request, process, state, reason, exitedNaturally, stdout, stderr, startedAtUtc);
-    }
-
-    private static ProcessStartInfo BuildStartInfo(
-        ProcessRequest request,
-        string executable,
-        string workingDirectory)
-    {
-        var utf8 = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
-
-        var startInfo = new ProcessStartInfo
-        {
-            FileName = executable,
-            WorkingDirectory = workingDirectory,
-
-            // ADR-0006: no shell, ever.
-            UseShellExecute = false,
-            CreateNoWindow = true,
-
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            RedirectStandardInput = true,
-            StandardOutputEncoding = utf8,
-            StandardErrorEncoding = utf8,
-            StandardInputEncoding = utf8,
-        };
-
-        foreach (var argument in request.Arguments)
-        {
-            // ArgumentList quotes each element; no command line is ever assembled.
-            startInfo.ArgumentList.Add(argument);
-        }
-
-        ApplyEnvironment(startInfo, request);
-        return startInfo;
-    }
-
-    /// <summary>
-    /// ADR-0007: the child environment starts empty and receives only what was explicitly
-    /// allowed, then the forced Hub values which cannot be overridden.
-    /// </summary>
-    private static void ApplyEnvironment(ProcessStartInfo startInfo, ProcessRequest request)
-    {
-        startInfo.Environment.Clear();
-
-        foreach (var name in request.EnvironmentAllowlist.Distinct(StringComparer.OrdinalIgnoreCase))
-        {
-            var value = Environment.GetEnvironmentVariable(name);
-            if (value is not null)
-            {
-                startInfo.Environment[name] = value;
-            }
-        }
-
-        foreach (var entry in request.AdditionalEnvironment)
-        {
-            startInfo.Environment[entry.Key] = entry.Value;
-        }
-
-        foreach (var forced in ForcedEnvironment)
-        {
-            startInfo.Environment[forced.Key] = forced.Value;
-        }
     }
 
     /// <summary>
@@ -324,7 +330,7 @@ public sealed class ProcessRunner
         }
     }
 
-    private static async Task FeedStdinAsync(Process process, ProcessRequest request, RunState state)
+    private static async Task FeedStdinAsync(NativeChildProcess process, ProcessRequest request, RunState state)
     {
         try
         {
@@ -365,7 +371,7 @@ public sealed class ProcessRunner
     /// period of an earlier soft or idle trigger.
     /// </summary>
     private static async Task<ProcessTerminationReason> SuperviseAsync(
-        Process process,
+        NativeChildProcess process,
         JobObjectHandle job,
         RunState state,
         CancellationToken cancellationToken)
@@ -410,7 +416,7 @@ public sealed class ProcessRunner
         return ProcessTerminationReason.Exited;
     }
 
-    private static async Task EndRunAsync(Process process, JobObjectHandle job, RunState state, bool graceful)
+    private static async Task EndRunAsync(NativeChildProcess process, JobObjectHandle job, RunState state, bool graceful)
     {
         state.CloseStdin(process);
 
@@ -448,7 +454,7 @@ public sealed class ProcessRunner
         await Task.WhenAny(all, Task.Delay(DrainWindow)).ConfigureAwait(false);
     }
 
-    private static async Task WaitForExitQuietlyAsync(Process process, TimeSpan timeout)
+    private static async Task WaitForExitQuietlyAsync(NativeChildProcess process, TimeSpan timeout)
     {
         try
         {
@@ -463,7 +469,7 @@ public sealed class ProcessRunner
 
     private static ProcessRunResult BuildResult(
         ProcessRequest request,
-        Process process,
+        NativeChildProcess process,
         RunState state,
         ProcessTerminationReason reason,
         bool exitedNaturally,
@@ -476,28 +482,11 @@ public sealed class ProcessRunner
         var normalizedOut = AnsiNormalizer.Normalize(rawOut);
         var normalizedErr = AnsiNormalizer.Normalize(rawErr);
 
-        int? exitCode = null;
-        if (exitedNaturally)
-        {
-            try
-            {
-                exitCode = process.ExitCode;
-            }
-            catch (InvalidOperationException)
-            {
-                exitCode = null;
-            }
-        }
-
-        int? processId = null;
-        try
-        {
-            processId = process.Id;
-        }
-        catch (InvalidOperationException)
-        {
-            processId = null;
-        }
+        // The native child reports these directly: the exit code is null until the process
+        // object is actually signalled, and the id is fixed from creation, so neither can
+        // throw the way the managed Process wrapper used to once a run had ended.
+        var exitCode = exitedNaturally ? process.ExitCode : null;
+        int? processId = process.Id;
 
         return new ProcessRunResult
         {
@@ -560,7 +549,7 @@ public sealed class ProcessRunner
 
         public void RecordActivity() => Volatile.Write(ref _lastActivityTimestamp, Stopwatch.GetTimestamp());
 
-        public void CloseStdin(Process process)
+        public void CloseStdin(NativeChildProcess process)
         {
             if (Interlocked.Exchange(ref _stdinClosed, 1) != 0)
             {

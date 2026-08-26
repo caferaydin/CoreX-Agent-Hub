@@ -32,25 +32,39 @@ public sealed class ForbiddenConstructTests
         new(@"\bProcess\s*\.\s*Start\b|\bnew\s+ProcessStartInfo\b", RegexOptions.CultureInvariant);
 
     [Fact]
-    public void Only_the_process_runner_may_start_processes()
+    public void Nothing_starts_a_process_through_the_managed_api()
     {
-        // E.1 #1: process creation belongs to ProcessRunner and nowhere else.
+        // E.1 #1 with no exemption left to grant. ProcessRunner used to be the one file
+        // allowed to call Process.Start, because it was the single launch boundary; since
+        // Phase 10B-1 it creates the child suspended through CreateProcessW instead, so the
+        // managed launch has no legitimate caller anywhere and the ban is total.
+        //
+        // That matters beyond tidiness: Process.Start returns a child that is already
+        // running, which is precisely the ordering that made a descendant able to escape the
+        // Job Object. A reintroduction here would reintroduce the race.
         AssertNoMatch(
             ProcessLaunchPattern,
-            allowedFileName: ProcessRunnerFileName,
-            because: "E.1 #1: process creation belongs to ProcessRunner only.");
+            allowedFileName: null,
+            because: "Process.Start hands back an already running child; the Hub creates one suspended.");
     }
 
     [Fact]
-    public void The_process_runner_exemption_is_not_vacuous()
+    public void The_single_launch_boundary_is_still_the_process_runner()
     {
-        // A guard whose single exempt file contains nothing would pass forever without
-        // enforcing anything. Phase 2 makes the exemption real, so assert it is used.
+        // The complement of the ban: exactly one file drives the native launch, so "no
+        // Process.Start anywhere" cannot be satisfied by having no launcher at all.
         var runner = RepoLayout.ProductionSourceFiles
             .SingleOrDefault(f => string.Equals(Path.GetFileName(f), ProcessRunnerFileName, StringComparison.Ordinal));
 
         Assert.NotNull(runner);
-        Assert.Matches(ProcessLaunchPattern, File.ReadAllText(runner));
+        Assert.Contains("NativeProcessLauncher.Launch", File.ReadAllText(runner!), StringComparison.Ordinal);
+
+        var callers = RepoLayout.ProductionSourceFiles
+            .Where(f => File.ReadAllText(f).Contains("NativeProcessLauncher.Launch", StringComparison.Ordinal))
+            .Select(Path.GetFileName)
+            .ToList();
+
+        Assert.Equal([ProcessRunnerFileName], callers);
     }
 
     [Fact]
@@ -97,7 +111,11 @@ public sealed class ForbiddenConstructTests
         Assert.Contains("ShellExecutablePolicy.IsShellOrScript", text, StringComparison.Ordinal);
 
         var guardIndex = text.IndexOf("ShellExecutablePolicy.IsShellOrScript", StringComparison.Ordinal);
-        var launchIndex = text.IndexOf("process.Start()", StringComparison.Ordinal);
+
+        // Phase 10B-1 replaced Process.Start with a suspended native creation, so the launch
+        // point is now the call into the native launcher. The property is unchanged: a shell
+        // is classified and refused before anything can be created.
+        var launchIndex = text.IndexOf("NativeProcessLauncher.Launch", StringComparison.Ordinal);
 
         Assert.True(launchIndex > 0, "the launch point should still be in ProcessRunner");
         Assert.True(guardIndex < launchIndex, "the shell classification must precede process creation");

@@ -23,7 +23,14 @@ public sealed class WebInvariantTests
     public void The_dotnet_solution_does_not_know_the_frontend_exists()
     {
         // No csproj anywhere, so `dotnet build` neither sees it nor needs node installed.
-        Assert.Empty(Directory.EnumerateFiles(WebRoot, "*.csproj", SearchOption.AllDirectories));
+        //
+        // Generated output is excluded rather than scanned. e2e/.artifacts holds a disposable
+        // Hub whose validation repository is a real .NET project, so a machine that had run
+        // the browser acceptance would otherwise fail this guard for a file the repository
+        // does not contain and git does not track.
+        Assert.DoesNotContain(
+            Directory.EnumerateFiles(WebRoot, "*.csproj", SearchOption.AllDirectories),
+            f => !IsGenerated(f));
 
         var solution = File.ReadAllText(Path.Combine(RepoLayout.Root, "CoreX.Hub.slnx"));
 
@@ -466,6 +473,18 @@ public sealed class WebInvariantTests
             }
         }
     }
+
+    /// <summary>
+    /// Whether a path is build output rather than something a person wrote.
+    ///
+    /// These three directories are gitignored and are recreated by tooling: the package cache,
+    /// the production bundle, and the browser-acceptance artifacts. A guard that read them
+    /// would be measuring the last command someone ran instead of the repository.
+    /// </summary>
+    private static bool IsGenerated(string path) =>
+        path.Contains($"{Path.DirectorySeparatorChar}node_modules{Path.DirectorySeparatorChar}", StringComparison.Ordinal)
+        || path.Contains($"{Path.DirectorySeparatorChar}dist{Path.DirectorySeparatorChar}", StringComparison.Ordinal)
+        || path.Contains($"{Path.DirectorySeparatorChar}.artifacts{Path.DirectorySeparatorChar}", StringComparison.Ordinal);
 
     /// <summary>Every hand-written frontend source. Never the installed packages or the build.</summary>
     private static IEnumerable<string> WebSources() =>

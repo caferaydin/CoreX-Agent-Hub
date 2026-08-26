@@ -14,4 +14,14 @@
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
 
+  <!--
+    The native launch path is internal on purpose: no caller outside this project should know
+    that CreateProcessW exists, and the fault seam that makes its failure paths testable must
+    not be reachable by a provider or a composition root. The tests need both, so they are
+    granted access by name rather than by widening the API.
+  -->
+  <ItemGroup>
+    <InternalsVisibleTo Include="CoreX.Hub.Execution.Tests" />
+  </ItemGroup>
+
 </Project>

@@ -47,6 +47,7 @@ return mode switch
     "report" => WriteReport(args),
     "secrets" => WriteSecrets(args),
     "agent" => await AgentAsync(args),
+    "probe-handle" => ProbeHandle(args),
     _ => Help(),
 };
 
@@ -167,6 +168,43 @@ static int Marker(string[] args)
     }
 
     output.Flush();
+    return 0;
+}
+
+/// Tries to write through a raw handle number the parent passed in.
+///
+/// Handle values are per process, and an inherited handle keeps its numeric value in the
+/// child - so if the parent's sentinel really was inherited, writing to that number here
+/// lands in the parent's sentinel file. If it was not inherited the number is either invalid
+/// or belongs to something else entirely, and the sentinel file stays empty. The parent
+/// checks the file, never this process's opinion, so a coincidental handle cannot produce a
+/// false positive.
+static int ProbeHandle(string[] args)
+{
+    if (args.Length < 2 || !nint.TryParse(args[1], NumberStyles.Integer, CultureInfo.InvariantCulture, out var raw))
+    {
+        Console.Out.WriteLine("PROBE-BADARGS");
+        return 2;
+    }
+
+    try
+    {
+        using var handle = new Microsoft.Win32.SafeHandles.SafeFileHandle(raw, ownsHandle: false);
+        using var stream = new FileStream(handle, FileAccess.Write);
+        using var writer = new StreamWriter(stream, new UTF8Encoding(false));
+
+        writer.Write(string.Create(CultureInfo.InvariantCulture, $"INHERITED by pid {Environment.ProcessId}"));
+        writer.Flush();
+
+        Console.Out.WriteLine("PROBE-WROTE");
+    }
+    catch (Exception ex)
+    {
+        // The expected outcome: the handle is not ours to use.
+        Console.Out.WriteLine("PROBE-DENIED " + ex.GetType().Name);
+    }
+
+    Console.Out.Flush();
     return 0;
 }
 
