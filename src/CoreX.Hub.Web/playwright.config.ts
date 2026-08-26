@@ -29,6 +29,11 @@ export default defineConfig({
   testDir: e2e,
   testMatch: '**/*.spec.ts',
 
+  // The committed suite is the e2e directory's own specs. Anything under .artifacts/ is a
+  // generated, gitignored validation harness - a build output, a disposable Hub, or the
+  // one paid real-reviewer acceptance - and must never be swept into `npm run e2e`.
+  testIgnore: '**/.artifacts/**',
+
   // A real agent process, real git and real verification take real seconds.
   timeout: 120_000,
   expect: { timeout: 20_000 },

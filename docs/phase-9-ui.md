@@ -502,22 +502,41 @@ bilmez. Repository **reviewer bildirmez**, dolayısıyla temiz koşu `Passed` bi
 
 Ekran görüntüleri `e2e/.artifacts/screenshots/` altındadır ve **commit edilmez**.
 
-### Kapsanmayan: tarayıcıda ReviewBlocked override
+### ReviewBlocked override — gerçek reviewer ile kapatıldı
 
-Deterministik bir `ReviewBlocked` **üretilemedi**, ve nedeni yapısaldır:
+Deterministik ortam bir review'ü dürüstçe **üretemez**: `ExecutionComposition`, reviewer
+runtime'ından `SupportsReadOnlyMode` **ve** `SupportsStructuredSchema` bildirmesini ister
+(ADR-0008), `ScriptedAgentRuntime` ise ikisini de doğru biçimde `false` bildirir ve bir
+reviewer olarak composition anında reddedilir. Scripted runtime'ın yeteneğini test için
+zayıflatmak yasaktır.
 
-`ExecutionComposition`, reviewer runtime'ından `SupportsReadOnlyMode` **ve**
-`SupportsStructuredSchema` bildirmesini ister (ADR-0008). `ScriptedAgentRuntime` ikisini de
-`false` bildirir — ve bu doğrudur, çünkü şemayı okumaz. Yani scripted runtime bir reviewer
-olarak **composition anında reddedilir**.
+Bu yüzden override yolu **bir kez, gerçek reviewer ile** ve ayrı bir tek kullanımlık Hub'da
+kapatıldı. Kanıt driver'ı ve ortamı yalnızca gitignore'lu doğrulama alanındadır:
 
-Bunu aşmanın tek yolu `src/CoreX.Hub.Agents` içinde üretim kodu değiştirmek (yeni bir
-scripted mod + yetenek bildirimi) ya da ücretli gerçek reviewer'ı (Codex 0.130.0) canlı
-çağırmaktır. Ikisi de bu dilimin sınırları dışındadır.
+```
+e2e/.artifacts/real-reviewer/
+  setup.mjs              tek kullanımlık Hub + gerçek .NET class library deposu
+  playwright.config.ts   yayınlanmış host'a karşı, ayri data dizini, ayri port
+  override.spec.ts       tek senaryo, tamamı tarayıcıdan
+```
 
-Override yolu **kanıtsız değildir**, yalnızca tarayıcıda kanıtlanmamıştır: API seviyesinde
-(`MutationEndpointTests`, `DecisionReadbackTests`) ve bileşen seviyesinde
-(`TaskGovernance.test.tsx`) tam olarak kanıtlıdır.
+- Sağlayıcı: **ClaudeCodeRuntime** (Faz 7'nin kabul edilmiş reviewer sözleşmesi). İki ayrı
+  profil: yazabilen `claude-implementer`, yalnızca okuyan `claude-reviewer` — aynı runtime,
+  farklı izin, ayrı oturum.
+- Kimlik doğrulama: iş istasyonunun mevcut oturumu (ADR-0009). Token/anahtar kopyalanmaz,
+  login/logout yoktur, gizli config commit edilmez.
+- Görev: tek dosyalık, **derlenen ama güvenlik açısından bloklayan** bir değişiklik —
+  `IsAuthorized` her kimlik için `true` döner. Reviewer'a ipucu verilmez; normal üretim
+  sözleşmesini alır ve gerçek bir `ReviewFindingGate` kararı üretir.
+- Shipped `hub.config.yaml` okunmaz, kopyalanmaz, düzenlenmez. Aktif reviewer hâlâ
+  `codex-reviewer`, Codex hâlâ `0.130.0`'a sabitli.
+
+Kapatılan kanıt: pozitif görünürlük (override var, sıradan Accept yok, bulgular açık), boş ve
+yalnızca-boşluk gerekçe için hiçbir mutasyon gitmemesi, geçerli override sonrası Task
+`Accepted` / Execution `ReviewBlocked` / `OverrideUsed=true`, ve sabit yenilemeden sonra
+gerekçe / actor / zaman / verdict / bulguların REST'ten okunması.
+
+Ölçülen gerçek koşum verisi `run-record.json` içindedir (gitignore'lu).
 
 ## 17. Erişilebilirlik
 
@@ -532,6 +551,5 @@ kaydırılabilir alanlarda (tablolar, diff). Mobil optimizasyonu Faz 9 gereksini
 
 ## 19. Kalanlar
 
-- Tarayıcıda ReviewBlocked override (yukarıdaki yapısal neden).
 - Ham kanıt görüntüleyici.
 - OpenAPI'den istemci üretimi.
