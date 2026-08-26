@@ -1,9 +1,10 @@
 # Faz 10 — Sertleştirme
 
 Faz 10B-1: **yarışsız Windows süreç başlatma**.
+Faz 10B-2: **Windows Job Object kaynak limitleri**.
 
-Bu belge Faz 10'un sertleştirme işini kaydeder. Şu an yalnızca 10B-1 uygulanmıştır; geri
-kalan dilimler aşağıda "kalanlar" başlığı altındadır ve **uygulanmamıştır**.
+Bu belge Faz 10'un sertleştirme işini kaydeder. Şu an 10B-1 ve 10B-2 uygulanmıştır; geri
+kalan dilimler (10C ve sonrası) aşağıda ayrıca işaretlenmiştir ve **uygulanmamıştır**.
 
 ## 1. Kapatılan yarış
 
@@ -117,19 +118,94 @@ Boş argümanın tek gösterimi `""`dir.
 Ayrıca gerçek bir süreçten **tur kontrolü** yapılır: kodlayıcı kendi içinde tutarlı ama
 yanlış olsaydı bile bu test düşerdi.
 
-## 6. 10B-2'ye kalan: Job Object kotaları
+## 6. Kaynak limitleri (Faz 10B-2)
 
-Faz 10A şunu buldu ve **hâlâ geçerlidir**: Job Object yalnızca
-`JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` ile yapılandırılmıştır. Şunlar **etkin değildir**:
+10B-1 ağacı sınırlıyordu ama **kaynak tüketimini** sınırlamıyordu. 10B-2 mekanizmayı ekler.
 
-- `ActiveProcessLimit` (süreç sayısı)
-- `ProcessMemoryLimit` / `JobMemoryLimit` (bellek)
-- CPU/zaman kotaları
+### Sözleşme
 
-Yani ağaç sınırlanır ama **kaynak tüketimi sınırlanmaz**. 10B-1 bilerek sayısal kota
-politikası icat etmez. `JobObjectHandle` genişletilmeye hazır bırakılmıştır: Windows'un
-beklediği `JOBOBJECT_EXTENDED_LIMIT_INFORMATION` yapısı zaten oradadır, bir limit eklemek
-bir bayrak ve bir alandır — yeniden tasarım değil. Bir guard bunu kilitler.
+`ProcessResourceLimits` — üç isteğe bağlı tavan, başka hiçbir şey:
+
+```
+ActiveProcessLimit?        kaç süreç (kök dahil)
+JobMemoryLimitBytes?       job'un TOPLAM commit'i
+ProcessMemoryLimitBytes?   her süreç ayrı ayrı
+```
+
+Sağlayıcı alanı yok, organizasyon kavramı yok, mutable sözlük yok. `ProcessRequest` üzerinden
+taşınır; Win32 çevirisi **yalnızca** `CoreX.Hub.Execution` içindedir (guard).
+
+**Yok ≠ sıfır.** Bir değer verilmemişse o kota **hiç etkinleştirilmez**: bayrağı set edilmez,
+native alanı sıfır kalır ve Windows onu okumaz. Yönetilen sözleşme "sıfır limit" ifade
+edemez, dolayısıyla yanlış okunacak bir sentinel yoktur.
+
+### Win32 eşlemesi
+
+`JobLimitPlan.For(limits)` saf bir fonksiyondur ve kendi tablo testleri vardır:
+
+| İstenen | Bayrak | Alan |
+|---|---|---|
+| *(her zaman)* | `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` | — |
+| `ActiveProcessLimit` | `JOB_OBJECT_LIMIT_ACTIVE_PROCESS` | `BasicLimitInformation.ActiveProcessLimit` |
+| `JobMemoryLimitBytes` | `JOB_OBJECT_LIMIT_JOB_MEMORY` | `JobMemoryLimit` |
+| `ProcessMemoryLimitBytes` | `JOB_OBJECT_LIMIT_PROCESS_MEMORY` | `ProcessMemoryLimit` |
+
+Bu eşleme neden ayrı bir değer ve ayrı test? Çünkü **sessizce** bozulur: değeri olmayan bir
+bayrak, bayrağı olmayan bir değer, ya da `JobMemoryLimit` yerine yanındaki `ProcessMemoryLimit`
+alanına yazılan bir sayı — Windows üçünü de kabul eder ve kimsenin istemediği şekilde
+sınırlamaz. Adversarial geçişte dördü de mutasyonla doğrulandı.
+
+`KILL_ON_JOB_CLOSE` **koşulsuzdur**. Bir kota eklemenin bedeli ağacın toplanmaması olamaz.
+
+### Fail-closed
+
+Limitler job **oluşturulurken** uygulanır; yani çocuk, istenen her tavanı zaten uygulayan bir
+job'un içine doğar. `SetInformationJobObject` reddederse:
+
+- job dispose edilir,
+- `StartFailed` döner,
+- **çocuk hiç yaratılmaz** (marker dosyası boş kalır — test edilmiştir).
+
+Uyarı logolayıp devam etmek yoktur. İstenen bir güvenlik politikası verilemiyorsa cevap
+"başka bir politika" değildir.
+
+Geçersiz tavan (0 veya negatif) istek sınırında **reddedilir** — sessizce clamp edilmez ve
+önce sınırsız bir çocuk başlatılmaz.
+
+### Süreç sayısı semantiği
+
+Job üyeliği Hub'ın başlattığı süreci **de** sayar. Ölçüldü, varsayılmadı:
+
+- `ActiveProcessLimit = 1` → kök çalışır, **hiçbir şey** spawn edemez.
+- `ActiveProcessLimit = 2` → kök + bir çocuk; sonraki denemeler `CreateProcess` seviyesinde
+  başarısız olur.
+
+### Bellek semantiği
+
+- `JobMemoryLimit`: job'daki her şeyin **toplamı**. Asıl istenen budur — yirmi süreç açarak
+  süreç başına tavanın altında kalan bir koşu sınırlanmış sayılmaz.
+- `ProcessMemoryLimit`: her süreç ayrı ayrı. Uygulandı ve **bağımsız** test edildi.
+
+Bellek testi makine güvenlidir: 192 MiB tavan, 8 MiB'lik parçalar, fixture kendi 512 MiB
+tavanında zaten durur. Kontrol testi de vardır — limitsiz aynı fixture **durdurulmaz** — yoksa
+"her zaman başarısız olan bir fixture" testi yanlış nedenle yeşil yapardı.
+
+### Kota ihlali sonucu
+
+Yeni bir `ExecutionOutcome`/`TaskState`/`ProcessRunOutcome` **icat edilmedi**. Kota bir OS
+containment olgusudur; gözlemlenebilen şey işletim sisteminin verdiğidir (allocation
+başarısızlığı, `CreateProcess` reddi, sonlandırma) ve mevcut `ProcessRunResult` semantiği
+üzerinden akar. Üst seviye orkestrasyon anlamları değişmedi.
+
+### Sayısal politika YOKTUR
+
+`ProcessRequest.ResourceLimits` varsayılanı `None`'dır. Üründe evrensel bir sayı **yoktur** ve
+bir guard bunu kilitler. Nedeni mekanik: `ProcessRunner` yalnızca agent'ı değil **doğrulamayı
+ve git'i de** çalıştırır — agent için seçilmiş bir tavan sessizce bir build'in ve bir clone'un
+tavanı olurdu. Mekanizma buradadır; politika çağırandan/kompozisyondan gelir.
+
+Mevcut Logical koşular kota istemez ve aynen çalışmaya devam eder. Bu **geçici uyumluluktur**,
+"kotalara gerek yok" beyanı değildir.
 
 ## 7. 10C'ye kalan: WSL / Linux süreç ağacı
 
@@ -144,7 +220,23 @@ Ayrıca Faz 10A-HI-01'in bulduğu eş-kiracılık kuralı da 10C'ye aittir: ayn�
 kullanıcısı altında kayıtlı bir distro, o kullanıcı altında çalışan güvenilmeyen bir
 execution'a karşı sınır değildir.
 
-## 8. Kalan sınırlamalar
+## 8. Faz 10C'ye devir — zorunlu gereksinim
 
-- Job Object süreç/bellek kotaları **10B-2**'ye ertelenmiştir.
-- Linux/WSL süreç ağacı denetimi **10C**'ye ertelenmiştir.
+`HardIsolationReadiness`, Hard bir yürütme topolojisini şu durumda **reddetmelidir**:
+
+- Linux/systemd yürütme birimi için **sonlu** bir süreç sayısı limiti yoksa, veya
+- **sonlu** bir bellek limiti yoksa.
+
+Hard izolasyon için başlatılan Windows tarafı yardımcı süreçler de, uygulanabilir olduğu
+yerde, sonlu limitli bir Windows Job kullanmalıdır.
+
+10B-2 mekanizmayı verir; **zorunluluk** 10C'nin readiness kontrolüne aittir ve burada
+uygulanmamıştır.
+
+## 9. Kalan sınırlamalar
+
+- Hard izolasyon için **zorunlu sayısal politika** Faz 10C readiness'ine kadar etkin değildir.
+- Linux kaynak zorlaması (systemd/cgroup: `MemoryMax`, `TasksMax`, `KillMode=control-group`)
+  **10C**'ye aittir.
+- CPU-rate kotası bu dilimin kapsamında değildir; yürütme süresinin otoritesi soft/idle/hard
+  duvar saati zaman aşımlarıdır.

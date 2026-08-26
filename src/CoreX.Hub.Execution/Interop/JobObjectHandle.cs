@@ -1,5 +1,6 @@
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
+using CoreX.Hub.Execution.Processes;
 using Microsoft.Win32.SafeHandles;
 
 namespace CoreX.Hub.Execution.Interop;
@@ -18,13 +19,30 @@ namespace CoreX.Hub.Execution.Interop;
 internal sealed partial class JobObjectHandle : SafeHandleZeroOrMinusOneIsInvalid
 {
     private const uint JobObjectExtendedLimitInformation = 9;
-    private const uint JobObjectLimitKillOnJobClose = 0x00002000;
 
     private JobObjectHandle(IntPtr existingHandle) : base(ownsHandle: true) => SetHandle(existingHandle);
 
-    /// <summary>Creates an unnamed job whose members die when the job is closed.</summary>
-    public static JobObjectHandle CreateKillOnClose()
+    /// <summary>
+    /// Creates an unnamed job whose members die when the job is closed, carrying whatever
+    /// resource ceilings were requested.
+    ///
+    /// Configuration is part of creation rather than a later step, so there is no window in
+    /// which a job exists with weaker limits than the caller asked for - and no way to obtain
+    /// a job that was supposed to be limited but silently is not. If the limits cannot be
+    /// applied this throws, and the caller starts nothing.
+    /// </summary>
+    /// <param name="limits">The ceilings to enforce. <see cref="ProcessResourceLimits.None"/> asks for none.</param>
+    /// <param name="simulateConfigurationFailure">
+    /// Test only. Makes the configuration step fail the way Windows would, so the fail closed
+    /// path can be exercised - it cannot be provoked otherwise on a healthy machine.
+    /// </param>
+    public static JobObjectHandle Create(
+        ProcessResourceLimits limits,
+        bool simulateConfigurationFailure = false)
     {
+        ArgumentNullException.ThrowIfNull(limits);
+
+        var plan = JobLimitPlan.For(limits);
         // LibraryImport cannot marshal a SafeHandle return value, so the raw handle is
         // wrapped immediately and never escapes untracked.
         var raw = CreateJobObjectW(IntPtr.Zero, null);
@@ -37,15 +55,27 @@ internal sealed partial class JobObjectHandle : SafeHandleZeroOrMinusOneIsInvali
         var job = new JobObjectHandle(raw);
 
         var information = default(JobObjectExtendedLimitInformationNative);
-        information.BasicLimitInformation.LimitFlags = JobObjectLimitKillOnJobClose;
+        information.BasicLimitInformation.LimitFlags = plan.LimitFlags;
+        information.BasicLimitInformation.ActiveProcessLimit = plan.ActiveProcessLimit;
+        information.ProcessMemoryLimit = (nuint)plan.ProcessMemoryLimitBytes;
+        information.JobMemoryLimit = (nuint)plan.JobMemoryLimitBytes;
 
         unsafe
         {
             var size = (uint)sizeof(JobObjectExtendedLimitInformationNative);
-            if (!SetInformationJobObject(job, JobObjectExtendedLimitInformation, &information, size))
+
+            var configured = !simulateConfigurationFailure
+                && SetInformationJobObject(job, JobObjectExtendedLimitInformation, &information, size);
+
+            if (!configured)
             {
-                var error = Marshal.GetLastWin32Error();
+                // Fail closed. A caller that asked for a ceiling and cannot have it must not
+                // be handed a job that merely reaps its tree: the request was about how much
+                // of the machine a run may take, and answering it with a different policy
+                // would be answering a different question.
+                var error = simulateConfigurationFailure ? 5 : Marshal.GetLastWin32Error();
                 job.Dispose();
+
                 throw new InvalidOperationException(
                     $"SetInformationJobObject failed with Win32 error {error}.");
             }

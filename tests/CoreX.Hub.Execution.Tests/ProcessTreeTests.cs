@@ -120,7 +120,7 @@ public sealed class ProcessTreeTests
         return pids;
     }
 
-    private static bool IsAlive(int pid)
+    internal static bool IsAlive(int pid)
     {
         try
         {

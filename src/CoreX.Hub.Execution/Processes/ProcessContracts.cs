@@ -59,6 +59,16 @@ public sealed record ProcessRequest
     public IReadOnlyDictionary<string, string> AdditionalEnvironment { get; init; } =
         new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 
+    /// <summary>
+    /// How much of the machine this run may consume.
+    ///
+    /// Generic policy, carried like any other field of the request: the runner translates it
+    /// into Job Object limits and no caller needs to know that. Defaults to none, which keeps
+    /// every existing caller behaving exactly as it did - the job still reaps its tree, it
+    /// simply enforces no additional ceiling.
+    /// </summary>
+    public ProcessResourceLimits ResourceLimits { get; init; } = ProcessResourceLimits.None;
+
     /// <summary>Graceful deadline. Null disables it.</summary>
     public TimeSpan? SoftTimeout { get; init; }
 
@@ -141,6 +151,10 @@ public sealed record ProcessRequest
         {
             throw new ProcessRequestException("MaxCapturedCharactersPerStream must be greater than zero.");
         }
+
+        // Refused here, before anything is created, so an impossible ceiling can never be
+        // the reason a child was started and then found to be unbounded.
+        ResourceLimits.Validate();
 
         ValidateSubDeadline(SoftTimeout, nameof(SoftTimeout));
         ValidateSubDeadline(IdleTimeout, nameof(IdleTimeout));

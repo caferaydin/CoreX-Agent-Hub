@@ -169,16 +169,18 @@ public sealed class ProcessRunner
         var stdout = new BoundedOutputBuffer(request.MaxCapturedCharactersPerStream);
         var stderr = new BoundedOutputBuffer(request.MaxCapturedCharactersPerStream);
 
-        // Step one, before anything can be launched. A job that could not be created is a
-        // tree that could not be bounded, so nothing is started at all - there is deliberately
-        // no path that falls back to an unbounded child.
+        // Step one, before anything can be launched. The job is created and fully configured
+        // here - ceilings included - so the child is created into a job that already enforces
+        // everything asked of it. A job that could not be created, or could not be given the
+        // limits the caller requested, is a tree that could not be bounded: nothing is started
+        // at all, and there is deliberately no path that falls back to an unbounded child.
         JobObjectHandle job;
 
         try
         {
             job = faults.FailJobCreation
                 ? throw new InvalidOperationException("CreateJobObject failed with Win32 error 5.")
-                : JobObjectHandle.CreateKillOnClose();
+                : JobObjectHandle.Create(request.ResourceLimits, faults.FailJobConfiguration);
         }
         catch (InvalidOperationException ex)
         {

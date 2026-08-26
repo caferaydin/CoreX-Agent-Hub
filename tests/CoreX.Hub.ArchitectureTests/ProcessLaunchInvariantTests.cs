@@ -98,7 +98,7 @@ public sealed class ProcessLaunchInvariantTests
 
         // The job is created before the launcher is called, and a job that could not be
         // created ends the attempt rather than lowering the standard.
-        var job = text.IndexOf("JobObjectHandle.CreateKillOnClose()", StringComparison.Ordinal);
+        var job = text.IndexOf("JobObjectHandle.Create(", StringComparison.Ordinal);
         var launch = text.IndexOf("NativeProcessLauncher.Launch(", StringComparison.Ordinal);
 
         Assert.True(job > 0 && launch > job, "the job must exist before the child is created");
@@ -155,21 +155,130 @@ public sealed class ProcessLaunchInvariantTests
     }
 
     [Fact]
-    public void The_job_wrapper_can_still_grow_the_quotas_a_later_slice_will_add()
+    public void Kill_on_close_is_not_optional_however_the_limits_are_composed()
     {
-        // Phase 10B-1 deliberately sets no numeric policy. What it must not do is make the
-        // next slice rewrite this type to add one: the extended limit structure is already
-        // the one Windows wants, so enabling a limit later is a flag and a field, not a
-        // redesign.
-        var text = File.ReadAllText(SourceFile("JobObjectHandle.cs"));
+        // The worst way a quota feature could fail is by costing the guarantee it was added
+        // beside: a job that stops reaping leaves trees behind. So the flag is unconditional
+        // in the plan rather than one branch among several, and it is asserted here as well
+        // as exhaustively in the plan's own tests.
+        var text = CodeOnly(File.ReadAllText(SourceFile("JobLimitPlan.cs")));
 
-        Assert.Contains("JobObjectExtendedLimitInformation", text, StringComparison.Ordinal);
-        Assert.Contains("ActiveProcessLimit", text, StringComparison.Ordinal);
-        Assert.Contains("ProcessMemoryLimit", text, StringComparison.Ordinal);
-        Assert.Contains("JobMemoryLimit", text, StringComparison.Ordinal);
+        Assert.Contains("var flags = KillOnJobClose;", text, StringComparison.Ordinal);
 
-        // And the one limit this slice does rely on is still the one that reaps a tree.
-        Assert.Contains("JobObjectLimitKillOnJobClose", text, StringComparison.Ordinal);
+        foreach (var conditional in new[] { "flags |= ActiveProcess;", "flags |= JobMemory;", "flags |= ProcessMemory;" })
+        {
+            Assert.Contains(conditional, text, StringComparison.Ordinal);
+        }
+
+        // Every optional flag is reached only from inside its own value's test, so a ceiling
+        // is never enabled without the number it is supposed to enforce.
+        foreach (var (guard, flag) in new[]
+                 {
+                     ("if (limits.ActiveProcessLimit is { } processes)", "flags |= ActiveProcess;"),
+                     ("if (limits.JobMemoryLimitBytes is { } jobBytes)", "flags |= JobMemory;"),
+                     ("if (limits.ProcessMemoryLimitBytes is { } processBytes)", "flags |= ProcessMemory;"),
+                 })
+        {
+            var at = text.IndexOf(guard, StringComparison.Ordinal);
+            var set = text.IndexOf(flag, StringComparison.Ordinal);
+
+            Assert.True(at > 0, guard);
+            Assert.True(set > at, $"{flag} must be set only inside {guard}");
+        }
+    }
+
+    [Fact]
+    public void The_job_is_configured_before_any_child_could_exist_and_never_falls_back()
+    {
+        var job = CodeOnly(File.ReadAllText(SourceFile("JobObjectHandle.cs")));
+
+        // Limits are applied as part of creating the job, so there is no window in which a
+        // job exists more weakly limited than the caller asked for.
+        Assert.Contains("var plan = JobLimitPlan.For(limits);", job, StringComparison.Ordinal);
+        Assert.Contains("information.BasicLimitInformation.LimitFlags = plan.LimitFlags;", job, StringComparison.Ordinal);
+
+        // And a refusal disposes the job and throws rather than returning a lesser one.
+        Assert.Contains("if (!configured)", job, StringComparison.Ordinal);
+        Assert.Contains("job.Dispose();", job, StringComparison.Ordinal);
+        Assert.DoesNotContain("return job;\r\n        }\r\n\r\n        // fallback", job, StringComparison.Ordinal);
+
+        // In the runner, the job is fully built before the launcher is ever called.
+        var runner = CodeOnly(Runner());
+
+        var created = runner.IndexOf("JobObjectHandle.Create(", StringComparison.Ordinal);
+        var launched = runner.IndexOf("NativeProcessLauncher.Launch(", StringComparison.Ordinal);
+
+        Assert.True(created > 0 && launched > created);
+    }
+
+    [Fact]
+    public void The_win32_translation_lives_only_in_the_execution_project()
+    {
+        // Job Object flags are a containment mechanism, not a domain concept. A limit may
+        // travel as a neutral number; the bits that enforce it may not travel at all.
+        foreach (var file in RepoLayout.ProductionSourceFiles)
+        {
+            if (file.Contains($"{Path.DirectorySeparatorChar}CoreX.Hub.Execution{Path.DirectorySeparatorChar}", StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            var text = CodeOnly(File.ReadAllText(file));
+
+            foreach (var forbidden in new[]
+                     {
+                         "JOB_OBJECT_LIMIT", "JobLimitPlan", "SetInformationJobObject",
+                         "ActiveProcessLimit", "JobMemoryLimit", "ProcessMemoryLimit",
+                     })
+            {
+                Assert.False(
+                    text.Contains(forbidden, StringComparison.Ordinal),
+                    $"{Path.GetFileName(file)} names {forbidden}; Win32 quota translation belongs to the execution project.");
+            }
+        }
+    }
+
+    [Fact]
+    public void No_universal_numeric_quota_is_baked_into_the_product()
+    {
+        // 10B-2 ships the mechanism, not the policy. ProcessRunner also drives verification
+        // and git, so a number chosen for an agent would silently become the ceiling for a
+        // build and a clone as well - which is exactly why the default asks for nothing.
+        var contracts = CodeOnly(File.ReadAllText(SourceFile("ProcessContracts.cs")));
+
+        Assert.Contains(
+            "public ProcessResourceLimits ResourceLimits { get; init; } = ProcessResourceLimits.None;",
+            contracts,
+            StringComparison.Ordinal);
+
+        var limits = CodeOnly(File.ReadAllText(SourceFile("ProcessResourceLimits.cs")));
+
+        // Every ceiling is optional and none has a value. A default here would be a policy.
+        Assert.Contains("public int? ActiveProcessLimit { get; init; }", limits, StringComparison.Ordinal);
+        Assert.Contains("public long? JobMemoryLimitBytes { get; init; }", limits, StringComparison.Ordinal);
+        Assert.Contains("public long? ProcessMemoryLimitBytes { get; init; }", limits, StringComparison.Ordinal);
+        Assert.DoesNotContain("= 32", limits, StringComparison.Ordinal);
+        Assert.DoesNotContain("1024 * 1024", limits, StringComparison.Ordinal);
+
+        // And no composition root has quietly picked one either.
+        foreach (var file in RepoLayout.ProductionSourceFiles)
+        {
+            Assert.DoesNotContain(
+                "new ProcessResourceLimits",
+                CodeOnly(File.ReadAllText(file)),
+                StringComparison.Ordinal);
+        }
+    }
+
+    [Fact]
+    public void A_resource_ceiling_is_never_provider_specific()
+    {
+        var limits = File.ReadAllText(SourceFile("ProcessResourceLimits.cs"));
+
+        foreach (var forbidden in new[] { "Claude", "Codex", "Scripted", "Organization", "AgentProfile" })
+        {
+            Assert.False(limits.Contains(forbidden, StringComparison.Ordinal), forbidden);
+        }
     }
 
     [Fact]
@@ -177,7 +286,11 @@ public sealed class ProcessLaunchInvariantTests
     {
         // 10B-1 is the Windows launch primitive and nothing else. WSL is 10C; quotas are
         // 10B-2; budget, garbage collection and the repair loop are later still.
-        foreach (var name in new[] { LauncherFileName, RunnerFileName, "WindowsPipe.cs", "NativeChildProcess.cs" })
+        foreach (var name in new[]
+                 {
+                     LauncherFileName, RunnerFileName, "WindowsPipe.cs", "NativeChildProcess.cs",
+                     "JobLimitPlan.cs", "ProcessResourceLimits.cs", "JobObjectHandle.cs",
+                 })
         {
             var text = File.ReadAllText(SourceFile(name));
 

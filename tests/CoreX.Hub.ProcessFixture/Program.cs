@@ -48,6 +48,8 @@ return mode switch
     "secrets" => WriteSecrets(args),
     "agent" => await AgentAsync(args),
     "probe-handle" => ProbeHandle(args),
+    "spawn-probe" => await SpawnProbeAsync(args),
+    "grow" => Grow(args),
     _ => Help(),
 };
 
@@ -295,6 +297,85 @@ static async Task<int> ChattyAsync(string[] args)
         await Console.Out.FlushAsync();
         await Task.Delay(intervalMs);
     }
+}
+
+/// Tries to spawn a fixed number of long lived children and reports what happened to each.
+///
+/// Used to observe an ActiveProcessLimit from the inside: the attempts that exceed the job's
+/// process ceiling fail at CreateProcess, and this records which ones rather than dying, so a
+/// test can tell "the limit stopped it" apart from "the fixture crashed".
+static async Task<int> SpawnProbeAsync(string[] args)
+{
+    var reportPath = args[1];
+    var attempts = args.Length > 2 && int.TryParse(args[2], CultureInfo.InvariantCulture, out var parsed)
+        ? parsed
+        : 1;
+
+    Report(reportPath, "PARENT", Environment.ProcessId);
+
+    for (var i = 1; i <= attempts; i++)
+    {
+        try
+        {
+            StartSelf("spawn-leaf", reportPath);
+            Report(reportPath, "SPAWN-OK", i);
+        }
+        catch (Exception ex)
+        {
+            // The interesting outcome. Win32 refuses the creation once the job is full.
+            Report(reportPath, "SPAWN-FAILED", i);
+            await Console.Out.WriteLineAsync("spawn refused: " + ex.GetType().Name);
+        }
+    }
+
+    await Console.Out.WriteLineAsync("PROBE-END");
+    await Console.Out.FlushAsync();
+    return 0;
+}
+
+/// Commits memory in bounded chunks until a ceiling stops it, then reports how far it got.
+///
+/// Every chunk is kept referenced and touched, so the growth is real committed memory and the
+/// collector cannot quietly undo it. The point is to observe a job memory limit refusing an
+/// allocation, so the fixture catches that refusal and reports it rather than crashing - and
+/// it stops at its own maximum regardless, so a machine with no limit configured is never
+/// asked for an unbounded amount.
+static int Grow(string[] args)
+{
+    var chunkMiB = int.Parse(args[1], CultureInfo.InvariantCulture);
+    var maxMiB = int.Parse(args[2], CultureInfo.InvariantCulture);
+
+    var held = new List<byte[]>();
+    var committed = 0;
+
+    try
+    {
+        while (committed < maxMiB)
+        {
+            var chunk = new byte[chunkMiB * 1024 * 1024];
+
+            // Touch every page so the memory is committed rather than merely reserved.
+            for (var offset = 0; offset < chunk.Length; offset += 4096)
+            {
+                chunk[offset] = 1;
+            }
+
+            held.Add(chunk);
+            committed += chunkMiB;
+        }
+
+        Console.Out.WriteLine(string.Create(CultureInfo.InvariantCulture, $"GREW {committed}"));
+    }
+    catch (Exception ex)
+    {
+        // A job memory ceiling surfaces here: the allocation simply cannot be satisfied.
+        Console.Out.WriteLine(string.Create(CultureInfo.InvariantCulture, $"STOPPED {committed} {ex.GetType().Name}"));
+    }
+
+    Console.Out.WriteLine("GROW-END");
+    Console.Out.Flush();
+    GC.KeepAlive(held);
+    return 0;
 }
 
 /// parent -> child -> grandchild, all alive indefinitely.

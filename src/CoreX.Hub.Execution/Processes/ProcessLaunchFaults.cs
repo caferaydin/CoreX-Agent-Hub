@@ -20,8 +20,16 @@ internal sealed record ProcessLaunchFaults
     /// <summary>What production uses. No injection, no hooks, no behaviour change.</summary>
     public static ProcessLaunchFaults None { get; } = new();
 
-    /// <summary>Simulates a Job Object that could not be created or configured.</summary>
+    /// <summary>Simulates a Job Object that could not be created at all.</summary>
     public bool FailJobCreation { get; init; }
+
+    /// <summary>
+    /// Simulates <c>SetInformationJobObject</c> refusing the requested resource limits.
+    ///
+    /// The job exists; the ceilings could not be applied to it. What must follow is that no
+    /// child is created - not a warning and a weaker job.
+    /// </summary>
+    public bool FailJobConfiguration { get; init; }
 
     /// <summary>Simulates <c>CreateProcessW</c> refusing to start the child.</summary>
     public bool FailCreateProcess { get; init; }
