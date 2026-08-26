@@ -192,6 +192,16 @@ function RecordedDecision({
           </ul>
         </section>
       ) : null}
+
+      {/* What was accepted anyway. The override form shows the findings while a person
+          decides, and the same argument holds for whoever reads the decision later: an
+          override whose findings are two clicks away is an override nobody audits. Read-only
+          here as everywhere - shown from the execution, never restated by the decision. */}
+      {decision.overrideUsed ? (
+        <div style={{ marginTop: 'var(--space-5)' }}>
+          <WhatWasFound executionId={acceptance.executionId} />
+        </div>
+      ) : null}
     </Panel>
   );
 }
@@ -573,11 +583,11 @@ const labelOf = (verdict: string): string =>
 // --- Override ---------------------------------------------------------------------------------
 
 /**
- * What is being overridden.
+ * What is being overridden - or, once the decision is recorded, what was.
  *
  * Shown expanded, never behind a disclosure. Someone about to accept work despite a review
  * should be reading what the review said while they decide, and a collapsed panel is a
- * collapsed panel nobody opens.
+ * collapsed panel nobody opens. The recorded view reuses this for the same reason.
  *
  * The summary here is the server's own sentence. Which findings block is the Hub's single
  * severity authority, and a frontend that recomputed it from a threshold would be a second.

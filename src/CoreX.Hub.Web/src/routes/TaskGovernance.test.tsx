@@ -851,6 +851,53 @@ describe('Human governance', () => {
     expect(decision.queryAllByRole('button')).toHaveLength(0);
   });
 
+  it('shows what was overridden when an override is read back', async () => {
+    stubFetch(
+      routes(
+        taskDetail({
+          summary: taskSummary({ state: 'Accepted', latestExecutionOutcome: 'ReviewBlocked' }),
+          acceptance: acceptanceState({
+            taskState: 'Accepted',
+            executionOutcome: 'ReviewBlocked',
+            existingDecision: recordedDecision({ overrideUsed: true, reason: 'deliberate' }),
+          }),
+        }),
+      ),
+    );
+
+    show();
+
+    // The findings that were overridden, read from the execution on this fresh load.
+    const findings = within((await panel()).getByRole('region', { name: 'Review findings' }));
+
+    await expect(findings.findByText('Authorization check always succeeds')).resolves.toBeInTheDocument();
+    expect(findings.getByText('Major')).toBeInTheDocument();
+
+    // Still nothing to click: reading what was overridden is not a way to change it.
+    expect((await panel()).queryAllByRole('button')).toHaveLength(0);
+  });
+
+  it('shows no findings section when a normal acceptance is read back', async () => {
+    stubFetch(
+      routes(
+        taskDetail({
+          summary: taskSummary({ state: 'Accepted' }),
+          acceptance: acceptanceState({
+            taskState: 'Accepted',
+            existingDecision: recordedDecision({ overrideUsed: false }),
+          }),
+        }),
+      ),
+    );
+
+    show();
+
+    const decided = await panel();
+
+    expect(decided.getByText('Accept')).toBeInTheDocument();
+    expect(decided.queryByRole('region', { name: 'Review findings' })).not.toBeInTheDocument();
+  });
+
   it('names a verdict by its identifier when the task no longer declares the criterion', async () => {
     // A decision outlives an edit to the task it was about. The identifier is the guarantee;
     // the sentence is the convenience, and showing a sentence that was never answered would be
