@@ -28,20 +28,7 @@ public sealed record SecretPattern(string Name, Regex Pattern, string Replacemen
 /// </summary>
 public static class SecretPatternCatalog
 {
-    /// <summary>
-    /// What stops a pattern running away, and deliberately not a cap on how much evidence may be
-    /// redacted.
-    ///
-    /// The two failures look alike from here and are not. Catastrophic backtracking is
-    /// super-linear and blows through any budget on a small input, which is what this exists to
-    /// catch. Scanning a large artifact is linear and slow only in proportion to its size - and an
-    /// artifact's size is the producer's business, bounded elsewhere.
-    ///
-    /// Two seconds could not tell them apart: it was chosen against ordinary command output and
-    /// made a sixteen megabyte test report throw, which is an artifact the evidence contract
-    /// accepts and would therefore have refused to store on a machine that was merely busy.
-    /// </summary>
-    private static readonly TimeSpan MatchTimeout = TimeSpan.FromSeconds(60);
+    private static readonly TimeSpan MatchTimeout = TimeSpan.FromSeconds(2);
 
     private static readonly RegexOptions Options =
         RegexOptions.CultureInvariant | RegexOptions.ExplicitCapture;
