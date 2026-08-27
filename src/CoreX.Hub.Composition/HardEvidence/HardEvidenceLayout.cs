@@ -72,6 +72,14 @@ public sealed record HardEvidenceLayout
     public string Pending(string sha256, Guid attempt) =>
         PendingRoot + "/" + Hash(sha256) + "." + attempt.ToString("N") + ".tmp";
 
+    /// <summary>Where one arriving chunk is decoded before it is appended. One write's own.</summary>
+    public string Part(string sha256, Guid attempt) =>
+        PendingRoot + "/" + Hash(sha256) + "." + attempt.ToString("N") + ".part";
+
+    /// <summary>Where one window of a blob is copied while it is read back. One read's own.</summary>
+    public string Slice(string sha256, Guid attempt) =>
+        PendingRoot + "/" + Hash(sha256) + "." + attempt.ToString("N") + ".slice";
+
     /// <summary>
     /// A hash, or nothing.
     ///

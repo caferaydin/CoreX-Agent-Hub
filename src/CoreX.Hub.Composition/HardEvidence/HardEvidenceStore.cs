@@ -32,14 +32,28 @@ public sealed record HardStoredBlob(string Sha256, long SizeBytes, bool Deduplic
 public sealed class HardEvidenceStore
 {
     /// <summary>
-    /// The largest blob this store will move in one call.
+    /// How many raw bytes cross the channel in one call.
     ///
-    /// A storage ceiling, and deliberately not the API's download ceiling - those are different
-    /// concepts and share no number. It exists because the control channel is a pipe with a
-    /// capture bound, and base64 makes the payload a third larger again, so an unbounded caller
-    /// would turn evidence storage into a way to exhaust the host.
+    /// A transport window, and deliberately not a storage ceiling. There is no maximum artifact
+    /// size here, because the evidence contract does not have one: an artifact the Windows store
+    /// accepts has to be an artifact this store accepts, or the isolation backend would be
+    /// deciding what counts as evidence.
+    ///
+    /// The window exists because the control channel is a pipe with a capture bound and base64
+    /// makes a payload a third larger again. Bounding the window rather than the artifact keeps
+    /// memory flat while a large artifact still stores whole.
     /// </summary>
-    public const long MaximumBlobBytes = 16 * 1024 * 1024;
+    public const long TransferChunkBytes = 4 * 1024 * 1024;
+
+    /// <summary>
+    /// What one window becomes on the wire.
+    ///
+    /// Base64 encodes three bytes as four characters, so this is always larger than the window
+    /// itself. Kept as its own number because the two are measured on different sides of the
+    /// encoding: a raw artifact must never be judged against an encoded bound, or a legitimate
+    /// artifact would be refused for the size of its representation.
+    /// </summary>
+    public const int EncodedChunkCharacters = (int)((TransferChunkBytes + 2) / 3 * 4);
 
     private static readonly UTF8Encoding Utf8NoBom = new(encoderShouldEmitUTF8Identifier: false);
 
@@ -112,15 +126,14 @@ public sealed class HardEvidenceStore
     /// The expected hash is the Hub's measurement of what it sent. The environment measures what
     /// it received. Publication happens only if the two agree, so a blob's name always describes
     /// the bytes inside it - a claim that would otherwise rest on a channel behaving.
+    ///
+    /// Nothing here caps the artifact. Bytes cross in windows and are appended, so an artifact of
+    /// any size the evidence contract accepts stores whole while the memory this costs stays the
+    /// size of one window.
     /// </summary>
     public async Task<HardStoredBlob?> WriteAsync(byte[] bytes, CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(bytes);
-
-        if (bytes.LongLength > MaximumBlobBytes)
-        {
-            return null;
-        }
 
         var expected = Convert.ToHexStringLower(SHA256.HashData(bytes));
         var blob = Layout.Blob(expected);
@@ -137,16 +150,35 @@ public sealed class HardEvidenceStore
             return null;
         }
 
-        var pending = Layout.Pending(expected, Guid.CreateVersion7());
+        var attempt = Guid.CreateVersion7();
+        var pending = Layout.Pending(expected, attempt);
+        var part = Layout.Part(expected, attempt);
 
         try
         {
-            var received = await ServiceAsync(
-                HardEvidenceCommands.ReceivePending(pending), ct, Convert.ToBase64String(bytes));
+            // At least one window even for no bytes at all: an empty artifact is still an
+            // artifact, and the file it publishes has to exist before it can be hashed.
+            var windows = Math.Max(1, (bytes.LongLength + TransferChunkBytes - 1) / TransferChunkBytes);
 
-            if (!received.Ok)
+            for (var window = 0L; window < windows; window++)
             {
-                return null;
+                var offset = window * TransferChunkBytes;
+                var count = (int)Math.Min(TransferChunkBytes, bytes.LongLength - offset);
+
+                var received = await ServiceAsync(
+                    HardEvidenceCommands.ReceivePending(part),
+                    ct,
+                    Convert.ToBase64String(bytes, (int)offset, count));
+
+                if (!received.Ok)
+                {
+                    return null;
+                }
+
+                if (!(await ServiceAsync(HardEvidenceCommands.AppendPending(part, pending), ct)).Ok)
+                {
+                    return null;
+                }
             }
 
             var measured = HardWorkspace.HardWorkspaceControl.FirstLine(
@@ -180,6 +212,7 @@ public sealed class HardEvidenceStore
             // An interrupted write leaves an unpublished file at worst, and never a blob: only
             // the rename creates that name.
             await ServiceAsync(HardEvidenceCommands.Discard(pending), CancellationToken.None);
+            await ServiceAsync(HardEvidenceCommands.Discard(part), CancellationToken.None);
         }
     }
 
@@ -198,6 +231,9 @@ public sealed class HardEvidenceStore
     /// resolves anywhere but this organization's own store. What comes back is checked against
     /// the name it was stored under, because a store that returns whatever is at a path is not a
     /// content addressed store.
+    ///
+    /// Read in windows for the same reason it is written in them: one captured stream never holds
+    /// more than one window, whatever the artifact's size.
     /// </summary>
     public async Task<byte[]?> ReadAsync(string sha256, CancellationToken ct)
     {
@@ -206,20 +242,66 @@ public sealed class HardEvidenceStore
             return null;
         }
 
-        var read = await ServiceAsync(HardEvidenceCommands.ReadBlob(Layout.Blob(sha256)), ct);
+        var size = await SizeAsync(sha256, ct);
 
-        if (!read.Ok)
+        if (size is not { } total)
         {
             return null;
         }
 
-        byte[] bytes;
+        var attempt = Guid.CreateVersion7();
+        var slice = Layout.Slice(sha256, attempt);
+        var bytes = new byte[total];
+        var filled = 0L;
 
         try
         {
-            bytes = Convert.FromBase64String(string.Concat(read.Lines));
+            var windows = Math.Max(1, (total + TransferChunkBytes - 1) / TransferChunkBytes);
+
+            for (var window = 0L; window < windows; window++)
+            {
+                if (!(await ServiceAsync(
+                        HardEvidenceCommands.Slice(Layout.Blob(sha256), slice, TransferChunkBytes, window),
+                        ct)).Ok)
+                {
+                    return null;
+                }
+
+                var read = await ServiceAsync(HardEvidenceCommands.ReadBlob(slice), ct);
+
+                if (!read.Ok)
+                {
+                    return null;
+                }
+
+                byte[] windowBytes;
+
+                try
+                {
+                    windowBytes = Convert.FromBase64String(string.Concat(read.Lines));
+                }
+                catch (FormatException)
+                {
+                    return null;
+                }
+
+                if (filled + windowBytes.LongLength > total)
+                {
+                    // More came back than the file says it holds, which means the two answers
+                    // are about different things.
+                    return null;
+                }
+
+                windowBytes.CopyTo(bytes, filled);
+                filled += windowBytes.LongLength;
+            }
         }
-        catch (FormatException)
+        finally
+        {
+            await ServiceAsync(HardEvidenceCommands.Discard(slice), CancellationToken.None);
+        }
+
+        if (filled != total)
         {
             return null;
         }
@@ -237,14 +319,31 @@ public sealed class HardEvidenceStore
     }
 
     /// <summary>Whether this organization already holds these bytes. Says nothing about any other.</summary>
-    public async Task<bool> ExistsAsync(string sha256, CancellationToken ct)
+    public async Task<bool> ExistsAsync(string sha256, CancellationToken ct) =>
+        await SizeAsync(sha256, ct) is not null;
+
+    /// <summary>How many bytes the stored blob holds, or nothing if it is not stored.</summary>
+    public async Task<long?> SizeAsync(string sha256, CancellationToken ct)
     {
         if (!HardEvidenceLayout.IsHash(sha256))
         {
-            return false;
+            return null;
         }
 
-        return (await ServiceAsync(HardEvidenceCommands.Size(Layout.Blob(sha256)), ct)).Ok;
+        var measured = await ServiceAsync(HardEvidenceCommands.Size(Layout.Blob(sha256)), ct);
+
+        if (!measured.Ok)
+        {
+            return null;
+        }
+
+        return long.TryParse(
+            HardWorkspace.HardWorkspaceControl.FirstLine(measured),
+            System.Globalization.NumberStyles.None,
+            System.Globalization.CultureInfo.InvariantCulture,
+            out var size) && size >= 0
+            ? size
+            : null;
     }
 
     private Task<WslCallResult> ServiceAsync(
@@ -270,8 +369,9 @@ public sealed class HardEvidenceStore
                 HardTimeout = Deadline,
                 StdinPayload = stdin,
 
-                // The ceiling above, plus the third that base64 adds, plus room for a diagnostic.
-                MaxCapturedCharactersPerStream = (int)(MaximumBlobBytes / 2 * 3) + (64 * 1024),
+                // One window's encoded form, plus room for a diagnostic. Bounded by the window
+                // rather than by the artifact, which is what lets the artifact be unbounded.
+                MaxCapturedCharactersPerStream = EncodedChunkCharacters + (64 * 1024),
             },
             ct);
 }

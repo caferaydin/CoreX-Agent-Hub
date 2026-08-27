@@ -1246,8 +1246,27 @@ adlandırma yaratır.
 doğrular. İkili kanıt bozulmaz: hostile bir yük (gömülü `0x00`, `0xFF`, CRLF, geçersiz UTF-8)
 baytı baytına geri gelir.
 
-Depolama tavanı 16 MiB'dır. Bu bir depolama sınırıdır, API'nin indirme tavanı değildir; iki kavram
-ayrıdır ve ortak bir sayıları yoktur.
+**Depolama tavanı yoktur.** Sert depo, mantıksal `EvidenceBlobStore`'un kabul ettiği bir eseri
+yalnızca arka uç Hard olduğu için reddedemez — ederse izolasyon arka ucu neyin kanıt sayıldığına
+karar vermiş olur ve aynı çalıştırma, hangi tarafta koştuğuna göre farklı bir kayıt tutar. Üstelik
+sessizce: port "saklanacak bir şey yok" için `null` döner ve orkestratör bunu hiç var olmamış bir
+eser olarak okur.
+
+Sınırlanan şey kanaldır, eser değil. `TransferChunkBytes` = 4 MiB ham bayt bir **taşıma
+penceresidir**: baytlar pencereler hâlinde geçer ve yayımlanmamış dosyanın sonuna eklenir
+(`dd oflag=append conv=notrunc`), böylece eser bütün saklanırken maliyet tek pencere kadar kalır.
+Okuma da aynı şekilde pencerelenir (`dd skip=<i> count=1` + `base64 -w 0`), yoksa tek bir yakalanan
+akış eserin tamamını tutardı.
+
+### 13.3.1 Base64 muhasebesi
+
+Base64 üç baytı dört karakter yapar. Bu yüzden iki sayı ayrı tutulur:
+
+- `TransferChunkBytes` — **ham** bayt penceresi (4 MiB),
+- `EncodedChunkCharacters` — aynı pencerenin **kodlanmış** hâli (`(chunk + 2) / 3 * 4`).
+
+Yakalama sınırı kodlanmış sayıdan türetilir; **ham bir eser hiçbir zaman kodlama sonrası bir sınıra
+karşı yargılanmaz.** Aksi hâlde meşru bir eser, kendi temsilinin boyutu yüzünden reddedilirdi.
 
 ### 13.4 Redaksiyon: tek katalog
 
@@ -1318,6 +1337,17 @@ bunu önce durup rapor etmeden yasakladığı için **yapılmadı**. Dolayısıy
 
 > **G-K3 / G-K4 AÇIK kalır.** Organizasyon başına fiziksel CAS ayrımı ve çapraz-kimlik reddi tek
 > distro içinde ölçülmüştür; çapraz-distro reddi ölçülmemiştir.
+
+Eşzamanlılık dosya sistemi üzerinden ölçülür, `mv -n`'in atomikliğine güvenilerek değil: aynı
+içeriği yazan sekiz eşzamanlı yazar sonrasında shard dizininde **tam bir dosya** bulunur, adı
+hash'tir, misafir tarafı `sha256sum` o adı doğrular ve `_pending` **boştur**. Kontrol olarak dört
+farklı içerik eşzamanlı yazıldığında dört ayrı blob oluşur — fixture'ın her şeyi sırayla
+çalıştırmadığının kanıtı. Aktarımın ortasında iptal edilen bir yazar, tamamlayan yazarın
+yayımlanmış blob'una dokunamaz; temizliği yalnızca kendi yayımlanmamış dosyasını kaldırır.
+
+Mantıksal ve Sert depoların **tek bir anlam otoritesi** olduğu, eski 16 MiB tavanının üstünde bir
+eserle doğrulanır: iki taraf da kabul eder, aynı hash, aynı boyut, aynı redaksiyon sayısı; ve iki
+taraf da boş kanıtı aynı kuralla reddeder.
 
 Gerçek ortamda kanal yalan söyleyemez, bu yüzden hash uyuşmazlığı senaryosu betiklenmiş bir ağ
 geçidiyle ayrıca test edilir. Çalışan bir boru her zaman gönderileni teslim eder ve o hâlde

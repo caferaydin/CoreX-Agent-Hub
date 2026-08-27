@@ -358,18 +358,46 @@ public sealed class HardEvidenceTests : IAsyncLifetime
         Assert.Equal(payload, read!);
     }
 
-    /// <summary>The store is not an unbounded sink; a payload past the ceiling is refused.</summary>
+    /// <summary>
+    /// An artifact past one transport window stores whole, and reads back byte for byte.
+    ///
+    /// The window is the channel's business. An artifact the Windows store would accept has to be
+    /// an artifact this one accepts, or the isolation backend would be deciding what counts as
+    /// evidence - and the same execution would hold a different record depending on which side of
+    /// the boundary it ran on.
+    /// </summary>
     [Fact]
-    public async Task A_blob_past_the_storage_ceiling_is_refused()
+    public async Task An_artifact_past_one_transport_window_stores_whole()
     {
         if (!_fixture.Available)
         {
             return;
         }
 
-        var oversized = new byte[HardEvidenceStore.MaximumBlobBytes + 1];
+        // Deliberately not a multiple of the window: the trailing partial one is where an
+        // off-by-one in the accounting would show.
+        var payload = new byte[(HardEvidenceStore.TransferChunkBytes * 2) + 12_345];
 
-        Assert.Null(await _fixture.StoreA().WriteAsync(oversized, CancellationToken.None));
+        for (var i = 0; i < payload.Length; i++)
+        {
+            payload[i] = (byte)((i * 31) % 256);
+        }
+
+        var store = _fixture.StoreA();
+
+        var stored = await store.WriteAsync(payload, CancellationToken.None);
+
+        Assert.NotNull(stored);
+        Assert.Equal(payload.LongLength, stored.SizeBytes);
+        Assert.Equal(Convert.ToHexStringLower(SHA256.HashData(payload)), stored.Sha256);
+
+        var read = await store.ReadAsync(stored.Sha256, CancellationToken.None);
+
+        Assert.NotNull(read);
+        Assert.Equal(payload, read!);
+
+        // The environment agrees about the size, so nothing was truncated on the way in.
+        Assert.Equal(payload.LongLength, await store.SizeAsync(stored.Sha256, CancellationToken.None));
     }
 
     // -- publication --------------------------------------------------------------------------

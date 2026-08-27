@@ -57,6 +57,7 @@ public sealed class HardEvidenceChannelTests
         script.AnswerPrefix("/usr/bin/stat -c %s ", string.Empty, exitCode: 1);
         script.AnswerPrefix("/usr/bin/mkdir ", string.Empty);
         script.AnswerPrefix("/usr/bin/openssl base64 ", string.Empty);
+        script.AnswerPrefix("/usr/bin/dd ", string.Empty);
         script.AnswerPrefix("/usr/bin/sha256sum ", reportedHash + "  /pending");
         script.AnswerPrefix("/usr/bin/mv ", string.Empty);
         script.AnswerPrefix("/usr/bin/rm ", string.Empty);
@@ -151,6 +152,11 @@ public sealed class HardEvidenceChannelTests
 
         Assert.DoesNotContain(blob, received);
 
+        // Nor does the append that grows the unpublished file target it.
+        var appended = script.Calls.Single(c => c.Count > 0 && c[0] == "/usr/bin/dd");
+
+        Assert.DoesNotContain("of=" + blob, appended);
+
         // The one command that names it is the rename, as its destination.
         var moved = script.Calls.Single(c => c.Count > 0 && c[0] == "/usr/bin/mv");
 
@@ -169,6 +175,10 @@ public sealed class HardEvidenceChannelTests
     {
         var script = new ScriptedExecutionEnvironment();
 
+        // The blob exists and reports a size, so a read is attempted.
+        script.AnswerPrefix("/usr/bin/stat -c %s ", "19");
+        script.AnswerPrefix("/usr/bin/dd ", string.Empty);
+        script.AnswerPrefix("/usr/bin/rm ", string.Empty);
         script.AnswerPrefix(
             "/usr/bin/base64 ", Convert.ToBase64String(Encoding.UTF8.GetBytes("substituted content")));
 
@@ -177,6 +187,84 @@ public sealed class HardEvidenceChannelTests
             .ReadAsync(ExpectedHash, CancellationToken.None);
 
         Assert.Null(bytes);
+    }
+
+    /// <summary>
+    /// An artifact larger than one transport window crosses in several, and still publishes once.
+    ///
+    /// The window is a property of the channel, not of the evidence. What proves the two are
+    /// separate is that the number of transfers grows with the artifact while the number of
+    /// published names stays one.
+    /// </summary>
+    [Fact]
+    public async Task An_artifact_larger_than_one_window_crosses_in_several()
+    {
+        var payload = new byte[(HardEvidenceStore.TransferChunkBytes * 2) + 1];
+
+        for (var i = 0; i < payload.Length; i++)
+        {
+            payload[i] = (byte)(i % 251);
+        }
+
+        var expected = Convert.ToHexStringLower(SHA256.HashData(payload));
+
+        var script = Honest(expected);
+
+        var stored = await HardEvidenceStore
+            .Scripted(script, Profile())
+            .WriteAsync(payload, CancellationToken.None);
+
+        Assert.NotNull(stored);
+        Assert.Equal(expected, stored.Sha256);
+        Assert.Equal(payload.LongLength, stored.SizeBytes);
+
+        // Three windows: two full and the single trailing byte.
+        Assert.Equal(3, script.Calls.Count(c => c.Count > 0 && c[0] == "/usr/bin/openssl"));
+        Assert.Equal(3, script.Calls.Count(c => c.Count > 0 && c[0] == "/usr/bin/dd"));
+
+        // And one name, created once.
+        Assert.Single(script.Calls, c => c.Count > 0 && c[0] == "/usr/bin/mv");
+    }
+
+    /// <summary>
+    /// The raw window and its encoded form are different numbers, and only one bounds the artifact.
+    ///
+    /// Base64 turns three bytes into four characters. Judging a raw artifact against a bound
+    /// measured after that expansion would refuse a legitimate artifact for the size of its
+    /// representation, so the two are kept apart deliberately.
+    /// </summary>
+    [Fact]
+    public void The_encoded_window_is_larger_than_the_raw_window()
+    {
+        Assert.Equal(
+            (HardEvidenceStore.TransferChunkBytes + 2) / 3 * 4,
+            HardEvidenceStore.EncodedChunkCharacters);
+
+        Assert.True(HardEvidenceStore.EncodedChunkCharacters > HardEvidenceStore.TransferChunkBytes);
+
+        // A full window's encoded form fits in what one call may capture.
+        var full = new byte[HardEvidenceStore.TransferChunkBytes];
+
+        Assert.True(Convert.ToBase64String(full).Length <= HardEvidenceStore.EncodedChunkCharacters);
+    }
+
+    /// <summary>
+    /// An artifact of exactly one window is one transfer, not two.
+    ///
+    /// The boundary case an off-by-one would make silently wrong: an extra empty window would
+    /// still hash correctly and still publish, so nothing else here would notice.
+    /// </summary>
+    [Fact]
+    public async Task An_artifact_of_exactly_one_window_crosses_once()
+    {
+        var payload = new byte[HardEvidenceStore.TransferChunkBytes];
+
+        var script = Honest(Convert.ToHexStringLower(SHA256.HashData(payload)));
+
+        Assert.NotNull(
+            await HardEvidenceStore.Scripted(script, Profile()).WriteAsync(payload, CancellationToken.None));
+
+        Assert.Single(script.Calls, c => c.Count > 0 && c[0] == "/usr/bin/openssl");
     }
 
     /// <summary>

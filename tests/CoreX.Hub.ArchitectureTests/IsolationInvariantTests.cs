@@ -1084,6 +1084,40 @@ public sealed class IsolationInvariantTests
     }
 
     /// <summary>
+    /// The hard store imposes no size ceiling of its own.
+    ///
+    /// Isolation must not decide what counts as evidence. A ceiling here that the Windows store
+    /// does not have would mean the same execution kept a different record depending on which side
+    /// of the boundary it ran on - and silently, because the port returns null for "nothing to
+    /// store" and the orchestrator reads that as an artifact that never existed.
+    ///
+    /// What is bounded is the channel. The window is a transport number and the capture bound is
+    /// measured after base64 expands it; neither is ever compared against a raw artifact.
+    /// </summary>
+    [Fact]
+    public void Hard_evidence_imposes_no_storage_ceiling_of_its_own()
+    {
+        var store = CodeOnly(SourceOf(HardEvidenceStoreFileName));
+
+        foreach (var ceiling in new[]
+                 {
+                     "MaximumBlobBytes", "MaxBlobBytes", "MaximumEvidenceBytes",
+                     "bytes.LongLength >", "bytes.Length >", "text.Length >",
+                 })
+        {
+            Assert.DoesNotContain(ceiling, store, StringComparison.Ordinal);
+        }
+
+        // The capture bound comes from the encoded window, never from the artifact.
+        Assert.Contains(
+            "MaxCapturedCharactersPerStream = EncodedChunkCharacters", store, StringComparison.Ordinal);
+
+        // And the artifact crosses in windows rather than in one call.
+        Assert.Contains("TransferChunkBytes", store, StringComparison.Ordinal);
+        Assert.Contains("HardEvidenceCommands.AppendPending(", store, StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// The agent is never made the owner of anything in the evidence tree.
     ///
     /// Ownership is the whole boundary, so this is the single line that would undo it. Evidence is

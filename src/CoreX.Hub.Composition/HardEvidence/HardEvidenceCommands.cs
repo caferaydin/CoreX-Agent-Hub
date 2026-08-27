@@ -15,6 +15,7 @@ public static class HardEvidenceCommands
 {
     public const string OpenSsl = "/usr/bin/openssl";
     public const string Base64 = "/usr/bin/base64";
+    public const string Dd = "/usr/bin/dd";
     public const string Sha256Sum = "/usr/bin/sha256sum";
     public const string Mkdir = "/usr/bin/mkdir";
     public const string Mv = "/usr/bin/mv";
@@ -55,7 +56,39 @@ public static class HardEvidenceCommands
     public static IReadOnlyList<string> Publish(string pendingPath, string blobPath) =>
         [Mv, "-n", pendingPath, blobPath];
 
-    /// <summary>Reads a published blob back as base64, so exact bytes survive the channel.</summary>
+    /// <summary>
+    /// Appends one decoded chunk to the unpublished file.
+    ///
+    /// The channel carries text, so a chunk arrives base64 and is decoded into a scratch file;
+    /// this is what puts it on the end of the growing one. <c>conv=notrunc</c> with
+    /// <c>oflag=append</c> because the default would replace what is already there, which on the
+    /// second chunk of a two chunk artifact would silently store the tail as if it were the whole.
+    ///
+    /// Nothing here is the published name: the growing file is unpublished until its hash has been
+    /// measured, and only the rename gives it a content addressed name.
+    /// </summary>
+    public static IReadOnlyList<string> AppendPending(string partPath, string pendingPath) =>
+        [Dd, "if=" + partPath, "of=" + pendingPath, "bs=1M", "oflag=append", "conv=notrunc", "status=none"];
+
+    /// <summary>
+    /// Copies one bounded window of a published blob into a scratch file.
+    ///
+    /// Reading a blob whole would put its entire size into one captured stream and then into one
+    /// string, which is the amplification a removed storage ceiling would otherwise create. The
+    /// window is the transport's business; the artifact's size is not bounded by it.
+    /// </summary>
+    public static IReadOnlyList<string> Slice(string blobPath, string slicePath, long chunkBytes, long index) =>
+    [
+        Dd,
+        "if=" + blobPath,
+        "of=" + slicePath,
+        "bs=" + chunkBytes.ToString(System.Globalization.CultureInfo.InvariantCulture),
+        "skip=" + index.ToString(System.Globalization.CultureInfo.InvariantCulture),
+        "count=1",
+        "status=none",
+    ];
+
+    /// <summary>Reads one scratch window back as base64, so exact bytes survive the channel.</summary>
     public static IReadOnlyList<string> ReadBlob(string blobPath) => [Base64, "-w", "0", blobPath];
 
     public static IReadOnlyList<string> Size(string path) => [Stat, "-c", "%s", path];
