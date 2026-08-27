@@ -1446,7 +1446,7 @@ veriyor). Dolayısıyla:
 
 Bu düzeltme, guest tarafı nftables'ın **birincil** otorite seçilmesini doğruluyor.
 
-### 14.2 Birincil otorite: kök network namespace'te root sahipli nftables
+### 14.2 Birincil otorite: kök network namespace'te root sahipli nftables — **§14.15 ile GEÇERSİZ**
 
 Karar (10C-3B2 kilitli): birincil per-org ağ otoritesi, her Hard organizasyonun **kök network
 namespace**'inde root'a ait nftables politikasıdır. Hyper-V/Windows firewall savunmada derinlik ve
@@ -1472,6 +1472,71 @@ Dar ve doğru değişmez şudur — geniş olanı yanlıştır:
 > Kullanıcı namespace'leri **kapalı değildir**. Agent bir tane açıp içinde root olabilir. Elde
 > edemediği şey, **kendisinin yaratmadığı** network namespace üzerinde yetkidir; o namespace bir üst
 > user namespace'e aittir. Agent'ın kendisi için yarattığı bir netns erişimi yalnızca **daraltabilir**.
+
+### 14.15 ÖLÇÜM DÜZELTMESİ — WSL dağıtımları ağ namespace'i PAYLAŞIR
+
+§14.2'de seçilen **"dağıtım başına kök netns nftables"** mimarisi, tek-kullanımlık iki temiz
+dağıtımla ölçüldü ve **GEÇERSİZ** çıktı. §14.2'nin otorite seçimi bu bölümle **hükümsüzdür**;
+uygulama kodu (politika modeli, render, kimlik, hazırlık) değişmedi ve hiçbir yerde politika
+uygulanmadı — ama peer izolasyonu için seçilen mekanizma WSL2'de mevcut değildir.
+
+**Kurulum:** temiz Debian 13 şablonundan içe aktarılmış iki tek-kullanımlık dağıtım
+(`corex-hard-net-a-*`, `corex-hard-net-b-*`), her birinde kendi sentetik `corex-agent-*` /
+`corex-service-*` hesapları, `automount=false`, `interop=false`, `appendWindowsPath=false`,
+systemd açık. Operatörün Ubuntu'suna ve docker-desktop'a dokunulmadı.
+
+**Ölçülenler:**
+
+| Soru | Sonuç |
+|---|---|
+| `readlink /proc/1/ns/net` — A / B / Ubuntu | **üçü de `net:[4026531833]`** |
+| `hostname -I` — A / B / Ubuntu | **üçü de `192.168.66.185`** |
+| `ip -4 route` — A / B / Ubuntu | **aynı** |
+| A'da yaratılan **inert** `inet corex_probe_*` tablosu B'den görünüyor mu | **EVET** |
+| A'dan silince B'den de kayboluyor mu | **EVET** |
+| B'nin `127.0.0.1:<port>` dinleyicisi, A'nın ayrıcalıksız agent'ından | **ERİŞİLEBİLİR** |
+| A'nın `127.0.0.1:<port>` dinleyicisi, B'nin ayrıcalıksız agent'ından | **ERİŞİLEBİLİR** |
+| B'nin arabirim adresindeki dinleyici, A'dan | **ERİŞİLEBİLİR** |
+| A'nın `127.0.0.1:<port>` dinleyicisi, **operatörün Ubuntu'sundan**, ayrıcalıksız | **ERİŞİLEBİLİR** |
+
+**Sonuç:** bu makinedeki tüm WSL2 dağıtımları **tek bir kök network namespace'i, tek bir
+loopback'i ve tek bir nftables ruleset'ini** paylaşır. Dağıtım sınırı bir dosya sistemi ve PID
+sınırıdır; **ağ sınırı değildir.**
+
+**Bunun iki bağımsız sonucu var:**
+
+1. **Peer izolasyonu ifade edilemez.** A ve B aynı adrese sahip, aynı loopback'i paylaşıyor ve
+   aynı ruleset'i görüyor. "A → B reddedildi" diye bir kural yazılamaz: A ile B arasında
+   filtrelenecek bir ayrım yok. `peer.network.unreachable` bu mekanizmayla **hiçbir zaman**
+   Pass olamaz.
+
+2. **Politika izolasyonu da ifade edilemez.** Bir organizasyonun `inet corex_hard` tablosu, aynı
+   kernel netns'inde yaşadığı için **her** dağıtım için geçerlidir — operatörün kendi Ubuntu'su
+   dahil. Bir Hard organizasyon için yüklenen `policy drop` zincirleri geliştiricinin kendi
+   ortamını da keserdi. Ayrıca iki organizasyon **aynı tabloyu** görür: birinin yüklediği politika,
+   diğerinin `network.policy.enforced` kontrolünü de tatmin ederdi — yani kontrol, ölçtüğünü
+   sandığı şeyi ölçmezdi.
+
+Bu yüzden Hub politikası bu turda **yüklenmedi**: yüklenmesi, ölçülen paylaşımdan dolayı
+operatörün çalışan ortamını filtreleyecekti.
+
+**Kapatılamayan:** `NftablesRuleset.Canonical`'ın gerçek `nft list table` çıktısına karşı
+doğrulanması. Doğrulama, üretim politikasının yüklenmesini gerektirir; yukarıdaki nedenle
+yapılmadı. Açık kusur olarak kalır. Fail-closed olduğu için hiçbir şeyi erişilebilir yapmaz.
+
+**Sonraki mimari seçenekleri** (bu dilimde karşılaştırılmadı, kullanıcı kararı):
+
+- **A.** Organizasyon başına açık kök network namespace'leri (root'un yarattığı, agent'ın sahip
+  olmadığı), kontrollü uplink/yönlendirme ile — iş yükü `systemd-run
+  --property=NetworkNamespacePath=` ile oraya konur. Paylaşılan kernel netns problemi ortadan
+  kalkar; maliyet: her açılışta kurulum ve doğrulama.
+- **B.** Ayrı Windows yerel kullanıcısı + WSL sahipliği — dağıtımlar farklı Windows kullanıcılarına
+  ait olur, dolayısıyla farklı WSL VM'lerinde çalışır. Ölçülmedi.
+- **C.** Ayrı sanal makine / ayrı fiziksel makine. En güçlü ayrım, en yüksek maliyet.
+
+Peer izolasyonu **zayıflatılmaz**. Seçenek belirlenene ve ölçülene kadar
+`peer.network.unreachable` **Unknown**, `peer.filesystem.unreachable` **Fail**, tam Hard hazırlık
+**false** ve `IHardExecutionPlane` **kullanılamaz** kalır.
 
 ### 14.3 Politika: efektler, mekanizma değil
 
