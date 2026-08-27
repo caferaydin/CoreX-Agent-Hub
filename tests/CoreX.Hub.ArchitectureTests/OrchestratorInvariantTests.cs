@@ -171,7 +171,15 @@ public sealed class OrchestratorInvariantTests
             var code = CodeOnly(File.ReadAllText(file));
             var name = RepoLayout.Relative(file);
 
-            foreach (var forbidden in new[] { "\"push\"", "\"merge\"", "\"pull\"", "\"fetch\"", "deploy" })
+            // The hard workspace fetches the pinned objects out of a local transfer artefact -
+            // a file on the environment's own disk, into a repository with no remote. That is
+            // the one exemption, it is named, and ForbiddenConstructTests pins its shape.
+            var forbiddenHere = string.Equals(
+                Path.GetFileName(file), "HardWorkspaceGateway.cs", StringComparison.Ordinal)
+                ? new[] { "\"push\"", "\"merge\"", "\"pull\"", "deploy" }
+                : ["\"push\"", "\"merge\"", "\"pull\"", "\"fetch\"", "deploy"];
+
+            foreach (var forbidden in forbiddenHere)
             {
                 Assert.False(code.Contains(forbidden, StringComparison.OrdinalIgnoreCase), $"{name}: {forbidden}");
             }

@@ -9,6 +9,9 @@ namespace CoreX.Hub.ArchitectureTests;
 /// </summary>
 public sealed class GitHardeningInvariantTests
 {
+    /// <summary>The hard isolated workspace: a second implementation of the same rules.</summary>
+    private const string HardWorkspaceFileName = "HardWorkspaceGateway.cs";
+
     private const string WorkspaceManagerFileName = "WorkspaceManager.cs";
     private const string GitEnvironmentFileName = "GitEnvironment.cs";
 
@@ -187,12 +190,42 @@ public sealed class GitHardeningInvariantTests
                 continue;
             }
 
+            // The hard isolated workspace is the second implementation of the same rule, and it
+            // is named rather than implied. Its own exemption test below proves it creates a
+            // worktree at a pinned commit, exactly as this one does.
+            if (string.Equals(Path.GetFileName(file), HardWorkspaceFileName, StringComparison.Ordinal))
+            {
+                continue;
+            }
+
             var code = File.ReadAllText(file);
             var name = RepoLayout.Relative(file);
 
             Assert.False(code.Contains("\"worktree\"", StringComparison.Ordinal), $"{name} builds a worktree command");
             Assert.False(code.Contains("rev-parse", StringComparison.Ordinal), $"{name} builds a rev-parse command");
         }
+    }
+
+    /// <summary>
+    /// The hard workspace's exemption is real: it creates a worktree at a pinned commit.
+    ///
+    /// A vacuous exemption would be worse than none - it would look like the rule still had one
+    /// implementation while quietly permitting a second file to build any worktree command it
+    /// liked.
+    /// </summary>
+    [Fact]
+    public void The_hard_worktree_exemption_is_not_vacuous()
+    {
+        var gateway = RepoLayout.ProductionSourceFiles
+            .SingleOrDefault(f => string.Equals(
+                Path.GetFileName(f), HardWorkspaceFileName, StringComparison.Ordinal));
+
+        Assert.NotNull(gateway);
+
+        var code = File.ReadAllText(gateway!);
+
+        Assert.Contains("\"worktree\", \"add\"", code, StringComparison.Ordinal);
+        Assert.Contains("baseCommit", code, StringComparison.Ordinal);
     }
 
     [Fact]

@@ -95,4 +95,22 @@ public static class IsolationComposition
     /// </summary>
     public static IHardProcessExecutor CreateProcessExecutor(string dataDirectory) =>
         WslHardProcessExecutor.Create(dataDirectory);
+
+    /// <summary>
+    /// Builds the hard workspace.
+    ///
+    /// Deliberately not reachable from <see cref="Create"/> either, and for the same reason the
+    /// process executor is not. A workspace inside the boundary is one of the things a hard task
+    /// needs; its context, its evidence, its provider authentication and its network are still on
+    /// the host, and admitting a task because part of it could be isolated is how work ends up
+    /// half outside the boundary.
+    /// </summary>
+    public static HardWorkspace.HardWorkspaceGateway CreateWorkspace(
+        CoreX.Hub.Workspace.WorkspaceManager windows,
+        Func<Guid, Orchestration.RepositoryLocation> locate,
+        CoreX.Hub.Workspace.Abstractions.IGitCommandExecutor hostGit,
+        HardIsolationProfile profile,
+        string dataDirectory) =>
+        HardWorkspace.HardWorkspaceGateway.Create(
+            windows, locate, hostGit, profile, dataDirectory, dataDirectory);
 }

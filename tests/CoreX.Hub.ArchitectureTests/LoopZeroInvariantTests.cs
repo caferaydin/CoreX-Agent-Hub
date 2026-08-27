@@ -155,13 +155,25 @@ public sealed class LoopZeroInvariantTests
             .Select(RepoLayout.Relative)
             .ToList();
 
-        // The workspace module implements it, the port declares it, the composition adapter
-        // forwards it, and the orchestrator calls it once. Nothing else.
-        Assert.Equal(4, callers.Count);
+        // Two workspaces implement it - the Windows one and the hard isolated one - the port
+        // declares it, each composition adapter forwards it, and the orchestrator calls it once.
+        // Nothing else. The count is asserted so a fifth implementation cannot appear quietly.
+        Assert.Equal(5, callers.Count);
         Assert.Contains(callers, c => c.EndsWith("WorkspaceManager.cs", StringComparison.Ordinal));
         Assert.Contains(callers, c => c.EndsWith("OrchestrationPorts.cs", StringComparison.Ordinal));
         Assert.Contains(callers, c => c.EndsWith("WorkspaceGateway.cs", StringComparison.Ordinal));
+        Assert.Contains(callers, c => c.EndsWith("HardWorkspaceGateway.cs", StringComparison.Ordinal));
         Assert.Contains(callers, c => c.EndsWith("ExecutionOrchestrator.Gates.cs", StringComparison.Ordinal));
+
+        // And both implementations commit as the Hub, from the one shared identity. A second
+        // author anywhere would make a result commit stop being mechanically attributable.
+        foreach (var implementation in new[] { "WorkspaceManager.cs", "HardWorkspaceGateway.cs" })
+        {
+            var code = CodeOnly(Source(implementation));
+
+            Assert.DoesNotContain("CoreX Agent Hub\"", code, StringComparison.Ordinal);
+            Assert.DoesNotContain("agent@corex.local\"", code, StringComparison.Ordinal);
+        }
 
         var gates = CodeOnly(Source("ExecutionOrchestrator.Gates.cs"));
         Assert.Single(Regex.Matches(gates, Regex.Escape("CreateResultCommitAsync(")));

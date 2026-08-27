@@ -25,6 +25,10 @@ public sealed class IsolationInvariantTests
     private const string SystemdCommandFileName = "SystemdRunCommand.cs";
     private const string ExecutorFileName = "WslHardProcessExecutor.cs";
     private const string GatewayFileName = "WslExecutionGateway.cs";
+    private const string HardCommandsFileName = "HardGitCommands.cs";
+    private const string HardWorkspaceFileName = "HardWorkspaceGateway.cs";
+    /// <summary>Spelled through a constant so this file is not itself an offender.</summary>
+    private static readonly string HardGitExecutable = "/usr/bin/" + "git";
 
     /// <summary>Everything under the Application layer's isolation namespace.</summary>
     private static readonly Assembly Application = typeof(HardIsolationReadiness).Assembly;
@@ -662,6 +666,236 @@ public sealed class IsolationInvariantTests
     }
 
     /// <summary>
+    /// The Windows workspace never learned there was another kind.
+    ///
+    /// This is the shape the phase brief asked for and the one worth guarding: a separate hard
+    /// adapter behind the existing neutral port, rather than an <c>if (hard)</c> threaded through
+    /// an implementation that already works. The moment the Windows manager branches on isolation
+    /// it becomes responsible for both, and the harder of the two decides how the easier behaves.
+    /// </summary>
+    [Theory]
+    [InlineData("HardIsolation")]
+    [InlineData("HardWorkspace")]
+    [InlineData("HardProcess")]
+    [InlineData("Wsl")]
+    [InlineData("systemd")]
+    [InlineData("IsolationLevel")]
+    public void The_windows_workspace_never_branched_on_isolation(string term)
+    {
+        var offenders = ProductionFiles("CoreX.Hub.Workspace")
+            .Where(f => CodeOnly(File.ReadAllText(f)).Contains(term, StringComparison.Ordinal))
+            .Select(RepoLayout.Relative)
+            .ToList();
+
+        Assert.Empty(offenders);
+    }
+
+    /// <summary>
+    /// The hard workspace is Linux-native, and cannot be talked into a host directory.
+    ///
+    /// A workspace under a mounted host volume would be a Windows directory wearing a Linux name.
+    /// The agent would be editing the host's filesystem and every ownership guarantee below it
+    /// would be decoration, so the mount roots appear only in the path authority that refuses
+    /// them.
+    /// </summary>
+    [Theory]
+    [InlineData("/mnt/c")]
+    [InlineData("/mnt/d")]
+    [InlineData("drvfs")]
+    [InlineData(@"C:\\")]
+    public void The_hard_workspace_never_targets_a_host_path(string construct)
+    {
+        var offenders = HardWorkspaceSourceFiles()
+            .Where(f => CodeOnly(File.ReadAllText(f)).Contains(construct, StringComparison.Ordinal))
+            .Select(RepoLayout.Relative)
+            .ToList();
+
+        Assert.Empty(offenders);
+    }
+
+    /// <summary>
+    /// The source repository is never mounted, cloned over a network, or reached from inside.
+    ///
+    /// What crosses the boundary is a bundle of committed objects, carried on the control
+    /// channel. A mount would give the agent the developer's whole repository; a network verb
+    /// would give a hard workspace a way to reach something the Hub did not hand it.
+    /// </summary>
+    [Theory]
+    [InlineData("\"clone\"")]
+    [InlineData("\"pull\"")]
+    [InlineData("\"push\"")]
+    [InlineData("\"remote\"")]
+    [InlineData("\"submodule\"")]
+    [InlineData("mount")]
+    [InlineData("\\\\wsl$")]
+    public void The_hard_workspace_performs_no_network_git_and_mounts_nothing(string construct)
+    {
+        var offenders = HardWorkspaceSourceFiles()
+            .Where(f => CodeOnly(File.ReadAllText(f)).Contains(construct, StringComparison.Ordinal))
+            .Select(RepoLayout.Relative)
+            .ToList();
+
+        Assert.Empty(offenders);
+    }
+
+    /// <summary>
+    /// No command in the hard workspace repairs history.
+    ///
+    /// A reset, an amend or a force update would each be a way to make an unexpected commit stop
+    /// existing - which is precisely the evidence the capture step is for.
+    /// </summary>
+    [Theory]
+    [InlineData("\"reset\"")]
+    [InlineData("\"--amend\"")]
+    [InlineData("\"rebase\"")]
+    [InlineData("\"--force\"")]
+    [InlineData("\"-f\", \"--force\"")]
+    [InlineData("filter-branch")]
+    public void The_hard_workspace_never_repairs_history(string construct)
+    {
+        var offenders = HardWorkspaceSourceFiles()
+            .Where(f => CodeOnly(File.ReadAllText(f)).Contains(construct, StringComparison.Ordinal))
+            .Select(RepoLayout.Relative)
+            .ToList();
+
+        Assert.Empty(offenders);
+    }
+
+    /// <summary>
+    /// The hard workspace can only name the tools it needs.
+    ///
+    /// A closed surface, for the same reason the process executor has one: a general "run this
+    /// Linux command" reachable from application or provider code would make the ownership model,
+    /// the hardened configuration and the absence of a shell all advisory.
+    /// </summary>
+    [Fact]
+    public void The_hard_workspace_can_only_name_the_tools_it_needs()
+    {
+        string[] permitted =
+        [
+            "/usr/bin/chmod", "/usr/bin/chown", "/usr/bin/env", "/usr/bin/git", "/usr/bin/mkdir",
+            "/usr/bin/openssl", "/usr/bin/realpath", "/usr/bin/rm", "/usr/bin/stat", "/usr/bin/touch",
+        ];
+
+        var named = HardWorkspaceSourceFiles()
+            .SelectMany(f => GuestExecutable.Matches(CodeOnly(File.ReadAllText(f))).Select(m => m.Value.Trim('"')))
+            .Distinct(StringComparer.Ordinal)
+            .Order(StringComparer.Ordinal)
+            .ToList();
+
+        Assert.Equal(permitted, named);
+    }
+
+    /// <summary>
+    /// The result commit is the Hub's, and the identity is the one it already had.
+    ///
+    /// Restated as an assertion rather than a comment: two literal copies of an identity stay
+    /// equal only until somebody edits one, and a result commit that is not mechanically
+    /// attributable to the Hub is not evidence of anything.
+    /// </summary>
+    [Fact]
+    public void The_hard_result_commit_uses_the_hubs_existing_identity()
+    {
+        var source = CodeOnly(SourceOf(HardCommandsFileName));
+
+        Assert.Contains("GitEnvironment.HubCommitterName", source, StringComparison.Ordinal);
+        Assert.Contains("GitEnvironment.HubCommitterEmail", source, StringComparison.Ordinal);
+        Assert.DoesNotContain("CoreX Agent Hub\"", source, StringComparison.Ordinal);
+        Assert.DoesNotContain("agent@corex.local\"", source, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Every git command goes through the hardened channel, including the first one.
+    ///
+    /// This is the first-checkout guarantee expressed where it can be checked. <c>worktree add</c>
+    /// performs a checkout, and a repository that configures its own hooks path gets to execute
+    /// code during it - so hardening applied afterwards is hardening applied after the thing it
+    /// was meant to prevent. A raw git invocation anywhere in the gateway would be exactly that
+    /// mistake, and it would look completely ordinary.
+    /// </summary>
+    [Fact]
+    public void No_git_command_bypasses_the_hardened_channel()
+    {
+        var gateway = CodeOnly(SourceOf(HardWorkspaceFileName));
+
+        // git is named once, in the command builder. The gateway asks the control channel.
+        Assert.DoesNotContain(HardGitExecutable, gateway, StringComparison.Ordinal);
+        Assert.Contains("_control.GitAsync", gateway, StringComparison.Ordinal);
+
+        var hardened = Regex.Matches(CodeOnly(SourceOf(HardCommandsFileName)), @"command\.Add\(Git\)");
+        Assert.NotEmpty(hardened);
+    }
+
+    /// <summary>
+    /// The transfer is verified on both sides of the boundary, and both checks stay.
+    ///
+    /// A source guard rather than a behavioural test, and deliberately so: either check alone
+    /// refuses a moved branch, which is exactly what defence in depth means and exactly why no
+    /// single test can tell that one of them has been removed. The property worth locking is that
+    /// there are two - the host verifying what it packaged, and the environment verifying what it
+    /// received, which are different claims about different moments.
+    /// </summary>
+    [Fact]
+    public void The_pinned_commit_is_verified_on_both_sides_of_the_transfer()
+    {
+        var host = CodeOnly(SourceOf("PinnedTransfer.cs"));
+
+        Assert.Contains("Contains(heads.Stdout, pinnedCommitSha)", host, StringComparison.Ordinal);
+
+        var environment = CodeOnly(SourceOf(HardWorkspaceFileName));
+
+        Assert.Contains("ListTransferHeads", environment, StringComparison.Ordinal);
+        Assert.Contains("StartsWith(baseCommit", environment, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The worktree is built from the pinned commit value, never from a ref that could move.
+    ///
+    /// The two are the same commit almost always, which is exactly what makes the mistake
+    /// invisible: a worktree created from <c>refs/heads/main</c> is correct until the day the
+    /// branch moves between the preflight and the checkout, and then it is silently an execution
+    /// based on a different commit from the one its provenance records.
+    /// </summary>
+    [Fact]
+    public void The_worktree_is_created_from_the_pinned_commit()
+    {
+        var gateway = CodeOnly(SourceOf(HardWorkspaceFileName));
+
+        var add = Regex.Match(
+            gateway, @"""worktree"",\s*""add""(?<rest>[^;]*);", RegexOptions.Singleline);
+
+        Assert.True(add.Success, "the worktree is not created here any more");
+
+        var arguments = add.Groups["rest"].Value;
+
+        Assert.Contains("baseCommit", arguments, StringComparison.Ordinal);
+        Assert.DoesNotContain("refs/heads", arguments, StringComparison.Ordinal);
+        Assert.DoesNotContain("DefaultBranch", arguments, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The agent never becomes the git control identity.
+    ///
+    /// Every git command the hard workspace issues goes through the control channel, which enters
+    /// as the service user. A command issued as the agent would be a command the untrusted party
+    /// gets to run against the repository it is being measured in.
+    /// </summary>
+    [Fact]
+    public void No_git_command_is_ever_issued_as_the_agent()
+    {
+        var gateway = CodeOnly(SourceOf(HardWorkspaceFileName));
+
+        Assert.DoesNotContain("AgentUser, ", gateway, StringComparison.Ordinal);
+        Assert.DoesNotContain("LinuxUser = ", gateway, StringComparison.Ordinal);
+
+        // The agent user appears only where ownership is handed over, never as an identity to
+        // run something as.
+        var control = CodeOnly(SourceOf("HardWorkspaceControl.cs"));
+
+        Assert.DoesNotContain("AgentUser", control, StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// The provider runtimes know nothing about isolation, in either direction.
     ///
     /// The companion to the provider-vocabulary guard. Isolation carries no provider vocabulary,
@@ -723,9 +957,9 @@ public sealed class IsolationInvariantTests
     [InlineData("Worktree")]
     [InlineData("ContextPack")]
     [InlineData("EvidenceBlobStore")]
-    [InlineData("Repository")]
     [InlineData("IAgentRuntime")]
     [InlineData("VerificationProfile")]
+    [InlineData("ReviewEngine")]
     public void No_later_workflow_surface_was_pulled_forward(string concept)
     {
         var offenders = IsolationSourceFiles()
@@ -838,6 +1072,11 @@ public sealed class IsolationInvariantTests
     private static IEnumerable<string> IsolationSourceFiles() =>
         RepoLayout.ProductionSourceFiles.Where(
             f => f.Contains($"{Path.DirectorySeparatorChar}Isolation{Path.DirectorySeparatorChar}", StringComparison.Ordinal));
+
+    /// <summary>The hard workspace adapter, which is isolation work living in its own folder.</summary>
+    private static IEnumerable<string> HardWorkspaceSourceFiles() =>
+        RepoLayout.ProductionSourceFiles.Where(
+            f => f.Contains($"{Path.DirectorySeparatorChar}HardWorkspace{Path.DirectorySeparatorChar}", StringComparison.Ordinal));
 
     private static IEnumerable<string> ProductionFiles(string project) =>
         RepoLayout.ProductionSourceFiles.Where(

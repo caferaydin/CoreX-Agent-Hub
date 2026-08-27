@@ -4,12 +4,16 @@ Faz 10B-1: **yarışsız Windows süreç başlatma**.
 Faz 10B-2: **Windows Job Object kaynak limitleri**.
 Faz 10C-1: **sert izolasyon hazırlığı ve topoloji kapısı** (WSL'de görev çalıştırma YOK).
 Faz 10C-2: **WSL2 sert süreç yürütme düzlemi** (systemd transient unit + cgroup çevrelemesi).
+Faz 10C-3A: **sert workspace sınırı** (sabitlenmiş kaynak → Linux-native git worktree).
 
-Bu belge Faz 10'un sertleştirme işini kaydeder. Şu an 10B-1, 10B-2, 10C-1 ve 10C-2
-uygulanmıştır; geri kalan dilimler (10C-3 ve sonrası) aşağıda ayrıca işaretlenmiştir ve
+Bu belge Faz 10'un sertleştirme işini kaydeder. Şu an 10B-1, 10B-2, 10C-1, 10C-2 ve 10C-3A
+uygulanmıştır; geri kalan dilimler (10C-3B ve sonrası) aşağıda ayrıca işaretlenmiştir ve
 **uygulanmamıştır**.
 
-**Tam Hard görev kabulü 10C-2'den sonra da REDDEDİLMEKTEDİR** — sebebi §11.12'dedir.
+**Tam Hard görev kabulü 10C-3A'dan sonra da REDDEDİLMEKTEDİR** — sebebi §11.12 ve §12.20'dedir.
+
+> **Sert workspace vardır ≠ Sert görev kullanılabilir.** Kaynak artık sınırın içindedir; context,
+> evidence, sağlayıcı kimlik doğrulaması ve ağ hâlâ host tarafındadır.
 
 ## 1. Kapatılan yarış
 
@@ -245,9 +249,9 @@ yerde, sonlu limitli bir Windows Job kullanmalıdır.
 
 - Linux kaynak zorlaması (systemd/cgroup: `MemoryMax`, `TasksMax`, `KillMode=control-group`)
   **10C-2'de uygulandı** — bkz. §11. 10C-1 yalnızca bu zorlamanın mümkün olup olmadığını ölçer.
-- Sert izole bir ortam içinde **bir süreç** çalıştırılabilir (§11); **bir Hub görevi**
-  çalıştırılamaz. Workspace, context, git, doğrulama, review, kanıt ve sağlayıcı kimlik
-  doğrulaması hâlâ host tarafındadır ve 10C-3'e aittir.
+- Sert izole bir ortam içinde **bir süreç** (§11) ve **bir workspace** (§12) vardır; **bir Hub
+  görevi** hâlâ yoktur. Context, evidence, sağlayıcı kimlik doğrulaması ve ağ host tarafındadır
+  ve 10C-3B'ye aittir; orkestrasyon yönlendirmesi ve G-K kabulü 10C-4'e.
 - CPU-rate kotası bu dilimin kapsamında değildir; yürütme süresinin otoritesi soft/idle/hard
   duvar saati zaman aşımlarıdır.
 - Sert izole bir ortam içinde **görev** çalıştırma yolu yoktur; hazır bir makine bile
@@ -836,4 +840,342 @@ gerekçesiyle düşer. İkisi de aynı şeyi kanıtlar, farklı hesaplarla.
 - Orkestratör yönlendirmesi ve Hard görev kabulü.
 - Şema değişikliği, migration.
 - Provizyon: distro oluşturma/import, kullanıcı açma, `wsl.conf` düzenleme, mount değiştirme.
+- Gerçek Kronos verisi (ADR-0017). Kronos **BLOCKED**.
+
+## 12. Sert workspace sınırı (Faz 10C-3A)
+
+**Sert workspace bir ilkeldir; sert bir Hub görevi DEĞİLDİR.** Sabitlenmiş bir kaynak commit'i
+artık ortamın içine, Linux-native depolamaya, agent'ın git kontrol düzlemine sahip olmadığı bir
+biçimde yerleştirilebilir. Görevin geri kalanı — context, evidence, sağlayıcı kimlik doğrulaması,
+ağ — hâlâ host tarafındadır ve tam Hard görev kabulü **hâlâ reddedilir** (§12.13).
+
+### 12.1 Güven sınırı
+
+```
+Windows kaynak repository   GÜVENİLEN, agent HİÇ görmez
+        │  (yalnızca okuma)
+        ▼
+git bundle (yalnızca commit edilmiş nesneler)
+        │  base64 · stdin · ProcessRunner · wsl.exe
+        ▼
+ServiceUser: /srv/.../repositories/<id>/git   kontrollü bare repo
+        │  git worktree add (sabitlenmiş sha)
+        ▼
+AgentUser:   /srv/.../worktrees/<id>          tek gördüğü şey
+```
+
+Agent kaynak repository'yi görmez, host dosya sistemini görmez, başka bir organizasyonun
+workspace'ini görmez ve git kontrol verisini göremez.
+
+### 12.2 Mevcut sınır yeniden kullanıldı, ikinci bir tane yaratılmadı
+
+Hard adapter, Windows workspace'in zaten cevapladığı **aynı** Application portunu
+(`IExecutionWorkspace`) cevaplar. Orkestratör hangi tarafta olduğunu öğrenmez; bu satırın
+üstünde hiçbir yerde `if (hard)` yoktur ve mevcut Windows uygulaması **değiştirilmedi** (guard).
+
+Preflight de bilinçli olarak **mevcut olanıdır**. Hard'a özel ikinci bir inceleme, submodule /
+filter / LFS / güvensiz yapılandırma hakkında ikinci bir politika olurdu — ve iki politikadan
+zayıf olanı karar verir. Repository her zaman yargılandığı kurallarla, host üzerinde, tek bayt
+transfer edilmeden önce yargılanır.
+
+### 12.3 Ne geçer: yalnızca commit edilmiş nesneler
+
+Transfer formatı **git bundle**'dır ve bu seçim ölçüldü:
+
+- `git bundle create <dosya> <branch>` çalışır; çıplak bir sha ile **reddedilir**
+  (`Refusing to create empty bundle`) — bu yüzden preflight'ın çözdüğü branch paketlenir.
+- `git bundle list-heads` ile paketin **gerçekte ne taşıdığı** sorulur ve sabitlenmiş sha ile
+  karşılaştırılır. Branch preflight'tan sonra kımıldadıysa transfer **reddedilir**, sessizce
+  başka bir commit taşınmaz.
+
+Bir bundle bir çalışma ağacı taşıyamaz. Dolayısıyla geliştiricinin commit edilmemiş
+değişiklikleri, untracked dosyaları ve ignored dosyaları politika gereği dışarıda bırakılmaz —
+formatın taşıdığı şey türünden değildirler. Bu, "dışlamaya çalışan bir kopyalama"dan daha güçlü
+bir garantidir.
+
+### 12.4 Host artefaktı ve bayt kanalı
+
+Geçici bundle Hub'ın **kendi** veri dizinindedir, benzersiz adlıdır, hiçbir worktree'nin içinde
+değildir ve başarılı da olsa başarısız da olsa **silinir**.
+
+Baytlar `stdin` üzerinden geçer. Host yolu guest'e **verilmez**; `/mnt/c/temp.bundle`, SMB,
+paylaşım, HTTP yoktur.
+
+ProcessRunner'ın stdin kanalı metindir, bundle ise ikilidir. Bu yüzden bayt akışı base64
+kodlanır ve guest tarafında tek bir sabit araçla çözülür:
+
+```
+/usr/bin/openssl base64 -d -A -out <staging>/<id>.bundle      [stdin = base64]
+```
+
+`-A` (tek satır) **zorunludur**: onsuz aynı çağrı 0 bayt yazdı (ölçüldü). `base64 -d` yalnızca
+stdout'a yazdığı ve kabuk olmadan yönlendirme yapılamadığı için openssl seçildi; 10B-1/10B-2'de
+dondurulan ProcessRunner sözleşmesine ikili stdin eklemek yerine metin kanalı korundu.
+
+Paket, **iki tarafta da** doğrulanır: host paketlediğini, ortam aldığını sorar. Tek kontrol
+transferin kendisini incelenmemiş bırakırdı.
+
+### 12.5 Linux-native yerleşim
+
+```
+<ExecutionRoot>/
+  control/            Hub'ın git yapılandırması + BOŞ hooks dizini
+    hooks/
+    empty.gitconfig
+  stage/              transfer artefaktları, yalnızca servis, silinir
+  repositories/<repositoryId:32hex>/git      kontrollü bare repo
+  worktrees/<executionIdentity:32hex>        tek kullanımlık agent worktree
+```
+
+Her yol **güvenilen bir Hub kimliğinden** türer. Organizasyon adı, repository görünen adı, task
+hedefi hiçbir zaman bir yol segmenti olmaz — bir yol segmenti başkasının seçtiği bir şeyse,
+seçeceği ilk şey içinde bulunması gereken kökten çıkış yoludur.
+
+`/mnt`, `/media`, `/proc`, `/sys`, `/dev` altındaki bir kök **reddedilir**. WSL tabanlı bir süreç
+kullandığı için bir Windows worktree'sine "Hard" denmez.
+
+### 12.6 Sahiplik modeli — sınırın gerçekten yaşadığı yer
+
+Gerçek makinede ölçülen izinler:
+
+```
+drwxrwx--T  root daemon   <worktree>          sticky + grup yazılabilir
+-rw-r-----  root daemon   <worktree>/.git     agent okur, yazamaz
+-rw-r--r--  daemon daemon <worktree>/*.txt    agent'ın kaynak dosyaları
+drwx------  root root     <bare>/             agent listeleyemez bile
+```
+
+Kritik olan **sticky bit**'tir. Worktree kökü agent tarafından yazılabilir olmalıdır, yoksa yeni
+dosya oluşturamaz; yazılabilir bir dizin ise normalde içindeki **her şeyin** silinmesine izin
+verir — yazamadığı bir dosya dâhil. Sticky bit bunları ayırır: bir girdi yalnızca sahibi
+tarafından kaldırılabilir. Agent kendi dosyalarını oluşturur ve siler, servisinkilere dokunamaz.
+
+Dünya değil **grup** izni: aynı makinedeki ikinci bir organizasyonun hesabı aynı değişiklikle
+içeri davet edilmez.
+
+Ölçülen agent denemeleri:
+
+| Deneme | Sonuç |
+|---|---|
+| `tracked.txt` düzenle | ✅ izinli |
+| yeni dosya oluştur | ✅ izinli |
+| `.git` üzerine yaz | ❌ Permission denied |
+| `.git` sil | ❌ Operation not permitted (sticky) |
+| `.git` taşı | ❌ Operation not permitted |
+| bare repo listele | ❌ Permission denied |
+| bare `config` yaz | ❌ Permission denied |
+| `refs/heads/...` yaz | ❌ Permission denied |
+| `git status` | ❌ `fatal: not a git repository` |
+| `git commit` | ❌ `fatal: not a git repository` |
+
+Agent'ın commit edememesi bir **araç kısıtı değil**, bir izin sonucudur: git gitdir'e ihtiyaç
+duyar, gitdir onun değildir. Çalışma zamanı allowlist'i aşılabilir; izin aşılamaz.
+
+Agent hiçbir ayrıcalıklı gruba eklenmedi.
+
+### 12.7 İlk checkout güvenliği
+
+Windows workspace ölçmüştü: `git worktree add`'in kendisi `post-checkout` çalıştırır, dolayısıyla
+kendi `core.hooksPath`'ini yapılandıran bir repository **ilk checkout sırasında** kod çalıştırma
+hakkı kazanır. "Önce checkout, sonra sertleştir" tam olarak engellemesi gereken şeyden sonra
+sertleştirmektir.
+
+Hard tarafta aynı garanti korunur. Hub'ın yapılandırması `GIT_CONFIG_COUNT`/`KEY`/`VALUE` ile,
+komut **çalışmadan önce** yürürlüktedir ve checkout yapabilen ilk komut olan `worktree add`'e
+uygulanır:
+
+```
+/usr/bin/env -i
+  PATH=/usr/bin:/bin  HOME=<control>
+  GIT_CONFIG_NOSYSTEM=1  GIT_CONFIG_GLOBAL=<control>/empty.gitconfig
+  GIT_TERMINAL_PROMPT=0  GIT_OPTIONAL_LOCKS=0
+  GIT_CONFIG_COUNT=6
+  core.hooksPath=<control>/hooks   gc.auto=0   core.quotePath=false
+  core.fsmonitor=false   commit.gpgSign=false   tag.gpgSign=false
+  /usr/bin/git ...
+```
+
+Anahtar kümesi Windows tarafıyla **paylaşılır** (`GitConfigKeys`), kopyalanmaz: iki edebi kopya
+yalnızca biri düzenlenene kadar eşit kalır.
+
+Ortam değişkenleri host'tan gelmez — WSL yalnızca `WSLENV`'in adlandırdığını iletir. `env -i`
+ile ortam **sıfırdan** kurulur, böylece servis hesabının kendi login ortamı (credential helper,
+alias, proxy) hiçbir şey söyleyemez.
+
+`env` bir kabuk değildir: değişken atar ve exec eder; her argüman kendi argv girdisi olarak
+kalır.
+
+### 12.8 Hedef repository yapılandırması Hub'ındır
+
+Hedef, artefaktan **clone edilmez**; `git init --bare` ile Hub tarafından oluşturulur ve bundle
+ondan sonra fetch edilir. Ölçülen sonuç yapılandırması:
+
+```
+core.repositoryformatversion=0
+core.filemode=true
+core.bare=true
+```
+
+Kaynak repository'nin `.git/config`'i transfer edilmez ve danışılmaz. Commit edilmiş içerik
+güvenilmezdir; geliştirici makinesinin yerel git yapılandırması ise Hub'ın benimsemesi için hiçbir
+sebep olmayan bir şeydir — credential helper, alias, filter driver hepsi onunla gelirdi.
+
+### 12.9 Ağ yok
+
+Hedef repository'de **remote yoktur** (ölçüldü: `git remote` boş). Kaynağın origin'i ve kimlik
+bilgileri kopyalanmaz. Bu dilimde `fetch`/`pull`/`push` yoktur; kaynak, Hub'ın zaten sahip olduğu
+güvenilen kontrol düzlemi verisidir. Bir guard bu fiilleri kaynak seviyesinde yasaklar.
+
+### 12.10 Sabitlenmiş worktree ve branch
+
+Worktree **tam olarak** `BaseCommitSha`'dan oluşturulur ve sonrasında `HEAD == Base` doğrulanır.
+Preflight'tan sonra kaynak varsayılan branch'inin kayması worktree'yi etkilemez.
+
+Branch adı mevcut modelle aynıdır: `agent/<taskKey>/<attempt>`. Branch'i **servis kimliği**
+oluşturur; agent'a branch oluşturma yetkisi verilmez ve korumalı bir branch doğrudan checkout
+edilmez.
+
+### 12.11 Yakalama ve beklenmeyen commit
+
+Capture, Windows tarafındaki aynı olguları ortamın **içinde**, güvenilen kontrol sınırından
+toplar: `HEAD`, `status --porcelain=v2`, `Base..HEAD` commit grafiği, `Base`'e göre diff, değişen
+yollar. `\\wsl$` veya `/mnt` üzerinden Windows'tan okuma **otorite değildir**.
+
+`--no-ext-diff` ve `--no-textconv` her kanıt komutundadır: repository'nin yapılandırdığı bir
+external diff ya da textconv sürücüsü, tam da Hub onun hakkında kanıt toplarken çalışırdı.
+
+K1 mekanik olarak anlamlıdır: agent adımından sonra `HEAD` hâlâ `BaseCommitSha` olmalıdır. Aksi
+hâlde beklenmeyen agent commit'i tespit edilir — ve **onarılmaz**. Reset/amend/rebase yoktur;
+onarmak, olduğunun kanıtını yok etmek olurdu.
+
+İki gerçek ayrı ayrı test edilir:
+
+- **A.** Sıradan agent principal'ı kalıcı bir git commit'i oluşturamaz, çünkü OS/gitdir sınırı
+  reddeder (yukarıdaki tablo).
+- **B.** Güvenilen test kurulumu kontrollü repoya bir commit **enjekte ederse**, capture
+  `HEAD != Base` olduğunu görür ve tek beklenmeyen sha'yı raporlar.
+
+A genellikle B'yi imkânsız kılar; bu, E1'i zayıflatmak için değil güçlendirmek için bir sebeptir.
+
+### 12.12 Result commit
+
+Yalnızca güvenilen servis workspace otoritesi oluşturur. Agent'ın git izni gerekmez — zaten
+yoktur. Kimlik mevcut kabul edilmiş olanın **aynısıdır** ve paylaşılan sabitten gelir:
+
+```
+CoreX Agent Hub <agent@corex.local>
+```
+
+Gerçek ölçüm: parent tam olarak `BaseCommitSha`, author/committer dördü de Hub, değişen dosya
+tam olarak beklenen, `Base..HEAD` sayısı **1**, branch `agent/HARD-2/3`.
+
+Amend/rebase/reset/force **yoktur** ve bir guard bunu kilitler.
+
+Workspace kendi çıktısını **onaylamaz**: K0/K1/K2/K3 değerlendirmesi workspace koduna
+taşınmadı. Result commit bir ilkeldir; ne zaman çağrılacağına orkestrasyon otoritesi karar verir.
+
+### 12.13 Kaynak repository dokunulmaz
+
+Gerçek ölçüm — hazırlıktan önce ve sonra aynı: `HEAD`, `show-ref`, `status --porcelain`,
+`config --list --local`. Geliştiricinin kirli düzenlemesi ve untracked dosyası hâlâ yerinde.
+
+Transfer okur, yazmaz. Geçici bir ref, geçici bir branch veya bir stash her biri artefaktı
+üretmenin kolay yolu olurdu ve her biri birinin repository'sini değiştirirdi.
+
+### 12.14 Linux yol otoritesi ve symlink kaçışı
+
+Windows `FileSystemGuard` semantiği Linux'ta varsayılamaz. Hard workspace, Linux-native bir yol
+otoritesi kullanır: mutlak yol zorunlu · segment bazlı kök içerme · `..` reddi · host mount kökü
+reddi.
+
+Symlink kaçışı **makineye sorularak** tespit edilir: yol önce `realpath -m` ile fiziksel olarak
+çözülür, içerme kararı çözülmüş hâl üzerinde verilir. Gerçek test: agent worktree içinde `/etc`'ye
+symlink oluşturur (izinli), `<worktree>/escape/passwd` **reddedilir**, `<worktree>/tracked.txt`
+kabul edilir.
+
+Agent symlink oluşturabilir; Hub onlara güvenmez.
+
+### 12.15 Release ve orphan
+
+Release **yalnızca** denemenin worktree'sini kaldırır. Kontrollü repository kalır: result
+commit'in üzerinde olduğu branch'i tutar ve bir kabul kararı tam olarak o provenance hakkındadır.
+
+Release başarısız olursa **raporlanır, zorlanmaz**. `--force` yoktur, `rm -rf` yoktur. Gerçek
+test: worktree yönetim verisi silinir, release başarısız olur, worktree **hâlâ yerindedir** ve
+sonuç orphan olarak bildirilir. "Daha sert kaldır" kanıtın kaybolma biçimidir.
+
+D6 semantiği korunur: `ResultCommitSha == null` iken otomatik yıkıcı temizlik hâlâ yasaktır.
+
+### 12.16 Reconciliation — sonraki ihtiyaç
+
+Kimlik, sonraki bir Hub sürecinin keşfetmesine yetecek kadar deterministiktir: bare repo
+`repositoryId`'den, worktree ise execution kimliğinden türer. Tam reconciler **yapılmadı**.
+
+Gerçek ihtiyaç 10C-3B/10C-4'te doğar: kayıtlı Hard worktree'leri, orphan'ları ve kayıtsız
+dizinleri ayırt edebilmek için worktree kimliğinin `Execution` satırında taşınması gerekir —
+`WorktreePath` bunu zaten taşıyabilir (§12.17). Kayıtsız bir dizin **hiçbir zaman** otomatik
+silinmez.
+
+### 12.17 Kalıcılık semantiği
+
+**Şema değişikliği yok, migration yok.**
+
+Mevcut `Execution` alanları anlamlarını koruyarak kullanılır: `BranchName`, `BaseCommitSha` ve
+`WorktreePath`. `WorktreePath` bir `string`'dir ve port sözleşmesinde (`PreparedExecutionWorkspace`)
+Windows'a özgü hiçbir varsayım yoktur — bir Linux yolunu **dürüstçe** taşıyabilir. Sahte bir
+Windows yolu yazılmaz.
+
+API/UI, fiziksel worktree yolunu **açığa çıkarmaz**: mevcut güvenli projeksiyonlar yolsuzdur, yeni
+endpoint yoktur, workspace tarayıcısı yoktur.
+
+### 12.18 Komut yüzeyi kapalıdır
+
+Hard workspace'in adlandırabildiği guest çalıştırılabilirleri kapalı bir kümedir:
+
+```
+git · env · openssl · realpath · mkdir · chown · chmod · rm · stat · touch
+```
+
+Uygulama veya sağlayıcı kodundan erişilebilen genel bir `RunAnyLinuxCommand` **yoktur**. Kabuk
+yoktur, `bash -c` yoktur, `Process.Start` yoktur; her şey 10B-1/10B-2'de dondurulan
+ProcessRunner sınırından ve 10C-2 WSL geçidinden geçer.
+
+Kısa güvenilen kontrol komutlarının süre sınırları açıkça tanımlıdır: kurulum/transfer 2 dakika,
+git 10 dakika.
+
+### 12.19 Servis kimliği hakkında dürüst not
+
+Üretim sözleşmesi `HardIsolationProfile.ServiceUser`'ı **gerektirir** ve uygulamada root'a özel
+hiçbir dal yoktur.
+
+Mevcut Ubuntu'da adanmış bir Hub servis hesabı yoktur. Bu yüzden **testler** profilin service
+user'ını `root` olarak yapılandırır: sahiplik ayrımını (kontrollü repo agent'ın olmayan birine
+ait) operatörün dağıtımında kalıcı bir hesap açmadan modeller. Sahiplik kurulumu (`chown`) zaten
+root gerektirir ve bu, brief'in açıkça izin verdiği tek ayrıcalıklı adımdır.
+
+### 12.20 Hard görev kabulü HÂLÂ REDDEDİLİYOR
+
+`UnavailableHardExecutionPlane` üretimdeki tek `IHardExecutionPlane` uygulamasıdır ve
+**değişmedi**. `IsolationComposition.CreateWorkspace` bilinçli olarak kabul otoritesinden
+erişilemez ve bir guard, kabulün bir workspace veya executor'dan inşa edilemeyeceğini kilitler.
+
+Kaynak artık sınırın içinde diye işin içinde olduğu sonucuna varmak kolay olurdu. Context,
+evidence, sağlayıcı kimlik doğrulaması ve ağ hâlâ host tarafındadır.
+
+### 12.21 Kontrol düzlemi ağı
+
+`control-plane.unreachable` **değişmedi**: dosya sistemi yolu görünürse `Fail`, aksi hâlde
+`Unknown`; `Pass` yoktur. Workspace mekaniği çalıştığı için hiçbir Hard ortam `Ready` olamaz.
+
+### 12.22 Bu dilimde YAPILMAYANLAR
+
+- Organizasyon başına Evidence/CAS ayrımı (`10C-3B`). G-K4 **iddia edilmiyor**.
+- Sağlayıcı kimlik doğrulama ayrımı ve sağlayıcı runtime yönlendirmesi (`10C-3B`).
+- Kontrol düzlemi ağ izolasyonu (`10C-3B`).
+- Hard context girdi yerleşimi.
+- Hard sınır içinde doğrulama ve review.
+- Orkestratör yönlendirmesi, tam Hard görev kabulü, G-K kabulü (`10C-4`).
+- Tam reconciler.
+- Şema değişikliği, migration, yeni API/UI yüzeyi.
+- Provizyon: distro/kullanıcı/grup oluşturma, `wsl.conf`, mount değişikliği.
 - Gerçek Kronos verisi (ADR-0017). Kronos **BLOCKED**.

@@ -18,6 +18,9 @@ public sealed class ForbiddenConstructTests
 
     private const string SnapshotFileName = "WorkspaceManager.Snapshots.cs";
 
+    /// <summary>The hard isolated workspace: a second implementation of the same rules.</summary>
+    private const string HardWorkspaceFileName = "HardWorkspaceGateway.cs";
+
     /// <summary>
     /// Modules on the managed execution filesystem trust boundary. Later execution
     /// facing projects are added here as their phases land.
@@ -149,14 +152,37 @@ public sealed class ForbiddenConstructTests
     }
 
     [Fact]
-    public void Only_the_workspace_manager_may_create_a_commit()
+    public void Only_a_trusted_workspace_authority_may_create_a_commit()
     {
-        // E.1 #7-A: git commit is centralised. Whether a commit is permitted at all - the
-        // K0..K3 gates - is Phase 5 and is deliberately not implemented yet.
+        // E.1 #7-A: git commit is centralised. There are now two workspaces - the Windows one
+        // and the hard isolated one - and the rule is unchanged: each has exactly one place that
+        // commits and nothing else in production may. Both exemptions are proved non-vacuous.
         AssertNoMatch(
             new Regex(@"""commit""", RegexOptions.CultureInvariant),
             allowedFileName: WorkspaceManagerFileName,
-            because: "E.1 #7-A: git commit belongs to WorkspaceManager.CreateResultCommit only.");
+            because: "E.1 #7-A: git commit belongs to a trusted workspace authority only.",
+            alsoAllowedFileNames: [HardWorkspaceFileName]);
+    }
+
+    /// <summary>
+    /// The hard workspace's exemption is real, and it commits as the Hub.
+    ///
+    /// The same shape as the Windows exemption beside it: the file really does create a result
+    /// commit, and it does so with the Hub's identity rather than whoever happens to be running.
+    /// </summary>
+    [Fact]
+    public void The_hard_commit_exemption_is_not_vacuous()
+    {
+        var gateway = RepoLayout.ProductionSourceFiles
+            .SingleOrDefault(f => string.Equals(
+                Path.GetFileName(f), HardWorkspaceFileName, StringComparison.Ordinal));
+
+        Assert.NotNull(gateway);
+
+        var code = File.ReadAllText(gateway!);
+
+        Assert.Contains("CreateResultCommitAsync", code, StringComparison.Ordinal);
+        Assert.Contains("GitAsHubAsync", code, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -172,14 +198,45 @@ public sealed class ForbiddenConstructTests
     [Fact]
     public void Production_code_contains_no_publishing_path()
     {
-        // Push, merge, pull, fetch, publish and deploy have no production code path at all.
-        // Push appears only in test code, where it proves the blocking protections work.
+        // Push, merge, pull, publish and deploy have no production code path at all. Push appears
+        // only in test code, where it proves the blocking protections work.
+        //
+        // The hard workspace is the single exemption, and for one verb: it fetches the pinned
+        // objects out of a local transfer artefact into the repository it has just created. That
+        // artefact is a file on the environment's own disk, the repository has no remote, and the
+        // test below keeps it that way.
         AssertNoMatch(
             new Regex(
                 @"""push""|""merge""|""pull""|""fetch""|""clone""",
                 RegexOptions.CultureInvariant),
             allowedFileName: null,
-            because: "Phase 3 brief section 23: there is no production git publishing path.");
+            because: "Phase 3 brief section 23: there is no production git publishing path.",
+            alsoAllowedFileNames: [HardWorkspaceFileName]);
+    }
+
+    /// <summary>
+    /// The one fetch in production reads a local file and can reach nothing.
+    ///
+    /// Worth pinning precisely, because fetch is the verb that would let a hard workspace pull
+    /// from somewhere the Hub never handed it. Its source is the transfer artefact, and there is
+    /// no remote to fall back on.
+    /// </summary>
+    [Fact]
+    public void The_only_production_fetch_reads_a_local_transfer_artefact()
+    {
+        var gateway = File.ReadAllText(
+            RepoLayout.ProductionSourceFiles.Single(
+                f => string.Equals(Path.GetFileName(f), HardWorkspaceFileName, StringComparison.Ordinal)));
+
+        var fetches = Regex.Matches(gateway, @"""fetch"",\s*(?<source>[A-Za-z]+)");
+
+        Assert.Single(fetches);
+        Assert.Equal("artefact", fetches[0].Groups["source"].Value);
+
+        foreach (var forbidden in new[] { "http://", "https://", "git@", "ssh://", "\"origin\"" })
+        {
+            Assert.DoesNotContain(forbidden, gateway, StringComparison.OrdinalIgnoreCase);
+        }
     }
 
     [Fact]
@@ -254,7 +311,8 @@ public sealed class ForbiddenConstructTests
         Regex pattern,
         string? allowedFileName,
         string because,
-        IReadOnlyList<string>? scopeDirectories = null)
+        IReadOnlyList<string>? scopeDirectories = null,
+        IReadOnlyList<string>? alsoAllowedFileNames = null)
     {
         var offenders = new List<string>();
 
@@ -267,8 +325,17 @@ public sealed class ForbiddenConstructTests
 
         foreach (var file in files)
         {
+            var fileName = Path.GetFileName(file);
+
             if (allowedFileName is not null
-                && string.Equals(Path.GetFileName(file), allowedFileName, StringComparison.Ordinal))
+                && string.Equals(fileName, allowedFileName, StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            // A second implementation of the same rule is named, never implied. Every entry here
+            // has its own test proving the exemption is not vacuous.
+            if (alsoAllowedFileNames is not null && alsoAllowedFileNames.Contains(fileName, StringComparer.Ordinal))
             {
                 continue;
             }

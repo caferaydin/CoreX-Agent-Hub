@@ -18,6 +18,9 @@ namespace CoreX.Hub.ArchitectureTests;
 /// </summary>
 public sealed class AgentRuntimeInvariantTests
 {
+    /// <summary>The hard isolated workspace, which uses --bare as a git repository mode.</summary>
+    private const string HardWorkspaceFileName = "HardWorkspaceGateway.cs";
+
     [Fact]
     public void Adding_a_real_provider_did_not_widen_the_contract()
     {
@@ -120,13 +123,44 @@ public sealed class AgentRuntimeInvariantTests
         {
             var text = File.ReadAllText(file);
 
-            foreach (var forbidden in new[] { "--fallback-model", "fallbackModel", "--bare", "--dangerously-skip" })
+            // --bare means one thing to a provider runtime and something entirely unrelated to
+            // git, where it is the mode of a repository that has no working tree. The hard
+            // workspace creates exactly such a repository, and the test below pins that its only
+            // use of the word is next to init.
+            var forbiddenHere = string.Equals(
+                Path.GetFileName(file), HardWorkspaceFileName, StringComparison.Ordinal)
+                ? new[] { "--fallback-model", "fallbackModel", "--dangerously-skip" }
+                : ["--fallback-model", "fallbackModel", "--bare", "--dangerously-skip"];
+
+            foreach (var forbidden in forbiddenHere)
             {
                 Assert.False(
                     text.Contains(forbidden, StringComparison.OrdinalIgnoreCase),
                     $"{RepoLayout.Relative(file)}: {forbidden}");
             }
         }
+    }
+
+    /// <summary>
+    /// The hard workspace's only <c>--bare</c> creates a repository, and nothing else.
+    ///
+    /// A vacuous exemption would let a provider flag of the same spelling through the one file
+    /// that was allowed to say it.
+    /// </summary>
+    [Fact]
+    public void The_hard_workspace_bare_exemption_is_only_a_repository_mode()
+    {
+        var gateway = File.ReadAllText(
+            RepoLayout.ProductionSourceFiles.Single(
+                f => string.Equals(Path.GetFileName(f), HardWorkspaceFileName, StringComparison.Ordinal)));
+
+        var uses = gateway
+            .Split('\n')
+            .Where(l => l.Contains("--bare", StringComparison.Ordinal))
+            .ToList();
+
+        Assert.Single(uses);
+        Assert.Contains("\"init\"", uses[0], StringComparison.Ordinal);
     }
 
     [Fact]
