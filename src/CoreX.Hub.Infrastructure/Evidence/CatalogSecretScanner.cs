@@ -41,11 +41,17 @@ public sealed class CatalogSecretScanner : ISecretScanner
             return [];
         }
 
+        // The same budget authority evidence redaction uses, for the same reason the catalogue is
+        // shared: a gate and a redactor that disagreed about how long a scan may take would
+        // disagree about which diffs get examined. Running out throws rather than returning
+        // nothing - "I did not finish" and "there is nothing here" are opposite answers, and a gate
+        // that confused them would pass exactly the change it exists to stop.
+        var budget = SecretBudget.Open(text.Length);
         var matches = new List<SecretScanMatch>();
 
         foreach (var pattern in _patterns)
         {
-            foreach (System.Text.RegularExpressions.Match match in pattern.Pattern.Matches(text))
+            foreach (System.Text.RegularExpressions.Match match in budget.Next(pattern).Matches(text))
             {
                 matches.Add(new SecretScanMatch(pattern.Name, match.Index));
             }

@@ -145,6 +145,11 @@ internal sealed class HardEvidenceFixture : IAsyncLifetime
 
     public HardEvidenceGateway GatewayB() => HardEvidenceGateway.Create(ProfileB(), _hostRoot);
 
+    /// <summary>A gateway whose redactor a test supplies, for the failure paths.</summary>
+    public HardEvidenceGateway GatewayWithRedactor(
+        HardIsolationProfile profile, CoreX.Hub.Infrastructure.Evidence.EvidenceRedactor redactor) =>
+        new(HardEvidenceStore.Create(profile, _hostRoot), redactor);
+
     public HardEvidenceStore StoreA() => HardEvidenceStore.Create(ProfileA(), _hostRoot);
 
     public HardEvidenceStore StoreB() => HardEvidenceStore.Create(ProfileB(), _hostRoot);

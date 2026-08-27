@@ -154,6 +154,102 @@ public sealed class HardEvidenceParityTests : IAsyncLifetime
         Assert.Null(hard);
     }
 
+    /// <summary>
+    /// A large legitimate artifact carrying secrets is stored redacted on the hard side.
+    ///
+    /// The budget correction has to hold on both routes, and only the Windows one was ever
+    /// exercised at this size. Sixteen mebibytes is what the evidence contract accepts, the
+    /// secrets sit at the front, the middle and the very end so no early exit can pass this, and
+    /// the artifact is read back out of the environment to check what was actually persisted
+    /// rather than what the call reported.
+    /// </summary>
+    [Fact]
+    public async Task A_large_hard_artifact_with_secrets_is_stored_redacted()
+    {
+        if (!_fixture.Available)
+        {
+            return;
+        }
+
+        // Synthetic. Shaped like the real families, valid as neither.
+        const string Jwt = "eyJhbGciOiJmYWtlIn0.ZmFrZS1wYXlsb2Fk.ZmFrZS1zaWduYXR1cmU";
+        const string Token = "ghp_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+        const string Key = "AKIAZZZZZZZZZZZZZZZZ";
+
+        var filler = TextOf(PastTheOldHardCeiling / 2);
+
+        var text = Jwt + "\n" + filler + "\n" + Token + "\n" + filler + "\n" + Key;
+
+        var hard = await _fixture.GatewayA()
+            .WriteAsync(text, EvidenceKind.AgentStdout, "text/plain", CancellationToken.None);
+
+        Assert.NotNull(hard);
+        Assert.Equal(3, hard.RedactionCount);
+
+        var stored = await _fixture.GatewayA().ReadTextAsync(hard.Sha256, CancellationToken.None);
+
+        Assert.NotNull(stored);
+
+        foreach (var marker in new[] { "[REDACTED:JWT]", "[REDACTED:GITHUB_TOKEN]", "[REDACTED:AWS_ACCESS_KEY]" })
+        {
+            Assert.Contains(marker, stored, StringComparison.Ordinal);
+        }
+
+        // What matters is not that markers appeared but that the values did not survive.
+        foreach (var secret in new[] { Jwt, Token, Key })
+        {
+            Assert.DoesNotContain(secret, stored, StringComparison.Ordinal);
+        }
+
+        // The rest of the artifact is intact: redaction replaced the secrets, not the evidence.
+        Assert.Equal(text.Length - Jwt.Length - Token.Length - Key.Length, stored.Length
+            - "[REDACTED:JWT]".Length
+            - "[REDACTED:GITHUB_TOKEN]".Length
+            - "[REDACTED:AWS_ACCESS_KEY]".Length);
+    }
+
+    /// <summary>
+    /// A redaction that runs out of time stores nothing on the hard side either.
+    ///
+    /// The Windows store already has this regression; the isolated one needs its own, because the
+    /// two reach persistence by different routes and only one of them was ever exercised. The seam
+    /// is the gateway's own redactor, which is how a test supplies a shape that cannot finish - the
+    /// catalogue is untouched.
+    /// </summary>
+    [Fact]
+    public async Task A_hard_redaction_that_runs_out_of_time_stores_nothing()
+    {
+        if (!_fixture.Available)
+        {
+            return;
+        }
+
+        var runaway = new SecretPattern(
+            "TEST_RUNAWAY",
+            @"(?:a|aa)+b",
+            System.Text.RegularExpressions.RegexOptions.CultureInvariant
+            | System.Text.RegularExpressions.RegexOptions.ExplicitCapture,
+            "[REDACTED:TEST_RUNAWAY]");
+
+        var secret = "sk-proj-AAAAAAAAAAAAAAAAAAAABBBBBBBBBBBBBBBBBBBB";
+        var text = secret + "\n" + new string('a', 40_000) + "c";
+
+        var gateway = _fixture.GatewayWithRedactor(_fixture.ProfileA(), new EvidenceRedactor([runaway]));
+
+        await Assert.ThrowsAsync<System.Text.RegularExpressions.RegexMatchTimeoutException>(
+            () => gateway.WriteAsync(text, EvidenceKind.CommandStdout, "text/plain", CancellationToken.None));
+
+        // Nothing reached the environment, and above all not the value the redaction failed to
+        // remove: the blob root holds no shard at all.
+        var shards = await _fixture.ControlAsync(
+            ["/usr/bin/ls", "-A", HardEvidenceLayout.For(_fixture.EvidenceRootA).BlobsRoot],
+            HardEvidenceFixture.ServiceA);
+
+        Assert.Equal(
+            ["_pending"],
+            shards.Stdout.Split('\n').Select(l => l.Trim()).Where(l => l.Length > 0).ToList());
+    }
+
     // -- concurrent same content --------------------------------------------------------------
 
     /// <summary>
