@@ -102,13 +102,36 @@ public static class HardIsolationChecks
     public const string ProxyNotInherited = "network.proxy.not-inherited";
 
     /// <summary>
-    /// Whether the Hub's own network policy is loaded, and is the one the Hub expects.
+    /// Whether the trusted network plane itself is exactly what the Hub expects.
     ///
-    /// Not "are there some rules". The active managed table is read back and compared against the
-    /// policy this build renders, because a table that exists and says something else is worse
-    /// than no table: it looks like enforcement in every diagnostic.
+    /// Machine-global rather than per organization, because on this platform the network plane is:
+    /// every environment shares one namespace, one loopback and one ruleset, so the plane is Hub
+    /// infrastructure and not anybody's boundary.
+    ///
+    /// "The policy is loaded" is deliberately not enough. The policy was measured to survive a
+    /// restart that destroys the namespaces and interfaces it names, so a table can list exactly
+    /// the expected rules while classifying nothing at all. This passes only when every trusted
+    /// interface the policy names is present and every present one is named.
     /// </summary>
-    public const string NetworkPolicyEnforced = "network.policy.enforced";
+    public const string NetworkFabricReady = "global-network-fabric.ready";
+
+    /// <summary>
+    /// Whether this organization has a network namespace of its own, held by somebody it is not.
+    ///
+    /// A namespace the agent could create or destroy would be a boundary the agent controls. The
+    /// holder is the Hub's, and the namespace exists for exactly as long as the holder does.
+    /// </summary>
+    public const string OrgNetworkNamespaceReady = "org-network-namespace.ready";
+
+    /// <summary>
+    /// Whether a workload would actually land in that namespace.
+    ///
+    /// Separate from the namespace existing, because the two were measured to come apart: a launch
+    /// against a missing namespace was observed starting the workload in a fresh empty one instead
+    /// of failing. So the kernel identity a workload really gets is compared against the one the
+    /// organization was assigned, and a mismatch is not an execution.
+    /// </summary>
+    public const string OrgNetworkAttachmentReady = "org-network-attachment.ready";
 
     /// <summary>
     /// Whether another organization's environment is reachable over the network.
@@ -146,7 +169,9 @@ public static class HardIsolationChecks
         NetworkModeSupported,
         HostLoopbackDisabled,
         ProxyNotInherited,
-        NetworkPolicyEnforced,
+        NetworkFabricReady,
+        OrgNetworkNamespaceReady,
+        OrgNetworkAttachmentReady,
         PeerNetworkUnreachable,
     ];
 }

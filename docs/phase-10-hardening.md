@@ -1608,7 +1608,7 @@ docker-desktop'a dokunulmadı; her şey temizlendi.
 gerekir — ve bir organizasyonun politikası **asla** başka bir organizasyonun hazırlığını
 karşılamamalıdır.
 
-### 14.3 Politika: efektler, mekanizma değil
+### 14.3 Politika: efektler, mekanizma değil — **§14.17 ile güncellendi**
 
 `HardNetworkPolicy` sağlayıcı-nötr bir **efekt** modelidir: hangi yetenek açık, hangi adres sınıfı
 kapalı, ve her kapatmanın **gerekçesi**. nftables, zincir, öncelik geçmez.
@@ -1801,3 +1801,141 @@ Provizyon yetkilendirildiğinde iki tek-kullanımlık Hard dağıtımla (`corex-
 - Sağlayıcı çağrısı; Claude/Codex **çalıştırılmadı**.
 - Gerçek Kronos verisi (ADR-0017). Kronos **BLOCKED**.
 - G-K1..G-K5 **AÇIK** kalır.
+### 14.17 KABUL EDİLEN MODEL — güvenilen paylaşılan kök + organizasyon başına açık netns
+
+§14.2'nin "dağıtım başına kök netns" otoritesi §14.15 ile geçersiz kılındı. §14.16 yerine önerilen
+dokuyu ölçtü. Bu bölüm **uygulanan** modeli anlatır.
+
+```
+                paylaşılan WSL kök netns
+                        GÜVENİLEN
+                            |
+                  Hub'ın global nftables tablosu
+                    /                    \
+              cxr<id-A>                cxr<id-B>
+                  |                        |
+             netns A                  netns B
+                  |                        |
+             Agent A                  Agent B
+```
+
+Paylaşılan kök netns bir organizasyon sınırı **değildir**; Hub'ın güvenilen ağ altyapısıdır.
+Organizasyon sınırı: **açık network namespace + veth kimliği + güvenilen kök filtre politikası**.
+
+#### 14.17.1 Neden dağıtım sınırı değil
+
+Ölçüldü (§14.15): her WSL dağıtımı tek bir kök netns'i, tek bir loopback'i ve tek bir nftables
+ruleset'ini paylaşır. Bu yüzden `network.policy.enforced` kontrolü — "bu dağıtımın kendi kök
+politikası var" — **kaldırıldı**. WSL'de yanlıştır: A'da yüklenen tablo B'den de görünür ve B için
+de geçerlidir. Bir guard, tablonun varlığından ya da dağıtım başına ruleset kimliğinden Pass
+üretilmesini kilitler.
+
+#### 14.17.2 Kimlik türetilir, tahsis edilmez
+
+Bir organizasyonun dokudaki yeri, kendi kimliğinin SHA-256'sının ilk 8 hex karakterinden türer:
+
+| | |
+|---|---|
+| Güvenilen arabirim | `cxr<id>` (11 karakter, IFNAMSIZ altında) |
+| Namespace arabirimi | `cxo<id>` |
+| Holder birimi | `corex-netns-<id>.service` |
+| Subnet | `10.79.<x>.<y>/30` (havuz `10.79.0.0/16`) |
+
+Neden türetme: doku, platformun kendi takvimine göre yok ettiği makine durumudur. Hatırlanması
+gereken bir ad, yüklü olanla sessizce çelişebilirdi. Türetme sayesinde Hub, bir organizasyonun
+ekinin **nasıl görünmesi gerektiğini** her zaman yeniden hesaplayıp oradakiyle karşılaştırabilir —
+ve dokuda bulduğu bir arabirimden, onu kimin yarattığını hatırlamadan eki geri kurabilir.
+
+Çakışma **reddedilir**, bir sonraki boş yuvaya kaydırılmaz: paylaşılan bir düzlemde iki
+organizasyonun tek arabirimde olması, birinin trafiğinin diğerininki olarak sınıflanmasıdır. Havuz,
+bir şey yaratılmadan önce makinenin mevcut route'larına karşı da denetlenir.
+
+#### 14.17.3 Namespace'i canlı bir süreç tutar
+
+`/run/netns` tanıtıcıları `wsl.exe` oturumunu aşamıyor (§14.16). Bu yüzden namespace'i
+**root'a ait bir systemd geçici birimi** (`PrivateNetwork=yes`) tutar ve iş yükü
+`NetworkNamespacePath=/proc/<holder-pid>/ns/net` ile oraya konur.
+
+**`JoinsNamespaceOf=` kullanılmıyor** ve nedeni ölçüldü: hedef birim yoksa iş yükünü hata vermeden
+**taze, boş bir namespace**'te başlatıyor. `NetworkNamespacePath=` ise kapalı düşüyor — var olmayan
+PID yolu, var olmayan dosya yolu ve **ölmüş holder'ın yolu**, üçü de `rc=225` ile reddedildi ve
+çalıştırılabilir dosya **hiç başlamadı**. Yarış bu yüzden yoktur: systemd namespace'i exec'ten
+**önce** açar; açamazsa birim başarısız olur.
+
+#### 14.17.4 Politika duruşu — ve neden varsayılan-drop yok
+
+Zincirler operatörün kendi ortamının kullandığı namespace'te yaşar. `policy drop` geliştiricinin
+ağını keserdi. Bu yüzden zincir politikası `accept`, reddetme ise **arabirim kapsamlıdır**: her Hub
+ekinin forward ve input zincirlerinde kendi kapanış `drop`'u vardır.
+
+Bunun bedeli açıktır ve modele yazılmıştır: **adı geçmeyen bir arabirim filtrelenmez.** Bu yüzden
+doku, ancak *takılı olan küme* ile *sınıflanan küme* aynı olduğunda hazırdır.
+
+Sıra (forward): peer reddi (arabirimle) → özel/reserved hedef reddi → `tcp dport 443 accept` →
+`ct established,related accept` → **kapanış drop**. Input: ölçülen resolver'a yalnızca 53 →
+**kapanış drop**.
+
+Kimlik **arabirimdir, kaynak adres değil**. Ölçüldü: A'nın namespace'ine B'nin adresi eklenip o
+kaynakla gönderildiğinde bile trafik `iif cxr<id-A>` ile sınıflandı ve reddedildi.
+
+#### 14.17.5 Bayat tablo asimetrisi
+
+En tehlikeli ölçüm (§14.16): dağıtım yeniden başladığında Hub'ın tabloları **hayatta kalır**,
+namespace'ler ve veth'ler **kaybolur**. Yani tablo beklenen kuralları harfiyen listelerken hiçbir
+şeyi filtrelemiyor olabilir.
+
+`global-network-fabric.ready` bu yüzden **iki yönlü** karşılaştırır: politikanın adlandırdığı ama
+düzlemde olmayan arabirim → **Fail**; düzlemde olan ama hiçbir kuralın adlandırmadığı arabirim →
+**Fail**. Kalıcı Pass önbelleği yoktur.
+
+#### 14.17.6 Hazırlık: üç ayrı gerçek
+
+| Kontrol | Anlamı |
+|---|---|
+| `global-network-fabric.ready` | Güvenilen düzlem tam olarak beklenen hâlde: tablo yüklü, takılı küme = sınıflanan küme |
+| `org-network-namespace.ready` | Bu organizasyonun kendi netns'i var ve onu Hub'ın birimi tutuyor |
+| `org-network-attachment.ready` | Bir iş yükü **gerçekten** o netns'e iniyor — inode karşılaştırmasıyla |
+
+Artı korunanlar: `network.mode.supported`, `network.proxy.not-inherited`,
+`control-plane.unreachable`, `peer.network.unreachable`. Zorunlu kontrol sayısı **28**.
+
+**Bir organizasyonun politikası asla başkasının hazırlığını karşılamaz** — paylaşılan düzlemde
+gerçek risk budur ve testle sabittir.
+
+#### 14.17.7 Global durum ve kilit
+
+Doku mutasyonu (veth, tablo, NAT, `ip_forward`) makine-globaldir ve CLI ile API ayrı süreçlerdir.
+Bu yüzden her mutasyon **makine çapında adlandırılmış bir mutex** altında yapılır; süreç içi bir
+kilit yalnızca kendisiyle anlaşırdı. Terk edilmiş mutex kabul edilir: sahibi ölmüşse düzlemi bir
+sonraki yazar uzlaştırır. Doğrulama kilit almaz — hiçbir şeyi değiştirmez.
+
+`net.ipv4.ip_forward` makinenindir. Hub onu **yalnızca kapalıysa** açar ve **yalnızca kendisi
+açtıysa** geri kapatır. Bu notu tuttuğu yer Hub'ın kendi tarafıdır (ortamların paylaşılan bir
+dosya sistemi yoktur; bir ortamın içine yazılan not diğerinden görünmez, Hub da neyi değiştirdiğini
+unuturdu) ve hiçbir agent'ın erişemeyeceği yerdir. Not kaybolursa Hub, kendisinin ayarlamadığı bir
+değeri sıfırlamak yerine bıraktığı değeri bırakır — güvenli olan yön budur.
+
+NAT yalnızca Hub'ın havuzuna ve ölçülen uplink'e kapsanmıştır; paylaşılan düzlemdeki başka hiçbir
+trafik çevrilmez.
+
+#### 14.17.8 Gerçek ortamda kanıtlananlar
+
+İki tek-kullanımlık temiz Debian ortamıyla, **üretim kodu** üzerinden (hepsi geçti, sonra
+temizlendi):
+
+- iki organizasyon ayrı netns alır; iş yükü kendi netns'ine iner, kök netns'e değil
+- eksik namespace'e yapılan çağrı **çalıştırılabilir dosyayı hiç başlatmaz**
+- holder öldürülünce sonraki her çağrı **başarısız olur**, başka bir yere inmez
+- peer A→B ve B→A **reddedilir**; public TCP/443 ve resolver **çalışır**
+- güvenilen düzlemin kendi adresi ve host **reddedilir**
+- agent adres/route/link/nft değiştiremez; doku bozulmaz
+- B'nin adresini takınan paket hâlâ A olarak sınıflanır
+- **canonical karşılaştırma gerçek `nft list table` çıktısıyla uyuşur** (3B2B'nin açık kusuru kapandı)
+- son ek bırakıldığında tablolar silinir, `ip_forward` geri alınır, veth kalmaz
+
+#### 14.17.9 Hâlâ açık
+
+- `/mnt/wsl` ve `/mnt/wslg` paylaşılmaya devam ediyor ve agent netns'in içinden bile yazabiliyor.
+  Ağ dokusu bunu değiştirmez. `peer.filesystem.unreachable` **Fail**, **G-K2 açık**.
+- Tam Hard iş akışı yönlendirmesi yok; `IHardExecutionPlane` **kullanılamaz**.
+- G-K1..G-K5 **AÇIK**. Kronos **BLOCKED**.

@@ -99,18 +99,23 @@ public sealed class WslReadinessProbe : IHardIsolationReadinessProbe
     /// </summary>
     private readonly IHardNetworkProbe? _network;
 
+    /// <summary>Who answers the trusted-plane and attachment questions, when anybody does.</summary>
+    private readonly IHardNetworkFabric? _fabric;
+
     private WslReadinessProbe(
         IWslCommandRunner? runner,
         string? unavailable,
         char? controlPlaneDrive,
         char? hostProfileDrive,
-        IHardNetworkProbe? network)
+        IHardNetworkProbe? network,
+        IHardNetworkFabric? fabric)
     {
         _runner = runner;
         _unavailable = unavailable;
         _controlPlaneDrive = controlPlaneDrive;
         _hostProfileDrive = hostProfileDrive;
         _network = network;
+        _fabric = fabric;
     }
 
     /// <summary>
@@ -130,10 +135,11 @@ public sealed class WslReadinessProbe : IHardIsolationReadinessProbe
             Environment.GetFolderPath(Environment.SpecialFolder.UserProfile));
 
         var network = HardNetwork.WslHardNetworkProbe.Create(dataDirectory);
+        var fabric = HardNetwork.WslHardNetworkFabric.Create(dataDirectory);
 
         return WslCommandRunner.TryCreate(dataDirectory, out var runner, out var problem)
-            ? new WslReadinessProbe(runner, null, controlPlaneDrive, hostProfileDrive, network)
-            : new WslReadinessProbe(null, problem, controlPlaneDrive, hostProfileDrive, network);
+            ? new WslReadinessProbe(runner, null, controlPlaneDrive, hostProfileDrive, network, fabric)
+            : new WslReadinessProbe(null, problem, controlPlaneDrive, hostProfileDrive, network, fabric);
     }
 
     /// <summary>
@@ -150,8 +156,9 @@ public sealed class WslReadinessProbe : IHardIsolationReadinessProbe
         IWslCommandRunner runner,
         char? controlPlaneDrive = null,
         char? hostProfileDrive = null,
-        IHardNetworkProbe? network = null) =>
-        new(runner, null, controlPlaneDrive, hostProfileDrive, network);
+        IHardNetworkProbe? network = null,
+        IHardNetworkFabric? fabric = null) =>
+        new(runner, null, controlPlaneDrive, hostProfileDrive, network, fabric);
 
     public async Task<HardIsolationReadiness> ProbeAsync(
         string organizationSlug,
@@ -204,7 +211,7 @@ public sealed class WslReadinessProbe : IHardIsolationReadinessProbe
         await CheckHostReachabilityAsync(_runner, profile, checks, ct);
         await CheckRootsAsync(_runner, profile, checks, ct);
         await CheckResourceControlAsync(_runner, profile, checks, ct);
-        await CheckNetworkAsync(profile, checks, ct);
+        await CheckNetworkAsync(organizationSlug, profile, checks, ct);
 
         return HardIsolationReadiness.From(organizationSlug, checks);
     }
@@ -552,6 +559,7 @@ public sealed class WslReadinessProbe : IHardIsolationReadinessProbe
     /// mount table does not make an open port unreachable.
     /// </summary>
     private async Task CheckNetworkAsync(
+        string organizationSlug,
         HardIsolationProfile profile,
         List<ReadinessCheck> checks,
         CancellationToken ct)
@@ -560,12 +568,18 @@ public sealed class WslReadinessProbe : IHardIsolationReadinessProbe
             ? []
             : await _network.ProbeAsync(profile, ct);
 
+        // The plane and the attachment are asked separately, because they are separate truths: the
+        // plane is machine-global Hub infrastructure and the attachment is this organization's, and
+        // one organization's plane must never answer for another organization's boundary.
+        var fabric = _fabric is null
+            ? []
+            : await _fabric.VerifyAsync(profile, organizationSlug, ct);
+
         if (network.Count == 0)
         {
             foreach (var id in new[]
                      {
                          HardIsolationChecks.NetworkModeSupported,
-                         HardIsolationChecks.NetworkPolicyEnforced,
                          HardIsolationChecks.HostLoopbackDisabled,
                          HardIsolationChecks.ProxyNotInherited,
                          HardIsolationChecks.PeerNetworkUnreachable,
@@ -573,11 +587,22 @@ public sealed class WslReadinessProbe : IHardIsolationReadinessProbe
             {
                 checks.Add(ReadinessCheck.Unknown(id, "This build asked nothing about the network."));
             }
-
-            return;
         }
 
-        foreach (var check in network)
+        if (fabric.Count == 0)
+        {
+            foreach (var id in new[]
+                     {
+                         HardIsolationChecks.NetworkFabricReady,
+                         HardIsolationChecks.OrgNetworkNamespaceReady,
+                         HardIsolationChecks.OrgNetworkAttachmentReady,
+                     })
+            {
+                checks.Add(ReadinessCheck.Unknown(id, "This build asked nothing about the network fabric."));
+            }
+        }
+
+        foreach (var check in network.Concat(fabric))
         {
             var existing = checks.FindIndex(c => string.Equals(c.Id, check.Id, StringComparison.Ordinal));
 

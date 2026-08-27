@@ -77,9 +77,17 @@ public sealed class HardNetworkRealTests : IAsyncLifetime
             return;
         }
 
-        var policy = Check(await ProbeAsync(), HardIsolationChecks.NetworkPolicyEnforced);
+        // The plane is the fabric's question, not the probe's: the probe measures reachability and
+        // the fabric measures what is built. Asking the right one is part of what changed.
+        var fabric = await WslHardNetworkFabric.Create(Path.GetTempPath())
+            .VerifyAsync(Profile(), "fixture", CancellationToken.None);
 
-        Assert.Equal(ReadinessStatus.Fail, policy.Status);
+        Assert.Equal(
+            ReadinessStatus.Fail, Check(fabric, HardIsolationChecks.NetworkFabricReady).Status);
+
+        // And this machine has no attachment either, so neither organization truth can pass.
+        Assert.Equal(
+            ReadinessStatus.Fail, Check(fabric, HardIsolationChecks.OrgNetworkNamespaceReady).Status);
 
         // And the whole readiness verdict follows, rather than the check standing alone.
         var readiness = await WslReadinessProbe.Create(Path.GetTempPath())
@@ -89,7 +97,7 @@ public sealed class HardNetworkRealTests : IAsyncLifetime
 
         Assert.Equal(
             ReadinessStatus.Fail,
-            readiness.Checks.Single(c => c.Id == HardIsolationChecks.NetworkPolicyEnforced).Status);
+            readiness.Checks.Single(c => c.Id == HardIsolationChecks.NetworkFabricReady).Status);
     }
 
     /// <summary>

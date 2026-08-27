@@ -6,22 +6,31 @@ using CoreX.Hub.Composition.HardNetwork;
 namespace CoreX.Hub.Integration.Tests;
 
 /// <summary>
-/// What readiness says about the network, and what it refuses to say.
+/// What readiness says about the trusted plane and about one organization's place on it.
 ///
-/// The whole value of these checks is that they fail closed. A network verdict is the one place
-/// where a wrong Pass is not a bug that shows up later - it is an untrusted workload with a route
-/// to the Hub, and nothing downstream would notice. So every case here is about the answer being
-/// worse than Pass: an environment nobody asked about, a policy that is not loaded, a peer that
-/// does not exist to be unreachable, a silent network that refuses everything including what it
-/// is supposed to permit.
+/// Two truths that a single check would have collapsed, which on this platform is the mistake that
+/// matters: every environment shares one network namespace and one ruleset, so "the policy is
+/// loaded" is answered identically for an organization with an attachment and for one with none.
+/// Everything below is about the answer being worse than Pass - a plane whose interfaces the
+/// platform destroyed while its table survived, an organization with no namespace, a workload that
+/// starts somewhere other than where it was assigned, a peer that does not exist to be unreachable.
 /// </summary>
 [SupportedOSPlatform("windows")]
 public sealed class HardNetworkReadinessTests
 {
-    private static readonly string[] NetworkChecks =
+    private const string OrgA = "acme";
+    private const string OrgB = "globex";
+
+    private static readonly string[] FabricChecks =
+    [
+        HardIsolationChecks.NetworkFabricReady,
+        HardIsolationChecks.OrgNetworkNamespaceReady,
+        HardIsolationChecks.OrgNetworkAttachmentReady,
+    ];
+
+    private static readonly string[] ProbeChecks =
     [
         HardIsolationChecks.NetworkModeSupported,
-        HardIsolationChecks.NetworkPolicyEnforced,
         HardIsolationChecks.HostLoopbackDisabled,
         HardIsolationChecks.ProxyNotInherited,
         HardIsolationChecks.PeerNetworkUnreachable,
@@ -45,378 +54,362 @@ public sealed class HardNetworkReadinessTests
         return profile!;
     }
 
-    /// <summary>An environment that answers the topology questions the way this machine does.</summary>
-    private static ScriptedExecutionEnvironment Environment(bool withPolicy)
+    private static HardNetworkAttachment Attachment(string organization) =>
+        HardNetworkIdentity.Describe(organization);
+
+    /// <summary>
+    /// A machine whose plane is exactly right for the organizations named.
+    ///
+    /// Everything a real one would report: the topology, the interfaces the plane holds, the loaded
+    /// table, a running holder and a launch that lands where it should.
+    /// </summary>
+    private static ScriptedExecutionEnvironment Machine(
+        IReadOnlyList<string> present,
+        IReadOnlyList<string> classified,
+        string? holderFor = null,
+        string? launchedInto = null)
     {
         var script = new ScriptedExecutionEnvironment();
 
         script.Answer(
             "/usr/sbin/ip -o -4 addr",
-            "1: lo inet 127.0.0.1/8 scope host lo\n"
-            + "1: lo inet 10.255.255.254/32 scope global lo\n"
-            + "2: eth0 inet 192.168.66.185/20 scope global eth0");
+            "1: lo inet 127.0.0.1/8 scope host lo\n2: eth0 inet 192.168.66.185/20 scope global eth0");
 
         script.Answer(
             "/usr/sbin/ip -4 route",
             "default via 192.168.64.1 dev eth0\n192.168.64.0/20 dev eth0 scope link src 192.168.66.185");
 
         script.Answer("/usr/bin/cat /etc/resolv.conf", "nameserver 10.255.255.254");
+        script.Answer("/usr/bin/printenv", "PATH=/usr/bin");
 
-        script.Answer("/usr/bin/printenv", "PATH=/usr/bin\nHOME=/tmp");
+        script.Answer(
+            "/usr/sbin/ip -o link",
+            string.Join(
+                '\n',
+                new[] { "1: lo: <LOOPBACK>", "2: eth0: <BROADCAST>" }
+                    .Concat(present.Select((i, n) => $"{n + 3}: {i}@if{n}: <BROADCAST>"))));
 
-        if (withPolicy)
+        script.AnswerPrefix(
+            "/usr/sbin/nft list table ",
+            classified.Count == 0
+                ? string.Empty
+                : Loaded(classified),
+            exitCode: classified.Count == 0 ? 1 : 0);
+
+        if (holderFor is not null)
         {
-            script.AnswerPrefix("/usr/sbin/nft list table ", RenderedPolicy());
+            var unit = HardNetworkIdentity.HolderUnit(Attachment(holderFor).AttachmentId);
+
+            script.Answer($"/usr/bin/systemctl show -p SubState --value {unit}", "running");
+            script.Answer($"/usr/bin/systemctl show -p MainPID --value {unit}", "4242");
+            script.Answer("/usr/bin/readlink /proc/4242/ns/net", "net:[4026532222]");
         }
+
+        // What a workload actually gets when it is launched into that namespace.
+        script.AnswerPrefix(
+            "/usr/bin/systemd-run --quiet --pipe --wait --collect --uid ",
+            launchedInto ?? string.Empty,
+            exitCode: launchedInto is null ? 225 : 0);
 
         return script;
     }
 
-    /// <summary>The policy this build renders for that environment, as nft would print it back.</summary>
-    private static string RenderedPolicy()
+    /// <summary>The table those organizations would have, as nft would print it back.</summary>
+    private static string Loaded(IReadOnlyList<string> organizations)
     {
         var topology = HardNetworkTopology.Classify(
             ["2: eth0 inet 192.168.66.185/20 scope global eth0"],
             ["default via 192.168.64.1 dev eth0"],
             ["nameserver 10.255.255.254"]);
 
-        Assert.True(NftablesRuleset.TryRender(HardNetworkPolicy.Phase10, topology, out var ruleset, out _));
+        Assert.True(
+            NftablesRuleset.TryRender(
+                HardNetworkPolicy.Phase10,
+                topology,
+                organizations.Select(Attachment).ToList(),
+                out var ruleset,
+                out _));
 
         return string.Join(
             '\n',
             ruleset!.Text
                 .Split('\n')
                 .Where(l => !l.StartsWith("delete table", StringComparison.Ordinal))
-                .Where(l => l.Trim() != "table inet corex_hard {}"));
+                .Where(l => l.Trim() != $"table inet {NftablesRuleset.TableName} {{}}"));
     }
 
-    private static async Task<IReadOnlyList<ReadinessCheck>> ProbeAsync(ScriptedExecutionEnvironment script) =>
-        await WslHardNetworkProbe.Scripted(script).ProbeAsync(Profile(), CancellationToken.None);
+    private static async Task<IReadOnlyList<ReadinessCheck>> VerifyAsync(
+        ScriptedExecutionEnvironment script, string organization) =>
+        await WslHardNetworkFabric.Scripted(script).VerifyAsync(Profile(), organization, CancellationToken.None);
 
     private static ReadinessCheck Check(IReadOnlyList<ReadinessCheck> checks, string id) =>
         checks.Single(c => c.Id == id);
 
-    // -- topology ------------------------------------------------------------------------------
+    // -- the whole plane -------------------------------------------------------------------------
 
-    /// <summary>The supported arrangement is recognised from the machine, not from a config key.</summary>
+    /// <summary>A plane that matches its policy, with a namespace and a correct launch, passes.</summary>
     [Fact]
-    public void A_private_subnet_behind_a_gateway_is_the_supported_arrangement()
+    public async Task A_correct_plane_and_attachment_passes()
     {
-        var topology = HardNetworkTopology.Classify(
-            ["2: eth0 inet 192.168.66.185/20 scope global eth0"],
-            ["default via 192.168.64.1 dev eth0"],
-            ["nameserver 10.255.255.254"]);
+        var a = Attachment(OrgA);
 
-        Assert.Equal(HardNetworkMode.Nat, topology.Mode);
-        Assert.Equal("192.168.64.1", topology.DefaultGateway);
-        Assert.Equal("10.255.255.254", topology.DnsEndpoint);
+        var checks = await VerifyAsync(
+            Machine([a.TrustedInterface], [OrgA], holderFor: OrgA, launchedInto: "net:[4026532222]"),
+            OrgA);
+
+        Assert.All(checks, c => Assert.Equal(ReadinessStatus.Pass, c.Status));
     }
 
-    /// <summary>
-    /// An environment with no gateway of its own is the shared-interface arrangement.
-    ///
-    /// Unsupported rather than unusual: with the host's own interfaces the control plane sits at
-    /// an address no destination rule denies, so the policy would be absent rather than weaker.
-    /// </summary>
+    /// <summary>Every fabric answer is given, so none can be quietly missing.</summary>
     [Fact]
-    public void An_environment_with_no_gateway_is_unsupported()
+    public async Task Every_fabric_check_is_answered()
     {
-        var topology = HardNetworkTopology.Classify(
-            ["2: eth0 inet 192.168.0.101/24 scope global eth0"],
-            ["192.168.0.0/24 dev eth0 scope link"],
-            ["nameserver 127.0.0.53"]);
-
-        Assert.Equal(HardNetworkMode.Mirrored, topology.Mode);
-    }
-
-    /// <summary>A gateway that is one of the environment's own addresses is the same shape.</summary>
-    [Fact]
-    public void An_environment_that_is_its_own_gateway_is_unsupported()
-    {
-        var topology = HardNetworkTopology.Classify(
-            ["2: eth0 inet 192.168.0.101/24 scope global eth0"],
-            ["default via 192.168.0.101 dev eth0"],
-            []);
-
-        Assert.Equal(HardNetworkMode.Mirrored, topology.Mode);
-    }
-
-    /// <summary>Nothing measurable is Unknown, and Unknown is never ready.</summary>
-    [Fact]
-    public void An_environment_that_reports_nothing_is_unknown()
-    {
-        var topology = HardNetworkTopology.Classify([], [], []);
-
-        Assert.Equal(HardNetworkMode.Unknown, topology.Mode);
-    }
-
-    // -- the probe -----------------------------------------------------------------------------
-
-    /// <summary>Every network check is answered, so none of them can be quietly missing.</summary>
-    [Fact]
-    public async Task Every_network_check_is_answered()
-    {
-        var checks = await ProbeAsync(Environment(withPolicy: false));
+        var checks = await VerifyAsync(Machine([], []), OrgA);
 
         Assert.Equal(
-            NetworkChecks.Order(StringComparer.Ordinal),
-            checks.Select(c => c.Id).Where(NetworkChecks.Contains).Order(StringComparer.Ordinal));
-
-        // Including the control plane, which the network has its own answer for.
-        Assert.Contains(checks, c => c.Id == HardIsolationChecks.ControlPlaneUnreachable);
+            FabricChecks.Order(StringComparer.Ordinal),
+            checks.Select(c => c.Id).Order(StringComparer.Ordinal));
     }
 
     /// <summary>
-    /// A policy that is not loaded is a failure, not an absence.
+    /// A table that survived a restart its interfaces did not is a failure, not a pass.
     ///
-    /// The environment in this case has no policy engine and no table. Reporting that as unknown
-    /// would be defensible and wrong: nothing is filtering, and that is a fact, not a gap.
+    /// The most dangerous shape measured on this platform: the policy is machine state that outlives
+    /// the namespaces and links it names, so a table can list exactly the expected rules while
+    /// classifying nothing at all. A check that compared only the text would report enforcement.
     /// </summary>
     [Fact]
-    public async Task An_environment_with_no_loaded_policy_fails()
+    public async Task A_stale_table_whose_interfaces_are_gone_fails()
     {
-        var checks = await ProbeAsync(Environment(withPolicy: false));
+        var checks = await VerifyAsync(Machine([], [OrgA], holderFor: OrgA), OrgA);
+
+        var fabric = Check(checks, HardIsolationChecks.NetworkFabricReady);
+
+        Assert.Equal(ReadinessStatus.Fail, fabric.Status);
+        Assert.Contains("no longer has", fabric.Detail, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// An attachment the policy does not name is a failure, because nothing would filter it.
+    ///
+    /// The cost of not being able to default to drop. On a shared plane the chain policy has to be
+    /// permissive, so an interface nobody named is an interface with no boundary - and it would
+    /// look exactly like a working one from inside.
+    /// </summary>
+    [Fact]
+    public async Task An_attachment_no_rule_names_fails()
+    {
+        var a = Attachment(OrgA);
+        var b = Attachment(OrgB);
+
+        var checks = await VerifyAsync(
+            Machine([a.TrustedInterface, b.TrustedInterface], [OrgA], holderFor: OrgA), OrgA);
+
+        var fabric = Check(checks, HardIsolationChecks.NetworkFabricReady);
+
+        Assert.Equal(ReadinessStatus.Fail, fabric.Status);
+        Assert.Contains(b.TrustedInterface, fabric.Detail, StringComparison.Ordinal);
+        Assert.Contains("unfiltered", fabric.Detail, StringComparison.Ordinal);
+    }
+
+    /// <summary>A plane with no policy at all fails rather than reporting nothing to check.</summary>
+    [Fact]
+    public async Task A_plane_with_no_policy_fails()
+    {
+        var a = Attachment(OrgA);
 
         Assert.Equal(
             ReadinessStatus.Fail,
-            Check(checks, HardIsolationChecks.NetworkPolicyEnforced).Status);
+            Check(
+                await VerifyAsync(Machine([a.TrustedInterface], [], holderFor: OrgA), OrgA),
+                HardIsolationChecks.NetworkFabricReady).Status);
     }
 
+    /// <summary>A plane with a policy and no attachments at all is not a boundary either.</summary>
+    [Fact]
+    public async Task A_plane_with_no_attachments_fails() =>
+        Assert.Equal(
+            ReadinessStatus.Fail,
+            Check(await VerifyAsync(Machine([], []), OrgA), HardIsolationChecks.NetworkFabricReady).Status);
+
+    // -- one organization cannot answer for another ----------------------------------------------
+
     /// <summary>
-    /// A loaded policy that is the expected one passes, which is what makes the failure above mean
-    /// something.
+    /// Another organization's plane does not make this organization ready.
     ///
-    /// Without this the check would be satisfied by an implementation that failed unconditionally.
+    /// The single most important assertion in the file. Every environment sees the same table, so a
+    /// check that stopped at the policy would report the same answer for an organization that has
+    /// an attachment and one that has none at all.
     /// </summary>
     [Fact]
-    public async Task An_environment_with_the_expected_policy_passes_that_check()
+    public async Task One_organizations_attachment_does_not_satisfy_another()
     {
-        var checks = await ProbeAsync(Environment(withPolicy: true));
+        var b = Attachment(OrgB);
 
-        var policy = Check(checks, HardIsolationChecks.NetworkPolicyEnforced);
+        // The plane is perfectly correct - for B.
+        var machine = Machine([b.TrustedInterface], [OrgB], holderFor: OrgB, launchedInto: "net:[4026532222]");
 
-        Assert.Equal(ReadinessStatus.Pass, policy.Status);
+        var forB = await VerifyAsync(machine, OrgB);
+
+        Assert.All(forB, c => Assert.Equal(ReadinessStatus.Pass, c.Status));
+
+        var forA = await VerifyAsync(machine, OrgA);
+
+        Assert.Equal(
+            ReadinessStatus.Fail, Check(forA, HardIsolationChecks.OrgNetworkNamespaceReady).Status);
+        Assert.Equal(
+            ReadinessStatus.Fail, Check(forA, HardIsolationChecks.OrgNetworkAttachmentReady).Status);
     }
 
+    // -- the organization's own namespace --------------------------------------------------------
+
+    /// <summary>An organization with no holder has no namespace, and says so.</summary>
+    [Fact]
+    public async Task An_organization_with_no_holder_fails()
+    {
+        var a = Attachment(OrgA);
+
+        var namespaceCheck = Check(
+            await VerifyAsync(Machine([a.TrustedInterface], [OrgA]), OrgA),
+            HardIsolationChecks.OrgNetworkNamespaceReady);
+
+        Assert.Equal(ReadinessStatus.Fail, namespaceCheck.Status);
+        Assert.Contains("no network boundary of its own", namespaceCheck.Detail, StringComparison.Ordinal);
+    }
+
+    /// <summary>A namespace with no link into it is not an attachment.</summary>
+    [Fact]
+    public async Task A_namespace_with_no_link_is_not_attached()
+    {
+        var attachment = Check(
+            await VerifyAsync(Machine([], [], holderFor: OrgA), OrgA),
+            HardIsolationChecks.OrgNetworkAttachmentReady);
+
+        Assert.Equal(ReadinessStatus.Fail, attachment.Status);
+        Assert.Contains("no link into it", attachment.Detail, StringComparison.Ordinal);
+    }
+
+    // -- where a workload really lands -----------------------------------------------------------
+
     /// <summary>
-    /// A table that is loaded but is not the Hub's policy fails.
+    /// A launch that lands in the wrong namespace fails, however healthy everything else looks.
     ///
-    /// The worst of the three states. Nothing short of comparing the contents would notice: the
-    /// table exists, it is named correctly, and every lighter check would report enforcement.
+    /// Measured on this platform: a launch mechanism was observed silently substituting a fresh
+    /// empty namespace when the intended one was missing. "The unit started" is not evidence of
+    /// starting in the right place, so the kernel identity is compared instead.
     /// </summary>
     [Fact]
-    public async Task A_table_that_is_not_the_expected_policy_fails()
+    public async Task A_workload_that_lands_in_the_wrong_namespace_fails()
     {
-        var script = Environment(withPolicy: false);
+        var a = Attachment(OrgA);
 
-        script.AnswerPrefix(
-            "/usr/sbin/nft list table ",
-            RenderedPolicy().Replace("ip daddr 10.0.0.0/8 drop", "ip daddr 10.0.0.0/8 accept", StringComparison.Ordinal));
+        var attachment = Check(
+            await VerifyAsync(
+                Machine([a.TrustedInterface], [OrgA], holderFor: OrgA, launchedInto: "net:[4026539999]"),
+                OrgA),
+            HardIsolationChecks.OrgNetworkAttachmentReady);
 
-        var checks = await ProbeAsync(script);
+        Assert.Equal(ReadinessStatus.Fail, attachment.Status);
+        Assert.Contains("starting is not evidence", attachment.Detail, StringComparison.Ordinal);
+    }
+
+    /// <summary>A launch that cannot happen at all fails rather than being read as absence.</summary>
+    [Fact]
+    public async Task A_launch_that_fails_closed_is_not_an_attachment()
+    {
+        var a = Attachment(OrgA);
 
         Assert.Equal(
             ReadinessStatus.Fail,
-            Check(checks, HardIsolationChecks.NetworkPolicyEnforced).Status);
+            Check(
+                await VerifyAsync(Machine([a.TrustedInterface], [OrgA], holderFor: OrgA), OrgA),
+                HardIsolationChecks.OrgNetworkAttachmentReady).Status);
+    }
+
+    // -- refusal at the edges ---------------------------------------------------------------------
+
+    /// <summary>An organization whose name derives nothing usable is unknown, never ready.</summary>
+    [Fact]
+    public async Task An_unnameable_organization_is_unestablished()
+    {
+        var checks = await WslHardNetworkFabric
+            .Scripted(Machine([], []))
+            .VerifyAsync(Profile(), "   x", CancellationToken.None);
+
+        Assert.All(checks, c => Assert.NotEqual(ReadinessStatus.Pass, c.Status));
+    }
+
+    // -- what release does to the machine ----------------------------------------------------------
+
+    /// <summary>
+    /// Releasing the last attachment does not reset a global value the Hub never set.
+    ///
+    /// Forwarding belongs to the machine. Turning it on when it was off is a change this build made
+    /// and should undo; finding it already on is somebody else's decision, and resetting it on the
+    /// way out would be this build reconfiguring an operator's machine because it happened to be
+    /// finished with it.
+    /// </summary>
+    [Fact]
+    public async Task Release_leaves_a_global_value_the_hub_did_not_set()
+    {
+        var script = Machine([], []);
+
+        await WslHardNetworkFabric.Scripted(script).ReleaseAsync(Profile(), OrgA, CancellationToken.None);
+
+        Assert.DoesNotContain(
+            script.Calls,
+            c => c.Count > 1 && c[0].EndsWith("sysctl", StringComparison.Ordinal));
     }
 
     /// <summary>
-    /// A shared-interface environment fails the mode check, and the probe is what says so.
+    /// Releasing one of two attachments leaves the other one classified.
     ///
-    /// The classification is tested on its own elsewhere; this is the wiring. A probe that
-    /// classified correctly and then reported the answer as acceptable would leave the
-    /// classification doing nothing at all.
+    /// The plane is shared, so giving up an attachment means re-rendering the policy for the ones
+    /// that remain - not deleting it. A release that tore the table down would take the surviving
+    /// organization's boundary with it.
     /// </summary>
     [Fact]
-    public async Task A_shared_interface_environment_fails_the_mode_check()
+    public async Task Releasing_one_attachment_does_not_tear_down_the_plane()
     {
-        var script = Environment(withPolicy: false);
+        var b = Attachment(OrgB);
 
-        // The host's own address, and no gateway of its own.
-        script.Answer("/usr/sbin/ip -o -4 addr", "2: eth0 inet 192.168.0.101/24 scope global eth0");
-        script.Answer("/usr/sbin/ip -4 route", "192.168.0.0/24 dev eth0 scope link");
+        var script = Machine([b.TrustedInterface], [OrgA, OrgB], holderFor: OrgA);
 
-        var checks = await ProbeAsync(script);
+        await WslHardNetworkFabric.Scripted(script).ReleaseAsync(Profile(), OrgA, CancellationToken.None);
 
-        var mode = Check(checks, HardIsolationChecks.NetworkModeSupported);
-
-        Assert.Equal(ReadinessStatus.Fail, mode.Status);
-
-        // And nothing is rendered for it, so the policy check cannot pass either.
-        Assert.NotEqual(
-            ReadinessStatus.Pass,
-            Check(checks, HardIsolationChecks.NetworkPolicyEnforced).Status);
+        // The Hub's tables are not deleted while somebody is still attached.
+        Assert.DoesNotContain(
+            script.Calls,
+            c => c.Count > 2 && c[1] == "delete" && c[2] == "table");
     }
 
-    /// <summary>
-    /// An environment that cannot be classified fails closed too.
-    ///
-    /// Unknown rather than Fail, because nothing was established - and unknown is not ready, which
-    /// is the only property that matters here.
-    /// </summary>
-    [Fact]
-    public async Task An_environment_that_reports_nothing_leaves_the_mode_unknown()
-    {
-        var script = Environment(withPolicy: false);
+    // -- readiness as a whole ----------------------------------------------------------------------
 
-        script.Answer("/usr/sbin/ip -o -4 addr", string.Empty);
-        script.Answer("/usr/sbin/ip -4 route", string.Empty);
-
-        Assert.Equal(
-            ReadinessStatus.Unknown,
-            Check(await ProbeAsync(script), HardIsolationChecks.NetworkModeSupported).Status);
-    }
-
-    /// <summary>
-    /// An agent that reaches the Hub fails the control plane check, and fails it loudly.
-    ///
-    /// The one case the whole probe exists for, and the one no real machine here can produce: this
-    /// environment is scripted to hand back the Hub's own marker, which is what an agent would see
-    /// if the host were reachable. Without this test the verdict could be inverted and every other
-    /// assertion in the file would still hold.
-    /// </summary>
-    [Fact]
-    public async Task An_agent_that_reaches_the_hub_fails_the_control_plane_check()
-    {
-        var script = Environment(withPolicy: true);
-
-        // Whatever the agent is asked to reach, it gets the Hub's marker back.
-        script.AnswerPrefix("/usr/bin/nc ", "corex-hard-network-probe-marker");
-
-        var checks = await ProbeAsync(script);
-
-        var control = Check(checks, HardIsolationChecks.ControlPlaneUnreachable);
-        var loopback = Check(checks, HardIsolationChecks.HostLoopbackDisabled);
-
-        Assert.Equal(ReadinessStatus.Fail, control.Status);
-        Assert.Equal(ReadinessStatus.Fail, loopback.Status);
-
-        // And the diagnostic says which way in was open, because "somewhere" is not actionable.
-        Assert.Contains("loopback", control.Detail, StringComparison.OrdinalIgnoreCase);
-    }
-
-    /// <summary>
-    /// An agent that reaches only what the policy permits passes, which is the control.
-    ///
-    /// Without it the failure above would also be produced by an implementation that reported Fail
-    /// whenever anything answered at all.
-    /// </summary>
-    [Fact]
-    public async Task An_agent_that_reaches_only_the_resolver_passes()
-    {
-        var script = Environment(withPolicy: true);
-
-        // The permitted control answers; nothing the Hub is listening on does.
-        script.Answer("/usr/bin/nc -w 3 10.255.255.254 53", string.Empty);
-
-        var checks = await ProbeAsync(script);
-
-        Assert.Equal(
-            ReadinessStatus.Pass,
-            Check(checks, HardIsolationChecks.ControlPlaneUnreachable).Status);
-
-        Assert.Equal(
-            ReadinessStatus.Pass,
-            Check(checks, HardIsolationChecks.HostLoopbackDisabled).Status);
-    }
-
-    /// <summary>
-    /// A peer that does not exist cannot be unreachable.
-    ///
-    /// This build knows one environment. Reporting peer separation from that would be asserting a
-    /// negative about something that was never there to refuse.
-    /// </summary>
-    [Fact]
-    public async Task Peer_network_separation_is_unknown_in_this_build()
-    {
-        foreach (var withPolicy in new[] { false, true })
-        {
-            var checks = await ProbeAsync(Environment(withPolicy));
-
-            Assert.Equal(
-                ReadinessStatus.Unknown,
-                Check(checks, HardIsolationChecks.PeerNetworkUnreachable).Status);
-        }
-    }
-
-    /// <summary>
-    /// A silent network is unknown, not isolated.
-    ///
-    /// In this environment nothing answers a reachability attempt - including the resolver the
-    /// policy permits. An implementation that counted the refusals and stopped there would hand
-    /// out its strongest verdict for its weakest reason.
-    /// </summary>
-    [Fact]
-    public async Task An_environment_that_reaches_nothing_at_all_is_unknown_rather_than_isolated()
-    {
-        var checks = await ProbeAsync(Environment(withPolicy: true));
-
-        Assert.Equal(
-            ReadinessStatus.Unknown,
-            Check(checks, HardIsolationChecks.ControlPlaneUnreachable).Status);
-
-        Assert.Equal(
-            ReadinessStatus.Unknown,
-            Check(checks, HardIsolationChecks.HostLoopbackDisabled).Status);
-    }
-
-    /// <summary>An environment that inherited no proxy says so; the value is never read.</summary>
-    [Fact]
-    public async Task An_environment_with_no_inherited_proxy_passes()
-    {
-        var checks = await ProbeAsync(Environment(withPolicy: true));
-
-        Assert.Equal(ReadinessStatus.Pass, Check(checks, HardIsolationChecks.ProxyNotInherited).Status);
-    }
-
-    /// <summary>
-    /// An inherited proxy fails, and the diagnostic names the variable and not its value.
-    ///
-    /// A proxy setting can carry a credential. A diagnostic that printed one would put it in every
-    /// log that ever captured this output.
-    /// </summary>
-    [Fact]
-    public async Task An_inherited_proxy_fails_without_printing_its_value()
-    {
-        var script = Environment(withPolicy: true);
-
-        script.Answer("/usr/bin/printenv", "PATH=/usr/bin\nHTTPS_PROXY=http://user:secret@host:3128");
-
-        var checks = await ProbeAsync(script);
-        var proxy = Check(checks, HardIsolationChecks.ProxyNotInherited);
-
-        Assert.Equal(ReadinessStatus.Fail, proxy.Status);
-        Assert.Contains("HTTPS_PROXY", proxy.Detail, StringComparison.Ordinal);
-        Assert.DoesNotContain("secret", proxy.Detail, StringComparison.Ordinal);
-        Assert.DoesNotContain("3128", proxy.Detail, StringComparison.Ordinal);
-    }
-
-    // -- readiness as a whole -------------------------------------------------------------------
-
-    /// <summary>
-    /// The network checks are required, so an unanswered one keeps the environment out.
-    ///
-    /// Adding a check that nothing requires would be adding a diagnostic, not a boundary.
-    /// </summary>
+    /// <summary>Every network truth is required, so an unanswered one keeps the environment out.</summary>
     [Fact]
     public void Every_network_check_is_required()
     {
-        foreach (var id in NetworkChecks)
+        foreach (var id in FabricChecks.Concat(ProbeChecks))
         {
             Assert.Contains(id, HardIsolationChecks.Required);
         }
     }
 
     /// <summary>
-    /// A build where every other check passes is still not ready while a network answer is unknown.
+    /// The retired check is gone rather than left behind as a summary nobody reads.
     ///
-    /// The point of the whole slice in one assertion: the network is not an optional dimension of
-    /// hard isolation, and an environment cannot be admitted with it unestablished.
+    /// It meant "this distribution has its own root policy", which is false on a platform where
+    /// every distribution shares one. A check that cannot be true should not be answerable.
     /// </summary>
+    [Fact]
+    public void The_invalid_policy_check_no_longer_exists() =>
+        Assert.DoesNotContain("network.policy.enforced", HardIsolationChecks.Required);
+
+    /// <summary>An environment is not ready while any network answer is unknown.</summary>
     [Fact]
     public void An_environment_is_not_ready_while_a_network_answer_is_unknown()
     {
-        foreach (var unanswered in NetworkChecks)
+        foreach (var unanswered in FabricChecks.Concat(ProbeChecks))
         {
             var checks = HardIsolationChecks.Required
                 .Select(id => id == unanswered

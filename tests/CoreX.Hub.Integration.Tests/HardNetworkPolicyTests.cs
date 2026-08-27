@@ -6,29 +6,41 @@ using CoreX.Hub.Composition.HardNetwork;
 namespace CoreX.Hub.Integration.Tests;
 
 /// <summary>
-/// What the network policy says, and what the rendered ruleset does with it.
+/// How an organization is named on the trusted plane, and what the plane's policy says about it.
 ///
-/// None of this needs a machine. That is deliberate: the policy is the part that has to be right
-/// before enforcement is worth attempting, and the failure modes worth catching here are the ones
-/// that would still load, still look like a firewall, and still deny the wrong set - a permissive
-/// default, an allowance placed where it can never be reached, a denial that swallows the route
+/// None of this needs a machine. That is deliberate: the naming and the policy are the parts that
+/// have to be right before anything is built, and the failure modes worth catching here are the
+/// ones that would still load and still look like a firewall - two organizations sharing an
+/// interface, an allowance placed where it can never be reached, a denial that swallows the route
 /// out, or a table whose identity does not change when its contents do.
 /// </summary>
 public sealed class HardNetworkPolicyTests
 {
+    private const string OrgA = "acme";
+    private const string OrgB = "globex";
+
     private static HardNetworkTopology Nat(string resolver = "10.255.255.254") => new()
     {
         Mode = HardNetworkMode.Nat,
         DnsEndpoint = resolver,
         DefaultGateway = "192.168.64.1",
+        Uplink = "eth0",
         LocalAddresses = ["192.168.66.185"],
         Detail = "fixture",
     };
 
-    private static NftablesRuleset Render(HardNetworkTopology topology)
+    private static NftablesRuleset Render(params string[] organizations) =>
+        Render(Nat(), organizations);
+
+    private static NftablesRuleset Render(HardNetworkTopology topology, params string[] organizations)
     {
         Assert.True(
-            NftablesRuleset.TryRender(HardNetworkPolicy.Phase10, topology, out var ruleset, out var problem),
+            NftablesRuleset.TryRender(
+                HardNetworkPolicy.Phase10,
+                topology,
+                organizations.Select(o => HardNetworkIdentity.Describe(o)).ToList(),
+                out var ruleset,
+                out var problem),
             problem);
 
         return ruleset!;
@@ -39,275 +51,352 @@ public sealed class HardNetworkPolicyTests
 
     private static int IndexOf(NftablesRuleset ruleset, string fragment)
     {
+        var index = Rules(ruleset).FindIndex(l => l.Contains(fragment, StringComparison.Ordinal));
+
+        Assert.True(index >= 0, fragment);
+        return index;
+    }
+
+    // -- identity ------------------------------------------------------------------------------
+
+    /// <summary>
+    /// Every name an organization gets comes from its own identity, and always the same one.
+    ///
+    /// Derived rather than allocated because the plane is machine state the platform destroys on
+    /// its own schedule. A name that had to be remembered somewhere could disagree with what is
+    /// actually loaded, and the disagreement would be invisible.
+    /// </summary>
+    [Fact]
+    public void An_organizations_names_are_derived_and_stable()
+    {
+        var first = HardNetworkIdentity.Describe(OrgA);
+        var second = HardNetworkIdentity.Describe(OrgA);
+
+        Assert.Equal(first, second);
+        Assert.Equal(first, HardNetworkIdentity.Describe(" ACME "));
+
+        Assert.StartsWith("cxr", first.TrustedInterface, StringComparison.Ordinal);
+        Assert.StartsWith("cxo", first.NamespaceInterface, StringComparison.Ordinal);
+        Assert.EndsWith(".service", HardNetworkIdentity.HolderUnit(first.AttachmentId), StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Every derived name fits what the kernel will hold, and carries no operator text.
+    ///
+    /// An organization's display name can contain anything at all; an interface name cannot, and
+    /// a name that was truncated to fit would silently become another organization's.
+    /// </summary>
+    [Theory]
+    [InlineData("acme")]
+    [InlineData("a-very-long-organization-name-that-nobody-would-choose")]
+    [InlineData("Ünïcode Örg")]
+    [InlineData("org with spaces")]
+    public void Every_derived_name_fits_the_kernels_limit(string organization)
+    {
+        Assert.True(HardNetworkIdentity.IsNameable(organization));
+
+        var attachment = HardNetworkIdentity.Describe(organization);
+
+        Assert.True(attachment.TrustedInterface.Length < HardNetworkIdentity.MaximumInterfaceNameLength);
+        Assert.True(attachment.NamespaceInterface.Length < HardNetworkIdentity.MaximumInterfaceNameLength);
+        Assert.All(attachment.TrustedInterface, c => Assert.True(char.IsAsciiLetterOrDigit(c)));
+    }
+
+    /// <summary>
+    /// An attachment can be recovered from the interface it left behind.
+    ///
+    /// This is what lets a Hub process reconcile a plane it did not build, which is not a nicety:
+    /// the platform destroys the plane on its own schedule and the next process to run is the one
+    /// that has to make sense of what is there.
+    /// </summary>
+    [Fact]
+    public void An_attachment_is_recoverable_from_its_interface()
+    {
+        var attachment = HardNetworkIdentity.Describe(OrgA);
+
+        var identity = HardNetworkIdentity.IdentityOf(attachment.TrustedInterface);
+
+        Assert.Equal(attachment.AttachmentId, identity);
+        Assert.Equal(attachment, HardNetworkIdentity.FromAttachmentId(identity!));
+
+        // And a name that is not one of ours recovers nothing.
+        Assert.Null(HardNetworkIdentity.IdentityOf("eth0"));
+        Assert.Null(HardNetworkIdentity.IdentityOf("cxrZZZZZZZZ"));
+        Assert.Null(HardNetworkIdentity.IdentityOf(null));
+    }
+
+    /// <summary>
+    /// Two organizations get different places on the plane, and the same one twice does not.
+    ///
+    /// On a shared plane a collision is not untidiness. Two organizations on one interface means
+    /// one organization's traffic is classified as the other's.
+    /// </summary>
+    [Fact]
+    public void Two_organizations_do_not_share_a_place_on_the_plane()
+    {
+        var a = HardNetworkIdentity.Describe(OrgA);
+        var b = HardNetworkIdentity.Describe(OrgB);
+
+        Assert.NotEqual(a.TrustedInterface, b.TrustedInterface);
+        Assert.NotEqual(a.NamespaceInterface, b.NamespaceInterface);
+        Assert.NotEqual(a.Subnet, b.Subnet);
+        Assert.NotEqual(a.GatewayAddress, b.GatewayAddress);
+
+        Assert.False(HardNetworkIdentity.Collides(OrgA, OrgB));
+        Assert.False(HardNetworkIdentity.Collides(OrgA, OrgA));
+    }
+
+    /// <summary>
+    /// An attachment's subnet, gateway and namespace address describe the same organization.
+    ///
+    /// They come from one derivation on purpose. Two independent allocations could drift, and an
+    /// attachment whose address said one thing and whose interface said another would be a
+    /// boundary that classified traffic one way and routed it the other.
+    /// </summary>
+    [Fact]
+    public void An_attachments_addresses_and_interface_agree()
+    {
+        var attachment = HardNetworkIdentity.Describe(OrgA);
+
+        var network = attachment.Subnet.Split('/')[0];
+        var prefix = string.Join('.', network.Split('.').Take(3));
+
+        Assert.StartsWith("10.79.", network, StringComparison.Ordinal);
+        Assert.Equal("30", attachment.Subnet.Split('/')[1]);
+        Assert.StartsWith(prefix + ".", attachment.GatewayAddress, StringComparison.Ordinal);
+        Assert.StartsWith(prefix + ".", attachment.NamespaceAddress, StringComparison.Ordinal);
+        Assert.NotEqual(attachment.GatewayAddress, attachment.NamespaceAddress);
+    }
+
+    /// <summary>
+    /// A rendering that would put two organizations on one interface is refused.
+    ///
+    /// Not repaired by picking the next free slot: a Hub that reallocated quietly would be a Hub
+    /// whose boundary depended on the order things were started in.
+    /// </summary>
+    [Fact]
+    public void A_policy_with_two_attachments_on_one_interface_is_refused()
+    {
+        var attachment = HardNetworkIdentity.Describe(OrgA);
+
+        Assert.False(
+            NftablesRuleset.TryRender(
+                HardNetworkPolicy.Phase10, Nat(), [attachment, attachment], out var ruleset, out var problem));
+
+        Assert.Null(ruleset);
+        Assert.Contains("classify one organization's traffic as another", problem!, StringComparison.Ordinal);
+    }
+
+    // -- posture -------------------------------------------------------------------------------
+
+    /// <summary>
+    /// The chain policy is not a denial, and every attachment ends in one anyway.
+    ///
+    /// These chains sit in the namespace the operator's own environment uses, so a default drop
+    /// would take the developer's network down. The denial is scoped instead - which is safe for
+    /// traffic that arrives on a Hub interface, and is exactly why the fabric is only ready when
+    /// every present interface is also a named one.
+    /// </summary>
+    [Fact]
+    public void The_chain_policy_is_permissive_and_every_attachment_still_ends_in_a_drop()
+    {
+        var ruleset = Render(OrgA, OrgB);
         var rules = Rules(ruleset);
 
-        var index = rules
-            .Select((line, i) => (line, i))
-            .Where(x => x.line.Contains(fragment, StringComparison.Ordinal))
-            .Select(x => x.i)
-            .ToList();
+        Assert.DoesNotContain(rules, l => l.Contains("policy drop;", StringComparison.Ordinal));
+        Assert.Equal(2, rules.Count(l => l.Contains("policy accept;", StringComparison.Ordinal)));
 
-        Assert.NotEmpty(index);
-        return index[0];
-    }
-
-    // -- the policy itself --------------------------------------------------------------------
-
-    /// <summary>
-    /// The policy is capabilities and address ranges, and there is one of it.
-    ///
-    /// A second instance would be a second boundary, and the one an organization got would depend
-    /// on which code path built it.
-    /// </summary>
-    [Fact]
-    public void The_policy_is_a_single_frozen_instance()
-    {
-        Assert.Same(HardNetworkPolicy.Phase10, HardNetworkPolicy.Phase10);
-
-        Assert.True(HardNetworkPolicy.Phase10.AllowDns);
-        Assert.True(HardNetworkPolicy.Phase10.AllowPublicHttps);
-
-        // Every denial carries a reason, so a later reader can judge whether it is load bearing.
-        Assert.All(HardNetworkPolicy.Phase10.DeniedDestinations, d => Assert.NotEmpty(d.Reason));
-        Assert.All(HardNetworkPolicy.Phase10.DeniedDestinationsV6, d => Assert.NotEmpty(d.Reason));
-    }
-
-    /// <summary>
-    /// Every address family a workload could use is closed, not just the one in use today.
-    ///
-    /// A boundary that held only for IPv4 would fail the first time an environment routed IPv6,
-    /// silently and in the permissive direction.
-    /// </summary>
-    [Theory]
-    [InlineData("10.0.0.0/8")]
-    [InlineData("172.16.0.0/12")]
-    [InlineData("192.168.0.0/16")]
-    [InlineData("100.64.0.0/10")]
-    [InlineData("169.254.0.0/16")]
-    [InlineData("127.0.0.0/8")]
-    public void Every_private_class_is_denied(string cidr) =>
-        Assert.Contains(HardNetworkPolicy.Phase10.DeniedDestinations, d => d.Cidr == cidr);
-
-    [Theory]
-    [InlineData("fc00::/7")]
-    [InlineData("fe80::/10")]
-    [InlineData("::1/128")]
-    public void Every_private_v6_class_is_denied(string cidr) =>
-        Assert.Contains(HardNetworkPolicy.Phase10.DeniedDestinationsV6, d => d.Cidr == cidr);
-
-    // -- default posture ----------------------------------------------------------------------
-
-    /// <summary>
-    /// Every chain starts from denial.
-    ///
-    /// The difference between "drop by default, allow these" and "allow by default, drop these" is
-    /// the difference between a rule nobody wrote being safe and being a hole. A future addition
-    /// to the machine's network stack is the case that decides it, and nobody will be reviewing
-    /// this file when that happens.
-    /// </summary>
-    [Fact]
-    public void Every_chain_starts_from_denial()
-    {
-        var ruleset = Render(Nat());
-
-        Assert.Equal(3, Rules(ruleset).Count(l => l.Contains("policy drop;", StringComparison.Ordinal)));
-
-        foreach (var hook in new[] { "hook output", "hook input", "hook forward" })
+        foreach (var organization in new[] { OrgA, OrgB })
         {
-            var chain = Rules(ruleset).Single(l => l.Contains(hook, StringComparison.Ordinal));
+            var iif = HardNetworkIdentity.Describe(organization).TrustedInterface;
 
-            Assert.Contains("policy drop;", chain, StringComparison.Ordinal);
+            // One in forward, one in input: nothing arriving on a Hub interface falls through.
+            Assert.Equal(2, rules.Count(l => l == $"iifname \"{iif}\" drop"));
+        }
+    }
+
+    /// <summary>
+    /// Nothing the policy says applies to an interface that is not the Hub's.
+    ///
+    /// The shared plane carries the developer's own traffic. A rule that matched anything else
+    /// would be this build quietly filtering somebody else's network.
+    /// </summary>
+    [Fact]
+    public void No_rule_touches_an_interface_that_is_not_a_hub_attachment()
+    {
+        var ruleset = Render(OrgA, OrgB);
+
+        foreach (var rule in Rules(ruleset).Where(l => l.StartsWith("iifname", StringComparison.Ordinal)))
+        {
+            var named = rule.Split('"')[1];
+
+            Assert.StartsWith("cxr", named, StringComparison.Ordinal);
         }
 
-        // And each chain also ends in an explicit drop, so the file reads as what it does.
-        Assert.Equal(3, Rules(ruleset).Count(l => l == "drop"));
+        Assert.DoesNotContain("eth0", ruleset.Text, StringComparison.Ordinal);
     }
 
-    /// <summary>Nothing is forwarded, because a workload is not a router.</summary>
+    /// <summary>Each organization is told apart by interface, never by the address it claims.</summary>
     [Fact]
-    public void The_forward_chain_permits_nothing()
+    public void Organizations_are_classified_by_interface_and_not_by_source_address()
     {
-        var rules = Rules(Render(Nat()));
+        var ruleset = Render(OrgA, OrgB);
 
-        var start = rules.FindIndex(l => l.Contains("hook forward", StringComparison.Ordinal));
+        Assert.DoesNotContain("saddr", ruleset.Text, StringComparison.Ordinal);
 
-        Assert.True(start > 0);
+        var a = HardNetworkIdentity.Describe(OrgA);
 
-        var chain = rules.Skip(start).TakeWhile(l => l != "}").ToList();
-
-        Assert.DoesNotContain(chain, l => l.Contains("accept", StringComparison.Ordinal));
+        Assert.DoesNotContain(a.NamespaceAddress, ruleset.Text, StringComparison.Ordinal);
     }
 
-    // -- ordering -----------------------------------------------------------------------------
+    /// <summary>Peers are denied to each other's interface, explicitly and in both directions.</summary>
+    [Fact]
+    public void Each_attachment_is_denied_to_every_other()
+    {
+        var ruleset = Render(OrgA, OrgB);
+
+        var a = HardNetworkIdentity.Describe(OrgA).TrustedInterface;
+        var b = HardNetworkIdentity.Describe(OrgB).TrustedInterface;
+
+        Assert.Contains(Rules(ruleset), l => l == $"iifname \"{a}\" oifname \"{b}\" drop");
+        Assert.Contains(Rules(ruleset), l => l == $"iifname \"{b}\" oifname \"{a}\" drop");
+    }
+
+    // -- ordering ------------------------------------------------------------------------------
 
     /// <summary>
-    /// The resolver allowance is reachable, which is only true because it precedes the denials.
+    /// The resolver allowance is reachable, which is only true because it precedes the drop.
     ///
-    /// The resolver is itself a private address. Placed after the private denials the rule would
-    /// load, read correctly and never match, and name resolution would fail in a way that looked
-    /// like a network problem rather than a policy one.
+    /// The resolver terminates on the trusted plane, so the input chain would otherwise swallow it
+    /// - the rule would load, read correctly and never match, and name resolution would fail in a
+    /// way that looked like a network problem rather than a policy one.
     /// </summary>
     [Fact]
-    public void The_resolver_allowance_precedes_the_private_denials()
+    public void The_resolver_allowance_precedes_the_input_denial()
     {
-        var ruleset = Render(Nat());
+        var ruleset = Render(OrgA);
+        var iif = HardNetworkIdentity.Describe(OrgA).TrustedInterface;
 
-        var dns = IndexOf(ruleset, "ip daddr 10.255.255.254 udp dport 53 accept");
-        var privateDenial = IndexOf(ruleset, "ip daddr 10.0.0.0/8 drop");
+        var dns = IndexOf(ruleset, $"iifname \"{iif}\" ip daddr 10.255.255.254 udp dport 53 accept");
+        var deny = Rules(ruleset).FindLastIndex(l => l == $"iifname \"{iif}\" drop");
 
-        Assert.True(dns < privateDenial);
+        Assert.True(dns < deny);
     }
 
     /// <summary>
-    /// The public allowance comes after every denial, which is what makes it "public".
+    /// The public allowance follows every denial, which is what makes it "public".
     ///
-    /// Placed first it would be an unrestricted outbound rule on one port - the host's own
-    /// services included - and would read exactly the same in review.
+    /// Placed first it would be unrestricted outbound on one port, the host's own services
+    /// included, and would read exactly the same in review.
     /// </summary>
     [Fact]
     public void The_public_allowance_follows_every_denial()
     {
-        var ruleset = Render(Nat());
+        var ruleset = Render(OrgA);
+        var iif = HardNetworkIdentity.Describe(OrgA).TrustedInterface;
 
-        var https = IndexOf(ruleset, "tcp dport 443 accept");
-
-        foreach (var denied in HardNetworkPolicy.Phase10.DeniedDestinations)
-        {
-            Assert.True(IndexOf(ruleset, $"ip daddr {denied.Cidr} drop") < https, denied.Cidr);
-        }
-
-        foreach (var denied in HardNetworkPolicy.Phase10.DeniedDestinationsV6)
-        {
-            Assert.True(IndexOf(ruleset, $"ip6 daddr {denied.Cidr} drop") < https, denied.Cidr);
-        }
-    }
-
-    /// <summary>
-    /// An established flow to a denied source is still denied.
-    ///
-    /// The conntrack allowance is what lets a permitted connection get its replies, and it is also
-    /// the classic way a boundary is bypassed: a flow opened before the policy existed, or to a
-    /// destination the policy denies, keeps working because it is "established". Placing the
-    /// source denials first is what stops that from being true.
-    /// </summary>
-    [Fact]
-    public void Established_traffic_is_permitted_only_after_the_source_denials()
-    {
-        var ruleset = Render(Nat());
-
-        var established = IndexOf(ruleset, "ct state established,related accept");
+        var https = IndexOf(ruleset, $"iifname \"{iif}\" tcp dport 443 accept");
 
         foreach (var denied in HardNetworkPolicy.Phase10.DeniedDestinations)
         {
-            Assert.True(IndexOf(ruleset, $"ip saddr {denied.Cidr} drop") < established, denied.Cidr);
+            Assert.True(IndexOf(ruleset, $"iifname \"{iif}\" ip daddr {denied.Cidr} drop") < https, denied.Cidr);
         }
+    }
 
-        // And it is an input concern only; nothing outbound is permitted for being established.
-        var rules = Rules(ruleset);
-        var outputStart = rules.FindIndex(l => l.Contains("hook output", StringComparison.Ordinal));
-        var inputStart = rules.FindIndex(l => l.Contains("hook input", StringComparison.Ordinal));
+    /// <summary>The Hub's own pool is inside a denied range, so no attachment is a public destination.</summary>
+    [Fact]
+    public void The_attachment_pool_is_not_a_public_destination()
+    {
+        Assert.StartsWith("10.79.", HardNetworkIdentity.Pool, StringComparison.Ordinal);
 
-        Assert.True(established > inputStart && inputStart > outputStart);
+        Assert.Contains(HardNetworkPolicy.Phase10.DeniedDestinations, d => d.Cidr == "10.0.0.0/8");
     }
 
     /// <summary>
-    /// Loopback is permitted as an interface, not as an address.
+    /// The uplink is named only where traffic is translated, never where it is classified.
     ///
-    /// A packet addressed to 127.0.0.1 that leaves by any other interface is how a bridged host
-    /// loopback appears. Permitting the address rather than the interface would let exactly that
-    /// through while looking like an ordinary local-traffic exemption.
+    /// The gateway and the uplink are how packets leave; denying a destination is not denying a
+    /// route, and conflating the two would either leave the host reachable or leave the workload
+    /// with no network at all.
     /// </summary>
     [Fact]
-    public void Loopback_is_permitted_by_interface_and_denied_by_address()
+    public void The_uplink_appears_only_in_translation()
     {
-        var ruleset = Render(Nat());
+        var ruleset = Render(OrgA);
 
-        Assert.Contains(Rules(ruleset), l => l == "oifname \"lo\" ip daddr 127.0.0.0/8 accept");
-
-        // The bare address is still denied for anything leaving another way.
-        Assert.Contains(Rules(ruleset), l => l == "ip daddr 127.0.0.0/8 drop");
-
-        Assert.True(
-            IndexOf(ruleset, "oifname \"lo\" ip daddr 127.0.0.0/8 accept")
-            < IndexOf(ruleset, "ip daddr 127.0.0.0/8 drop"));
+        Assert.DoesNotContain("eth0", ruleset.Text, StringComparison.Ordinal);
+        Assert.Contains("oifname \"eth0\" masquerade", ruleset.RenderNat(), StringComparison.Ordinal);
+        Assert.DoesNotContain("192.168.64.1", ruleset.Text, StringComparison.Ordinal);
     }
 
+    // -- translation ---------------------------------------------------------------------------
+
     /// <summary>
-    /// The gateway is never named as a destination, and is denied as one.
-    ///
-    /// The trap the whole design turns on. The default gateway is a private address and is still
-    /// the next hop for every public packet; denying a destination is not denying a route. A rule
-    /// that named the gateway specifically would either be redundant or would be somebody
-    /// confusing the two.
+    /// Translation is scoped to the Hub's own pool, which is the difference between adding a rule
+    /// and taking over the machine's networking.
     /// </summary>
     [Fact]
-    public void The_gateway_is_not_a_named_destination_but_its_range_is_denied()
+    public void Translation_covers_only_the_hubs_own_pool()
     {
-        var topology = Nat();
-        var ruleset = Render(topology);
+        var nat = Render(OrgA).RenderNat();
 
-        Assert.DoesNotContain(topology.DefaultGateway, ruleset.Text, StringComparison.Ordinal);
+        Assert.Contains($"ip saddr {HardNetworkIdentity.Pool}", nat, StringComparison.Ordinal);
+        Assert.Contains("policy accept;", nat, StringComparison.Ordinal);
+        Assert.DoesNotContain("flush", nat, StringComparison.Ordinal);
 
-        // It falls inside a denied range, so reaching the host directly is refused.
-        Assert.Contains(Rules(ruleset), l => l == "ip daddr 192.168.0.0/16 drop");
-
-        // And nothing in the ruleset matches on an interface for outbound public traffic, which
-        // is what would have coupled the denial to the route.
-        Assert.DoesNotContain("oifname \"eth", ruleset.Text, StringComparison.Ordinal);
+        // One rule, one table, and it is the Hub's.
+        Assert.Contains(NftablesRuleset.NatTableName, nat, StringComparison.Ordinal);
+        Assert.Single(nat.Split('\n'), l => l.Contains("masquerade", StringComparison.Ordinal));
     }
 
-    // -- refusal ------------------------------------------------------------------------------
+    // -- refusal -------------------------------------------------------------------------------
 
-    /// <summary>
-    /// An unsupported arrangement produces no ruleset at all.
-    ///
-    /// Rendering something anyway would produce a table that loads, looks enforced, and denies a
-    /// set that has nothing to do with where the host actually is.
-    /// </summary>
     [Theory]
     [InlineData(HardNetworkMode.Mirrored)]
     [InlineData(HardNetworkMode.Unknown)]
     public void An_unsupported_arrangement_renders_nothing(HardNetworkMode mode)
     {
-        var topology = Nat() with { Mode = mode };
-
-        Assert.False(
-            NftablesRuleset.TryRender(HardNetworkPolicy.Phase10, topology, out var ruleset, out var problem));
-
-        Assert.Null(ruleset);
-        Assert.NotNull(problem);
-    }
-
-    /// <summary>
-    /// An environment that reports no resolver renders nothing.
-    ///
-    /// The name resolution allowance has to name an address. Rendering without one would either
-    /// drop the allowance - leaving a workload that cannot resolve anything and no rule saying so -
-    /// or widen it to a range, which is a different policy than the one that was reviewed.
-    /// </summary>
-    [Fact]
-    public void An_environment_with_no_resolver_renders_nothing()
-    {
         Assert.False(
             NftablesRuleset.TryRender(
-                HardNetworkPolicy.Phase10, Nat(resolver: string.Empty), out var ruleset, out _));
+                HardNetworkPolicy.Phase10,
+                Nat() with { Mode = mode },
+                [HardNetworkIdentity.Describe(OrgA)],
+                out var ruleset,
+                out _));
 
         Assert.Null(ruleset);
     }
 
-    // -- identity -----------------------------------------------------------------------------
+    /// <summary>An environment that reports no resolver renders nothing rather than a wider rule.</summary>
+    [Fact]
+    public void An_environment_with_no_resolver_renders_nothing() =>
+        Assert.False(
+            NftablesRuleset.TryRender(
+                HardNetworkPolicy.Phase10,
+                Nat(resolver: string.Empty),
+                [HardNetworkIdentity.Describe(OrgA)],
+                out _,
+                out _));
 
-    /// <summary>
-    /// The same inputs always render the same bytes, because the bytes are the policy's name.
-    ///
-    /// Non-determinism here would not look like a bug. It would look like policy drift: the Hub
-    /// would report the loaded table as unexpected on every second run.
-    /// </summary>
+    /// <summary>Without an uplink there is nowhere to translate out of, so nothing is rendered.</summary>
+    [Fact]
+    public void An_environment_with_no_uplink_renders_nothing() =>
+        Assert.False(
+            NftablesRuleset.TryRender(
+                HardNetworkPolicy.Phase10,
+                Nat() with { Uplink = string.Empty },
+                [HardNetworkIdentity.Describe(OrgA)],
+                out _,
+                out _));
+
+    // -- identity of the policy ------------------------------------------------------------------
+
+    /// <summary>The same inputs always render the same bytes, because the bytes are the name.</summary>
     [Fact]
     public void Rendering_is_deterministic()
     {
-        var first = Render(Nat());
-        var second = Render(Nat());
+        var first = Render(OrgA, OrgB);
+        var second = Render(OrgB, OrgA);
 
         Assert.Equal(first.Text, second.Text);
         Assert.Equal(first.Identity, second.Identity);
@@ -317,34 +406,37 @@ public sealed class HardNetworkPolicyTests
             first.Identity);
     }
 
-    /// <summary>A different environment is a different policy, and says so.</summary>
+    /// <summary>A different set of attachments is a different policy, and says so.</summary>
     [Fact]
-    public void A_different_resolver_is_a_different_identity()
+    public void A_different_attachment_set_is_a_different_identity()
     {
-        Assert.NotEqual(
-            Render(Nat()).Identity,
-            Render(Nat(resolver: "10.255.255.53")).Identity);
+        Assert.NotEqual(Render(OrgA).Identity, Render(OrgA, OrgB).Identity);
+        Assert.NotEqual(Render(OrgA).Identity, Render(OrgB).Identity);
     }
 
-    // -- comparison ---------------------------------------------------------------------------
+    /// <summary>The interfaces a policy names are exactly the ones the fabric must hold.</summary>
+    [Fact]
+    public void A_policy_reports_the_interfaces_it_classifies()
+    {
+        var ruleset = Render(OrgA, OrgB);
 
-    /// <summary>
-    /// A table matches itself once the noise a loaded table adds is normalised away.
-    ///
-    /// The noise is real - the kernel assigns handles, and the preamble that replaces the table is
-    /// not part of the table - so the comparison has to tolerate it. The next test is the one that
-    /// matters: tolerating that must not become tolerating a changed rule.
-    /// </summary>
+        Assert.Equal(
+            new[] { OrgA, OrgB }.Select(o => HardNetworkIdentity.Describe(o).TrustedInterface).Order(StringComparer.Ordinal),
+            ruleset.TrustedInterfaces.Order(StringComparer.Ordinal));
+    }
+
+    // -- comparison ----------------------------------------------------------------------------
+
+    /// <summary>A table matches itself once the noise a loaded table adds is normalised away.</summary>
     [Fact]
     public void A_loaded_table_matches_what_was_rendered()
     {
-        var ruleset = Render(Nat());
+        var ruleset = Render(OrgA, OrgB);
 
-        // How nft prints it back: no preamble, indented differently, handles attached.
         var loaded = ruleset.Text
             .Split('\n')
             .Where(l => !l.StartsWith("delete table", StringComparison.Ordinal))
-            .Where(l => l.Trim() != "table inet corex_hard {}")
+            .Where(l => l.Trim() != $"table inet {NftablesRuleset.TableName} {{}}")
             .Select((l, i) => l.Trim().Length == 0 ? l : "\t\t" + l.Trim() + " # handle " + i)
             .ToList();
 
@@ -352,57 +444,63 @@ public sealed class HardNetworkPolicyTests
     }
 
     /// <summary>
-    /// One changed address is not noise, and the comparison says so.
+    /// One changed rule is not noise, and the comparison says so.
     ///
-    /// This is what stops normalisation from becoming the hole. A table that denies 10/8 and a
-    /// table that denies nothing of the sort must not compare equal because they are the same
-    /// shape.
+    /// This is what stops normalisation from becoming the hole. A table that denies a range and a
+    /// table that permits it must not compare equal because they are the same shape.
     /// </summary>
     [Theory]
     [InlineData("ip daddr 10.0.0.0/8 drop", "ip daddr 10.0.0.0/32 drop")]
-    [InlineData("ip daddr 192.168.0.0/16 drop", "ip daddr 192.168.0.0/16 accept")]
     [InlineData("tcp dport 443 accept", "tcp dport 1-65535 accept")]
-    [InlineData("policy drop;", "policy accept;")]
+    [InlineData("policy accept;", "policy drop;")]
+    [InlineData("udp dport 53 accept", "udp dport 53-1000 accept")]
     public void A_changed_rule_does_not_match(string original, string tampered)
     {
-        var ruleset = Render(Nat());
+        var ruleset = Render(OrgA);
 
-        var loaded = ruleset.Text
-            .Replace(original, tampered, StringComparison.Ordinal)
-            .Split('\n')
-            .ToList();
-
-        Assert.False(ruleset.Matches(loaded));
+        Assert.False(
+            ruleset.Matches(ruleset.Text.Replace(original, tampered, StringComparison.Ordinal).Split('\n')));
     }
 
-    /// <summary>A missing rule does not match either, which a shape comparison would allow.</summary>
+    /// <summary>A removed rule does not match either, which a shape comparison would allow.</summary>
     [Fact]
     public void A_removed_rule_does_not_match()
     {
-        var ruleset = Render(Nat());
+        var ruleset = Render(OrgA);
 
-        var loaded = ruleset.Text
-            .Split('\n')
-            .Where(l => !l.Contains("ip daddr 10.0.0.0/8 drop", StringComparison.Ordinal))
-            .ToList();
+        Assert.False(
+            ruleset.Matches(
+                ruleset.Text.Split('\n')
+                    .Where(l => !l.Contains("ip daddr 10.0.0.0/8 drop", StringComparison.Ordinal))
+                    .ToList()));
+    }
 
-        Assert.False(ruleset.Matches(loaded));
+    /// <summary>
+    /// A policy for one organization does not match a policy for another.
+    ///
+    /// The single most important comparison here. On a shared plane every organization sees the
+    /// same table, so a verification that could not tell two policies apart would let one
+    /// organization's boundary stand in for another's.
+    /// </summary>
+    [Fact]
+    public void One_organizations_policy_does_not_match_anothers()
+    {
+        Assert.False(Render(OrgA).Matches(Rules(Render(OrgB))));
+        Assert.False(Render(OrgA, OrgB).Matches(Rules(Render(OrgA))));
+        Assert.False(Render(OrgA).Matches(Rules(Render(OrgA, OrgB))));
     }
 
     /// <summary>The Hub's table is the only thing named, so an operator's rules survive.</summary>
     [Fact]
-    public void Only_the_hubs_own_table_is_named()
+    public void Only_the_hubs_own_tables_are_named()
     {
-        var ruleset = Render(Nat());
+        var ruleset = Render(OrgA);
 
-        Assert.Contains("table inet corex_hard", ruleset.Text, StringComparison.Ordinal);
         Assert.DoesNotContain("flush ruleset", ruleset.Text, StringComparison.Ordinal);
         Assert.DoesNotContain("flush table", ruleset.Text, StringComparison.Ordinal);
 
-        // The only delete is of the Hub's own table, and it is what makes the load a replacement
-        // rather than an append.
         var deletes = Rules(ruleset).Where(l => l.StartsWith("delete", StringComparison.Ordinal)).ToList();
 
-        Assert.Equal(["delete table inet corex_hard"], deletes);
+        Assert.Equal([$"delete table inet {NftablesRuleset.TableName}"], deletes);
     }
 }

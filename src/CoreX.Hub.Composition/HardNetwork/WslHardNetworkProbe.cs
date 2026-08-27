@@ -69,8 +69,6 @@ public sealed class WslHardNetworkProbe : IHardNetworkProbe
 
         var checks = new List<ReadinessCheck> { ModeCheck(topology) };
 
-        checks.Add(await PolicyCheckAsync(profile, topology, ct));
-
         var reach = await ReachAsync(profile, topology, ct);
 
         checks.Add(reach.HostLoopback);
@@ -85,7 +83,6 @@ public sealed class WslHardNetworkProbe : IHardNetworkProbe
     private static IReadOnlyList<ReadinessCheck> Every(string detail) =>
     [
         ReadinessCheck.Unknown(HardIsolationChecks.NetworkModeSupported, detail),
-        ReadinessCheck.Unknown(HardIsolationChecks.NetworkPolicyEnforced, detail),
         ReadinessCheck.Unknown(HardIsolationChecks.HostLoopbackDisabled, detail),
         ReadinessCheck.Unknown(HardIsolationChecks.ControlPlaneUnreachable, detail),
         ReadinessCheck.Unknown(HardIsolationChecks.ProxyNotInherited, detail),
@@ -119,47 +116,6 @@ public sealed class WslHardNetworkProbe : IHardNetworkProbe
         _ => ReadinessCheck.Unknown(HardIsolationChecks.NetworkModeSupported, topology.Detail),
     };
 
-    /// <summary>
-    /// Whether the table that is loaded is the one this build would write.
-    ///
-    /// Not "are there rules". A table that exists and says something else is worse than none at
-    /// all, because every diagnostic short of this one would report enforcement.
-    /// </summary>
-    private async Task<ReadinessCheck> PolicyCheckAsync(
-        HardIsolationProfile profile,
-        HardNetworkTopology topology,
-        CancellationToken ct)
-    {
-        if (!NftablesRuleset.TryRender(HardNetworkPolicy.Phase10, topology, out var expected, out var problem))
-        {
-            return ReadinessCheck.Unknown(
-                HardIsolationChecks.NetworkPolicyEnforced,
-                $"The policy could not be rendered for this environment, so nothing can be compared: {problem}");
-        }
-
-        var active = await RootAsync(profile, HardNetworkCommands.ActivePolicy(), ct);
-
-        if (!active.Ok)
-        {
-            // A missing tool and a missing table are both "the policy is not loaded". Neither is
-            // repaired here: installing a network policy engine is provisioning, and a diagnostic
-            // that provisioned would always be able to report success.
-            return ReadinessCheck.Failed(
-                HardIsolationChecks.NetworkPolicyEnforced,
-                $"The Hub's network policy table '{NftablesRuleset.TableFamily} {NftablesRuleset.TableName}' "
-                + "could not be read; it is not loaded, or the environment has no policy engine of its own. "
-                + "Providing one is an operator step, not something readiness does.");
-        }
-
-        return expected!.Matches(active.Lines)
-            ? ReadinessCheck.Passed(
-                HardIsolationChecks.NetworkPolicyEnforced,
-                $"The loaded policy is the expected one ({expected.Identity[..12]}).")
-            : ReadinessCheck.Failed(
-                HardIsolationChecks.NetworkPolicyEnforced,
-                $"A table named '{NftablesRuleset.TableName}' is loaded but is not the policy this build "
-                + $"renders ({expected.Identity[..12]}); it may deny a different set than the Hub believes.");
-    }
 
     /// <summary>Whether the agent inherited anything that would route its traffic through the host.</summary>
     private async Task<ReadinessCheck> ProxyCheckAsync(HardIsolationProfile profile, CancellationToken ct)
@@ -445,11 +401,6 @@ public sealed class WslHardNetworkProbe : IHardNetworkProbe
                 MaxCapturedCharactersPerStream = 256 * 1024,
             },
             ct);
-
-    /// <summary>The rendered policy for one environment, for the operator to read or install.</summary>
-    public static bool TryRenderFor(
-        HardNetworkTopology topology, out NftablesRuleset? ruleset, out string? problem) =>
-        NftablesRuleset.TryRender(HardNetworkPolicy.Phase10, topology, out ruleset, out problem);
 
     /// <summary>How this probe names itself in a diagnostic.</summary>
     public override string ToString() => string.Create(

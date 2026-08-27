@@ -34,6 +34,8 @@ public sealed class IsolationInvariantTests
     private const string NetworkCommandsFileName = "HardNetworkCommands.cs";
     private const string NetworkProbeFileName = "WslHardNetworkProbe.cs";
     private const string RulesetFileName = "NftablesRuleset.cs";
+    private const string FabricFileName = "WslHardNetworkFabric.cs";
+    private const string IdentityFileName = "HardNetworkIdentity.cs";
     /// <summary>Spelled through a constant so this file is not itself an offender.</summary>
     private static readonly string HardGitExecutable = "/usr/bin/" + "git";
 
@@ -503,7 +505,18 @@ public sealed class IsolationInvariantTests
             .Order(StringComparer.Ordinal)
             .ToList();
 
-        Assert.Equal([SystemdCommandFileName], offenders);
+        // Two, and they create different kinds of thing. The execution command creates the unit a
+        // task's workload runs in; the network command surface creates the unit whose only job is
+        // to hold a namespace open. Neither can create the other's, because the shapes below are
+        // pinned and each derives its unit name from Hub identity.
+        Assert.Equal([NetworkCommandsFileName, SystemdCommandFileName], offenders);
+
+        var commands = CodeOnly(SourceOf(NetworkCommandsFileName));
+
+        // The holder runs one thing and it is not a workload.
+        Assert.Contains("--property=PrivateNetwork=yes", commands, StringComparison.Ordinal);
+        Assert.Contains("\"/usr/bin/sleep\", \"infinity\"", commands, StringComparison.Ordinal);
+        Assert.DoesNotContain("--uid", commands, StringComparison.Ordinal);
     }
 
     /// <summary>
@@ -522,7 +535,19 @@ public sealed class IsolationInvariantTests
             .Order(StringComparer.Ordinal)
             .ToList();
 
-        Assert.Equal([SystemdCommandFileName, ProbeFileName], offenders);
+        // Three now. The readiness probe asks whether systemd is running, the execution command
+        // tells it to stop a workload's unit, and the network command surface asks about a holder
+        // and stops one. The verbs are what matter, so they are pinned rather than the executable
+        // being banned outright.
+        Assert.Equal([NetworkCommandsFileName, SystemdCommandFileName, ProbeFileName], offenders);
+
+        var verbs = Regex.Matches(CodeOnly(SourceOf(NetworkCommandsFileName)), @"[[]Systemctl, ""(?<verb>[a-z]+)""")
+            .Select(m => m.Groups["verb"].Value)
+            .Distinct(StringComparer.Ordinal)
+            .Order(StringComparer.Ordinal)
+            .ToList();
+
+        Assert.Equal(["show", "stop"], verbs);
     }
 
     /// <summary>
@@ -1321,57 +1346,284 @@ public sealed class IsolationInvariantTests
     }
 
     /// <summary>
-    /// Readiness measures the network; it never installs it.
+    /// The Hub owns its own tables and never the machine's ruleset.
     ///
-    /// A diagnostic that provisioned what it was measuring would always be able to report success.
-    /// The one filtering tool the probe may name is only ever asked to list, and there is no
-    /// package installation anywhere near this work.
+    /// An operator's rules are theirs, and on this platform they are literally the same ruleset -
+    /// every environment shares one. A boundary that began by flushing it would take the
+    /// developer's own network with it, and the authority does not need that: in this mechanism a
+    /// drop in one base chain is final whatever another chain accepted.
     /// </summary>
     [Fact]
-    public void The_network_probe_measures_and_never_provisions()
-    {
-        var commands = CodeOnly(SourceOf(NetworkCommandsFileName));
-
-        var verbs = Regex.Matches(commands, @"\[Nft,\s*""(?<verb>[a-z]+)""");
-
-        Assert.NotEmpty(verbs);
-        Assert.All(verbs.Select(m => m.Groups["verb"].Value), v => Assert.Equal("list", v));
-
-        var offenders = HardNetworkSourceFiles()
-            .Where(f => CodeOnly(File.ReadAllText(f)) is var code
-                        && (code.Contains("apt-get", StringComparison.Ordinal)
-                            || code.Contains("apt install", StringComparison.Ordinal)
-                            || code.Contains("dnf", StringComparison.Ordinal)
-                            || code.Contains("pacman", StringComparison.Ordinal)
-                            || code.Contains("flush", StringComparison.Ordinal)))
-            .Select(RepoLayout.Relative)
-            .ToList();
-
-        Assert.Empty(offenders);
-    }
-
-    /// <summary>
-    /// The Hub owns one table and never the machine's ruleset.
-    ///
-    /// An operator's rules are theirs. A boundary that began by flushing them would be one nobody
-    /// could run beside anything else - and the authority does not need it: in this mechanism a
-    /// drop in one base chain is final whatever another chain accepted, which is why a Hub-owned
-    /// table is an authority rather than a suggestion.
-    /// </summary>
-    [Fact]
-    public void The_hub_owns_exactly_one_table()
+    public void The_hub_owns_only_its_own_tables()
     {
         var ruleset = CodeOnly(SourceOf(RulesetFileName));
 
         Assert.Contains("TableName = \"corex_hard\"", ruleset, StringComparison.Ordinal);
+        Assert.Contains("NatTableName = \"corex_hard_nat\"", ruleset, StringComparison.Ordinal);
 
         foreach (var wholesale in new[] { "flush ruleset", "flush table", "list ruleset" })
         {
             Assert.DoesNotContain(wholesale, ruleset, StringComparison.OrdinalIgnoreCase);
         }
+    }
 
-        // Every chain the Hub declares starts from a denial rather than from permission.
-        Assert.Equal(3, Regex.Matches(ruleset, "policy drop;").Count);
+    /// <summary>
+    /// The invalid per-distribution model is gone rather than left behind.
+    ///
+    /// It meant "this environment has a root policy of its own", which was measured false: every
+    /// environment shares one network namespace and one ruleset. A readiness identity that cannot
+    /// be true should not be answerable, and nothing may reintroduce it under the old name.
+    /// </summary>
+    [Fact]
+    public void The_per_distribution_policy_model_is_absent()
+    {
+        Assert.DoesNotContain("network.policy.enforced", HardIsolationChecks.Required);
+
+        var offenders = RepoLayout.ProductionSourceFiles
+            .Where(f => CodeOnly(File.ReadAllText(f)).Contains("NetworkPolicyEnforced", StringComparison.Ordinal))
+            .Select(RepoLayout.Relative)
+            .ToList();
+
+        Assert.Empty(offenders);
+
+        // The three truths that replaced it are all required, and all distinct.
+        foreach (var id in new[]
+                 {
+                     HardIsolationChecks.NetworkFabricReady,
+                     HardIsolationChecks.OrgNetworkNamespaceReady,
+                     HardIsolationChecks.OrgNetworkAttachmentReady,
+                 })
+        {
+            Assert.Contains(id, HardIsolationChecks.Required);
+        }
+    }
+
+    /// <summary>
+    /// An organization is classified by the interface its traffic arrives on, never by its address.
+    ///
+    /// An address is configuration inside a namespace and a workload's neighbours are known to it.
+    /// An ingress interface is a fact about where a packet crossed into the trusted plane, and it
+    /// is the only one of the two a workload cannot forge.
+    /// </summary>
+    [Fact]
+    public void Organization_identity_is_the_interface_and_never_the_source_address()
+    {
+        var ruleset = CodeOnly(SourceOf(RulesetFileName));
+
+        Assert.Contains("iifname", ruleset, StringComparison.Ordinal);
+        Assert.DoesNotContain("saddr", ruleset.Replace("ip saddr {HardNetworkIdentity.Pool}", string.Empty, StringComparison.Ordinal), StringComparison.Ordinal);
+
+        // The one source match that exists is the translation's own pool, which is not a
+        // classification: it decides what gets translated, not who anybody is.
+        Assert.Contains("ip saddr {HardNetworkIdentity.Pool}", ruleset, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// No chain the Hub loads denies by default, and every Hub attachment ends in a denial anyway.
+    ///
+    /// Both halves are load bearing and they pull in opposite directions. The chains sit in the
+    /// namespace the operator's own environment uses, so a default drop would take the developer's
+    /// network down - and a permissive default means an attachment nobody named is unfiltered,
+    /// which is why the final per-interface drop is not optional.
+    /// </summary>
+    [Fact]
+    public void No_chain_denies_by_default_and_every_attachment_still_ends_in_a_denial()
+    {
+        var ruleset = CodeOnly(SourceOf(RulesetFileName));
+
+        Assert.DoesNotContain("policy drop", ruleset, StringComparison.Ordinal);
+        Assert.Contains("policy accept;", ruleset, StringComparison.Ordinal);
+
+        // One closing drop per interface in the forward chain and one in the input chain.
+        Assert.Equal(2, Regex.Matches(ruleset, Regex.Escape("{iif}") + @"..? drop").Count);
+    }
+
+    /// <summary>
+    /// The fabric is ready only when what is attached and what is classified are the same set.
+    ///
+    /// The measured failure this exists for: the policy survives a restart that destroys every
+    /// namespace and interface it names, so a table can list exactly the expected rules while
+    /// filtering nothing. Both directions have to be checked, because the other one - an interface
+    /// present with no rule naming it - is an unfiltered attachment.
+    /// </summary>
+    [Fact]
+    public void Fabric_readiness_compares_the_attached_set_against_the_classified_set()
+    {
+        var fabric = CodeOnly(SourceOf(FabricFileName));
+
+        Assert.Contains("named.Except(present", fabric, StringComparison.Ordinal);
+        Assert.Contains("present.Except(named", fabric, StringComparison.Ordinal);
+
+        // And a table alone is never enough to pass.
+        var pass = fabric.LastIndexOf("HardIsolationChecks.NetworkFabricReady", StringComparison.Ordinal);
+        var compared = fabric.IndexOf("uncovered.Count > 0", StringComparison.Ordinal);
+
+        Assert.True(compared > 0 && pass > compared);
+    }
+
+    /// <summary>
+    /// A workload's namespace is verified by identity, not by the launch having succeeded.
+    ///
+    /// Measured on this platform: a launch mechanism silently substituted a fresh empty namespace
+    /// when the intended one was missing. "The unit started" is evidence about the unit, not about
+    /// where it started.
+    /// </summary>
+    [Fact]
+    public void Attachment_readiness_compares_a_namespace_identity()
+    {
+        var fabric = CodeOnly(SourceOf(FabricFileName));
+
+        Assert.Contains("holder.Identity", fabric, StringComparison.Ordinal);
+        Assert.Contains("NetworkNamespacePath=", fabric, StringComparison.Ordinal);
+
+        // The mechanism that was measured to fall back is not the one used.
+        Assert.DoesNotContain("JoinsNamespaceOf", fabric, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Machine-global state is written under a machine-wide lock, not a lock inside one process.
+    ///
+    /// The CLI and the API are separate processes, and what they would race over is the machine's:
+    /// interfaces on a shared namespace, one ruleset, and a kernel flag.
+    /// </summary>
+    [Fact]
+    public void Global_plane_mutation_is_guarded_by_a_machine_wide_lock()
+    {
+        var fabric = CodeOnly(SourceOf(FabricFileName));
+
+        Assert.Equal(2, Regex.Matches(fabric, @"MutationLock\.Acquire").Count);
+
+        var lockSource = CodeOnly(SourceOf("MutationLock.cs"));
+
+        Assert.Contains("new Mutex(", lockSource, StringComparison.Ordinal);
+        Assert.Contains("AbandonedMutexException", lockSource, StringComparison.Ordinal);
+        Assert.DoesNotContain("SemaphoreSlim", lockSource, StringComparison.Ordinal);
+
+        // Preparation and release mutate; verification does not.
+        var verify = fabric.IndexOf("public async Task<IReadOnlyList<ReadinessCheck>> VerifyAsync", StringComparison.Ordinal);
+        var release = fabric.IndexOf("public async Task ReleaseAsync", StringComparison.Ordinal);
+
+        Assert.True(verify > 0 && release > verify);
+        Assert.DoesNotContain("MutationLock", fabric[verify..release], StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A global value the Hub did not set is not the Hub's to reset.
+    ///
+    /// Forwarding belongs to the machine. Turning it on when it was off is a change this build made
+    /// and should undo; finding it already on is somebody else's decision, and resetting it would
+    /// be this build reconfiguring an operator's machine on the way out.
+    /// </summary>
+    [Fact]
+    public void Global_forwarding_is_restored_only_when_the_hub_enabled_it()
+    {
+        var fabric = CodeOnly(SourceOf(FabricFileName));
+
+        Assert.Contains("File.Exists(ForwardingMarker)", fabric, StringComparison.Ordinal);
+
+        // The note lives on the Hub's side, because environments do not share a filesystem and a
+        // note written inside one would be invisible to the next.
+        Assert.Contains("Path.Combine(_hostDirectory", fabric, StringComparison.Ordinal);
+        Assert.DoesNotContain("/run/corex-hard-forwarding", fabric, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Translation covers the Hub's own pool and nothing else on the shared plane.
+    ///
+    /// A blanket source translation would silently rewrite the developer's own traffic, and would
+    /// look identical in every diagnostic short of reading the rule.
+    /// </summary>
+    [Fact]
+    public void Translation_is_scoped_to_the_hubs_own_pool()
+    {
+        var ruleset = CodeOnly(SourceOf(RulesetFileName));
+
+        Assert.Contains("ip saddr {HardNetworkIdentity.Pool} oifname", ruleset, StringComparison.Ordinal);
+
+        // One translation rule, and it names the Hub's pool.
+        Assert.Single(Regex.Matches(ruleset, "masquerade"));
+    }
+
+    /// <summary>
+    /// Attachment identity is derived from the organization and nothing a caller supplies.
+    ///
+    /// The attachment is the boundary. One a task, a provider or a repository could name would be a
+    /// boundary those things could choose, and choosing it is most of leaving it.
+    /// </summary>
+    [Fact]
+    public void Attachment_identity_is_derived_from_the_organization()
+    {
+        var identity = CodeOnly(SourceOf(IdentityFileName));
+
+        Assert.Contains("SHA256.HashData", identity, StringComparison.Ordinal);
+
+        foreach (var supplied in new[] { "Task", "objective", "Provider", "Repository", "config" })
+        {
+            Assert.DoesNotContain(supplied, identity, StringComparison.OrdinalIgnoreCase);
+        }
+
+        // Collisions are refused rather than reallocated around.
+        Assert.Contains("Collides", identity, StringComparison.Ordinal);
+        Assert.Contains("IsNameable", identity, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The provider facing process contract learned nothing about the fabric.
+    ///
+    /// Which namespace a workload runs in is decided from the organization by composition. A field
+    /// for it on the request would be a field a provider could set.
+    /// </summary>
+    [Theory]
+    [InlineData("NetworkNamespace")]
+    [InlineData("Veth")]
+    [InlineData("nftables")]
+    [InlineData("Attachment")]
+    public void The_process_contract_knows_nothing_about_the_fabric(string construct)
+    {
+        var process = CodeOnly(SourceOf("HardProcess.cs"));
+
+        Assert.DoesNotContain(construct, process, StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// Preparation is a trusted step and readiness is not.
+    ///
+    /// A diagnostic that built what it was measuring could always report success. So the read-only
+    /// surface never creates a link, a namespace or a policy, and the one place that does is not
+    /// reachable from a probe.
+    /// </summary>
+    [Fact]
+    public void Readiness_measures_the_plane_and_never_builds_it()
+    {
+        var probe = CodeOnly(SourceOf(NetworkProbeFileName));
+
+        foreach (var mutation in new[] { "StartHolder", "CreateVeth", "LoadPolicy", "SetForwarding", "PrepareAsync" })
+        {
+            Assert.DoesNotContain(mutation, probe, StringComparison.Ordinal);
+        }
+
+        var commands = CodeOnly(SourceOf(NetworkCommandsFileName));
+
+        // And nothing anywhere near the plane can install what it is measuring.
+        var provisioners = HardNetworkSourceFiles()
+            .Where(f => CodeOnly(File.ReadAllText(f)) is var code
+                        && new[] { "apt-get", "apt install", "/dnf", "/yum", "pacman", "zypper", "\"install\"" }
+                            .Any(m => code.Contains(m, StringComparison.Ordinal)))
+            .Select(RepoLayout.Relative)
+            .ToList();
+
+        Assert.Empty(provisioners);
+
+        var verbs = Regex.Matches(commands, @"[[]Nft, ""(?<verb>[a-z]+)""")
+            .Select(m => m.Groups["verb"].Value)
+            .Distinct(StringComparer.Ordinal)
+            .Order(StringComparer.Ordinal)
+            .ToList();
+
+        // Three verbs and no more: list to measure, and the pair that replaces the Hub's own table
+        // when the plane is built or given up. Never a flush, and never anybody else's table.
+        Assert.Equal(["delete", "list"], verbs);
+        Assert.DoesNotContain("flush", commands, StringComparison.Ordinal);
     }
 
     /// <summary>
@@ -1387,7 +1639,13 @@ public sealed class IsolationInvariantTests
         var probe = CodeOnly(SourceOf(NetworkProbeFileName));
 
         // The table is read as root; the agent is only ever asked to try to reach things.
-        Assert.Contains("RootAsync(profile, HardNetworkCommands.ActivePolicy()", probe, StringComparison.Ordinal);
+        // The loaded table is read by the fabric as the service identity; the probe never reads it.
+        Assert.DoesNotContain("ActivePolicy", probe, StringComparison.Ordinal);
+
+        Assert.Contains(
+            "ServiceAsync(profile, HardNetworkCommands.ActivePolicy()",
+            CodeOnly(SourceOf(FabricFileName)),
+            StringComparison.Ordinal);
 
         foreach (Match agentCall in Regex.Matches(probe, @"AgentAsync\(\s*profile,\s*HardNetworkCommands\.(?<c>\\w+)"))
         {

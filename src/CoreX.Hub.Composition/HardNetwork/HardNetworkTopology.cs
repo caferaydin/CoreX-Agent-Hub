@@ -38,6 +38,14 @@ public sealed record HardNetworkTopology
     /// <summary>The default route's next hop, or empty. Never used as a policy destination.</summary>
     public required string DefaultGateway { get; init; }
 
+    /// <summary>
+    /// The interface the default route leaves by, or empty.
+    ///
+    /// Needed because source translation has to name where it translates out of, and naming the
+    /// wrong one would either translate nothing or translate traffic that is not the Hub's.
+    /// </summary>
+    public string Uplink { get; init; } = string.Empty;
+
     /// <summary>The environment's own routable addresses, for diagnosis only.</summary>
     public required IReadOnlyList<string> LocalAddresses { get; init; }
 
@@ -69,6 +77,7 @@ public sealed record HardNetworkTopology
     {
         var addresses = ParseAddresses(addressLines);
         var gateway = ParseDefaultGateway(routeLines);
+        var uplink = ParseUplink(routeLines);
         var resolver = ParseResolver(resolverLines);
 
         var routable = addresses
@@ -89,6 +98,7 @@ public sealed record HardNetworkTopology
                 Mode = HardNetworkMode.Mirrored,
                 DnsEndpoint = resolver,
                 DefaultGateway = string.Empty,
+                Uplink = uplink,
                 LocalAddresses = routable,
                 Detail = "The environment has routable addresses and no default route of its own, "
                          + "which is how a shared-interface arrangement appears; it is not supported.",
@@ -104,6 +114,7 @@ public sealed record HardNetworkTopology
                 Mode = HardNetworkMode.Mirrored,
                 DnsEndpoint = resolver,
                 DefaultGateway = gateway,
+                Uplink = uplink,
                 LocalAddresses = routable,
                 Detail = $"The default route's next hop '{gateway}' is one of the environment's own "
                          + "addresses, so the environment is not behind a gateway.",
@@ -115,6 +126,7 @@ public sealed record HardNetworkTopology
             Mode = HardNetworkMode.Nat,
             DnsEndpoint = resolver,
             DefaultGateway = gateway,
+            Uplink = uplink,
             LocalAddresses = routable,
             Detail = $"The environment holds {string.Join(", ", routable)} behind '{gateway}'.",
         };
@@ -160,6 +172,30 @@ public sealed record HardNetworkTopology
                 && string.Equals(tokens[1], "via", StringComparison.Ordinal))
             {
                 return tokens[2];
+            }
+        }
+
+        return string.Empty;
+    }
+
+    /// <summary>Reads <c>ip route</c> output; the uplink follows "dev" on the default route.</summary>
+    private static string ParseUplink(IReadOnlyList<string> lines)
+    {
+        foreach (var line in lines)
+        {
+            var tokens = line.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+
+            if (tokens.Length == 0 || !string.Equals(tokens[0], "default", StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            for (var i = 0; i + 1 < tokens.Length; i++)
+            {
+                if (string.Equals(tokens[i], "dev", StringComparison.Ordinal))
+                {
+                    return tokens[i + 1];
+                }
             }
         }
 

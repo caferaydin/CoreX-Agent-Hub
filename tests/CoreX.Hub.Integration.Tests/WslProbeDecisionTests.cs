@@ -46,7 +46,9 @@ public sealed class WslProbeDecisionTests
         [
             HardIsolationChecks.ControlPlaneUnreachable,
             HardIsolationChecks.NetworkModeSupported,
-            HardIsolationChecks.NetworkPolicyEnforced,
+            HardIsolationChecks.NetworkFabricReady,
+            HardIsolationChecks.OrgNetworkNamespaceReady,
+            HardIsolationChecks.OrgNetworkAttachmentReady,
             HardIsolationChecks.HostLoopbackDisabled,
             HardIsolationChecks.ProxyNotInherited,
             HardIsolationChecks.PeerNetworkUnreachable,

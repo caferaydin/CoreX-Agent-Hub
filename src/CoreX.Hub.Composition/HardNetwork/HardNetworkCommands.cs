@@ -59,4 +59,65 @@ public static class HardNetworkCommands
 
     /// <summary>What the environment inherited that looks like a proxy.</summary>
     public static IReadOnlyList<string> ProxyEnvironment() => [Printenv];
+
+    // -- the trusted plane -----------------------------------------------------------------
+    //
+    // Everything below changes machine-global state and is called only from the trusted
+    // preparation path, never from a diagnostic. The read-only surface above is what readiness
+    // uses; a probe that could build what it was measuring would always report success.
+
+    public const string Systemctl = "/usr/bin/systemctl";
+    public const string SystemdRun = "/usr/bin/systemd-run";
+    public const string Nsenter = "/usr/bin/nsenter";
+    public const string Sysctl = "/usr/sbin/sysctl";
+
+    /// <summary>Every interface the trusted plane holds, one per line.</summary>
+    public static IReadOnlyList<string> Links() => [Ip, "-o", "link"];
+
+    /// <summary>Starts the unit whose only job is to keep one namespace in existence.</summary>
+    public static IReadOnlyList<string> StartHolder(string unit) =>
+    [
+        SystemdRun, "--quiet", "--unit=" + unit, "--property=PrivateNetwork=yes",
+        "--property=Type=exec", "--property=KillMode=control-group", "/usr/bin/sleep", "infinity",
+    ];
+
+    /// <summary>What systemd says about a unit, in one field.</summary>
+    public static IReadOnlyList<string> UnitProperty(string unit, string property) =>
+        [Systemctl, "show", "-p", property, "--value", unit];
+
+    public static IReadOnlyList<string> StopUnit(string unit) => [Systemctl, "stop", unit];
+
+    /// <summary>The kernel identity of a namespace, read through a live holder.</summary>
+    public static IReadOnlyList<string> NamespaceIdentity(string reference) => ["/usr/bin/readlink", reference];
+
+    public static IReadOnlyList<string> CreateVeth(string trusted, string inner) =>
+        [Ip, "link", "add", trusted, "type", "veth", "peer", "name", inner];
+
+    public static IReadOnlyList<string> MoveIntoNamespace(string inner, string holderPid) =>
+        [Ip, "link", "set", inner, "netns", holderPid];
+
+    public static IReadOnlyList<string> AddAddress(string address, string device) =>
+        [Ip, "addr", "add", address, "dev", device];
+
+    public static IReadOnlyList<string> BringUp(string device) => [Ip, "link", "set", device, "up"];
+
+    public static IReadOnlyList<string> DeleteLink(string device) => [Ip, "link", "del", device];
+
+    public static IReadOnlyList<string> DefaultRoute(string gateway) =>
+        [Ip, "route", "add", "default", "via", gateway];
+
+    /// <summary>Runs one configuration step inside a namespace, reached through its holder.</summary>
+    public static IReadOnlyList<string> InNamespace(string holderPid, IReadOnlyList<string> command) =>
+        [Nsenter, "-t", holderPid, "-n", .. command];
+
+    /// <summary>Loads the Hub's own table from a file. Never a flush, never another table.</summary>
+    public static IReadOnlyList<string> LoadPolicy(string path) => [Nft, "-f", path];
+
+    public static IReadOnlyList<string> DeletePolicy(string family, string table) =>
+        [Nft, "delete", "table", family, table];
+
+    public static IReadOnlyList<string> ReadForwarding() => [Cat, "/proc/sys/net/ipv4/ip_forward"];
+
+    public static IReadOnlyList<string> SetForwarding(bool enabled) =>
+        [Sysctl, "-w", "net.ipv4.ip_forward=" + (enabled ? "1" : "0")];
 }
