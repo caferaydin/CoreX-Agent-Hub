@@ -107,7 +107,7 @@ hub task ready <TASKKEY> [--org <slug>] [--actor <ad>]
 Global seçenekler: `--data-dir <yol>`, `--config <yol>`, `--help`, `--version`.
 
 Çıkış kodları: `0` başarı · `1` kullanım hatası · `2` işlem reddedildi ·
-`3` Ready kapısı sağlanmadı · `70` beklenmeyen hata.
+`3` Ready kapısı sağlanmadı · `4` sert izolasyon kurulu değil · `70` beklenmeyen hata.
 
 Faz 5D insan kararı komutları:
 
@@ -121,10 +121,10 @@ hub reject          <TASKKEY>#<attempt> [--reason "<metin>"]
 hub evidence show   <TASKKEY>#<attempt> [--diff] [--org <slug>]
 ```
 
-`run`, `cancel`, `doctor` komutları **bilinçli olarak yoktur**; sonraki fazlara aittir.
-Özellikle `hub cancel`: `Running` bir görev başka bir süreçte çalışan bir agent'a karşılık
-gelebilir, ve altındaki runtime'ı durdurmadan durumu çevirmek yalan olurdu — süreçler arası
-iptal Faz 5E'ye aittir.
+`hub run` ve `hub cancel` Faz 5E'de eklendi (aşağıda), `hub doctor isolation` ise Faz
+10C-1'de. Bunlar başlangıçta bilinçli olarak yoktu: özellikle `hub cancel` için `Running`
+bir görev başka bir süreçte çalışan bir agent'a karşılık gelebilir, ve altındaki runtime'ı
+durdurmadan durumu çevirmek yalan olurdu.
 
 ### Kabul kriteri türleri (ADR-0015)
 
@@ -270,6 +270,42 @@ geri açabilmesi, ADR-0020'nin ortadan kaldırdığı şeydir.
 kod değişmezidir ve birim testiyle kilitlenmiştir. Depodaki
 `isolation-gate-fixture` organizasyonu bu davranışı görünür kılmak içindir; gerçek
 Kronos verisi değildir.
+
+### Sert izolasyon hazırlığı (ADR-0027, Faz 10C-1)
+
+Tersi de kapalıdır: `isolationLevel: Hard` yazmak **tek başına** bir organizasyonu
+çalıştırılabilir yapmaz. Katalog açısından organizasyon `Active`'dir — domain makine
+gerçeği bilmez — ama yürütmeye kabul noktası her başlangıçta üç soru daha sorar: ortam bu
+makinede gerçekten kurulu mu, makinenin tamamı bu sınırı değerli kılacak biçimde düzenlenmiş
+mi, ve bu build o ortamın içinde çalıştırabiliyor mu. Cevabı bilinmeyen bir soru geçiş değil
+rettir.
+
+Hard bir organizasyon ayrıca `hardIsolation` bloğu ister:
+
+```yaml
+    isolationLevel: Hard
+    requiresHardIsolation: true
+    hardIsolation:
+      backend: Wsl2
+      environmentId: corex-ornek        # dağıtım adı
+      agentUser: corex-agent            # ayrıcalıksız olmalı
+      serviceUser: corex-hub            # agent'tan FARKLI olmalı
+      executionRoot: /srv/corex/exec    # mutlak Linux yolu
+      evidenceRoot: /srv/corex/evidence # agent okuyamamalı
+      processLimit: 64
+      memoryLimitBytes: 4294967296
+```
+
+Bu blok veritabanına **yazılmaz**: katalog gerçeği değil, bu makinenin operasyonel
+yapılandırmasıdır.
+
+Ne eksik olduğunu görmek için:
+
+```
+hub doctor isolation      # 0 hazır · 4 hazır değil · salt okunur, hiçbir şeyi kurmaz
+```
+
+Ayrıntı ve bu makinede ölçülen sonuçlar: `docs/phase-10-hardening.md` §10.
 
 ## Migration'lar
 

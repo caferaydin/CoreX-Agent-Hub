@@ -75,6 +75,13 @@ public static class ExitCodes
     /// <summary>The ready gate reported violations; the task stays in Draft.</summary>
     public const int ReadyGateNotSatisfied = 3;
 
+    /// <summary>
+    /// A diagnostic found a declared hard isolated environment that this machine does not
+    /// provide. Distinct from <see cref="OperationFailed"/> because nothing was refused: the
+    /// command did exactly what it was asked to and the answer is no.
+    /// </summary>
+    public const int IsolationNotReady = 4;
+
     /// <summary>Unexpected failure.</summary>
     public const int Unexpected = 70;
 }

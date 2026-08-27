@@ -29,6 +29,7 @@ public sealed partial class ExecutionOrchestrator
     private readonly IAgentRuntimeGateway _agent;
     private readonly IExecutionVerifier _verifier;
     private readonly IExecutionReviewer? _reviewer;
+    private readonly Isolation.IIsolationAdmission? _isolation;
     private readonly IExecutionEvidenceWriter _evidence;
     private readonly ExecutionSafetyGates _gates;
     private readonly IExecutionLeaseWriter _lease;
@@ -51,7 +52,8 @@ public sealed partial class ExecutionOrchestrator
         IProcessLivenessProbe liveness,
         TimeProvider clock,
         ExecutionOrchestratorOptions options,
-        IExecutionReviewer? reviewer = null)
+        IExecutionReviewer? reviewer = null,
+        Isolation.IIsolationAdmission? isolation = null)
     {
         _store = store ?? throw new ArgumentNullException(nameof(store));
         _workspace = workspace ?? throw new ArgumentNullException(nameof(workspace));
@@ -64,6 +66,12 @@ public sealed partial class ExecutionOrchestrator
         // clean review. Composition refuses to build a reviewer it cannot honour, so a null
         // arriving here always means "none was configured" and never "one failed to load".
         _reviewer = reviewer;
+
+        // Also optional, and for the opposite reason to the reviewer above: a null here does
+        // not widen what may run, it narrows it. Every existing Logical organization is
+        // unaffected, and a hard one is refused for want of an authority to admit it.
+        _isolation = isolation;
+
         _evidence = evidence ?? throw new ArgumentNullException(nameof(evidence));
         _gates = gates ?? throw new ArgumentNullException(nameof(gates));
         _lease = lease ?? throw new ArgumentNullException(nameof(lease));

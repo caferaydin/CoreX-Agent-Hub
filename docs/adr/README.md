@@ -36,6 +36,7 @@ v1.1.1 esas alınır.
 | ADR-0024 | Sabitlenmiş sağlayıcı sürümü çalışma zamanının parçasıdır | Accepted |
 | ADR-0025 | Reviewer sözleşmesi mekanizma değil etki adlandırır | Accepted |
 | ADR-0026 | Composition root adaptörlerden ayrıldı | Accepted |
+| ADR-0027 | Beyan edilen izolasyon ölçülen izolasyon değildir | Accepted |
 
 ## Onaylanmış Faz 0 format kararları
 

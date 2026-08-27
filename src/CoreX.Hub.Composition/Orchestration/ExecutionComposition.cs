@@ -8,6 +8,7 @@ using CoreX.Hub.Application.Orchestration;
 using CoreX.Hub.Application.Review;
 using CoreX.Hub.Composition.Agents;
 using CoreX.Hub.Composition.Context;
+using CoreX.Hub.Composition.Isolation;
 using CoreX.Hub.Composition.Verification;
 using CoreX.Hub.Composition.Workspace;
 using CoreX.Hub.Context;
@@ -183,7 +184,13 @@ public sealed class ExecutionComposition
             new ProcessLivenessProbe(),
             clock,
             new ExecutionOrchestratorOptions(),
-            reviewEngine);
+            reviewEngine,
+
+            // The gate on hard isolation. Built for every execution rather than only for the
+            // organizations that need it, because an orchestrator constructed without one
+            // refuses hard organizations outright, and an adapter that forgot to pass it would
+            // look identical to one whose machine is not ready.
+            IsolationComposition.Create(session.Store, config, session.DataDirectory));
 
         return new ExecutionComposition(
             orchestrator, verifier, repository.Id, config.Workspace.Root, reviewEngine is not null);

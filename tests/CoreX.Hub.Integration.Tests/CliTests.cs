@@ -248,6 +248,13 @@ public sealed class CliTests
 
         Assert.Equal(0, result.ExitCode);
         Assert.Contains("hub task ready", result.StdOut, StringComparison.Ordinal);
-        Assert.Contains("intentionally not implemented", result.StdOut, StringComparison.Ordinal);
+
+        // Phase 10C-1 implemented the last of the deferred commands, so the help text no longer
+        // names one. The boundary it has to document now is a different and less obvious shape:
+        // hub doctor can report a correct machine and still say that executions are refused,
+        // because measuring a hard environment is not the same capability as running inside one.
+        Assert.Contains("hub doctor isolation", result.StdOut, StringComparison.Ordinal);
+        Assert.Contains("changes nothing", result.StdOut, StringComparison.Ordinal);
+        Assert.Contains("executions are refused", result.StdOut, StringComparison.Ordinal);
     }
 }

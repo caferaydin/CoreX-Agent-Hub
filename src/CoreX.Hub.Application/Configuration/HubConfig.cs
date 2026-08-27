@@ -175,11 +175,65 @@ public sealed class OrganizationConfig
 
     public bool RequiresHardIsolation { get; set; }
 
+    /// <summary>
+    /// Where the hard isolated environment is and what it may consume.
+    ///
+    /// Required when <see cref="IsolationLevel"/> is Hard and meaningless otherwise. It is
+    /// machine local operational configuration - which distribution, which Linux user, which
+    /// native paths - so it lives in the configuration file and is deliberately not persisted
+    /// to the database: none of it is catalogue truth, and a stale row claiming an environment
+    /// exists would be the exact failure the readiness checks exist to prevent.
+    /// </summary>
+    public HardIsolationConfig? HardIsolation { get; set; }
+
     public List<string> EnvironmentAllowlist { get; set; } = [];
 
     public List<AgentProfileConfig> AgentProfiles { get; set; } = [];
 
     public List<ProjectConfig> Projects { get; set; } = [];
+}
+
+/// <summary>
+/// How to reach one organization's hard isolated execution environment.
+///
+/// Provider neutral by construction: there is no field here for a model, a token, an
+/// executable or an account. Authentication stays out of band inside the environment, exactly
+/// as it does on Windows (ADR-0009); isolation is a question about the operating system
+/// boundary and nothing else.
+///
+/// Every field is consumed by a readiness check or by the future execution plane. Nothing is
+/// decorative - a value nobody reads would be a value nobody could be wrong about.
+/// </summary>
+public sealed class HardIsolationConfig
+{
+    /// <summary>Which mechanism provides the boundary. Exactly one is supported.</summary>
+    public string Backend { get; set; } = string.Empty;
+
+    /// <summary>Names the environment - for WSL2, the distribution.</summary>
+    public string EnvironmentId { get; set; } = string.Empty;
+
+    /// <summary>The unprivileged identity the agent runs as inside the environment.</summary>
+    public string AgentUser { get; set; } = string.Empty;
+
+    /// <summary>
+    /// The trusted identity that owns Hub data inside the environment.
+    ///
+    /// Distinct from the agent on purpose: the evidence store must be unreadable by the thing
+    /// being observed, and an owner who is also the observed cannot provide that.
+    /// </summary>
+    public string ServiceUser { get; set; } = string.Empty;
+
+    /// <summary>Linux native path for worktrees and execution scratch.</summary>
+    public string ExecutionRoot { get; set; } = string.Empty;
+
+    /// <summary>Linux native path for this organization's evidence store.</summary>
+    public string EvidenceRoot { get; set; } = string.Empty;
+
+    /// <summary>Finite ceiling on concurrent processes. Maps to TasksMax in Phase 10C-2.</summary>
+    public int ProcessLimit { get; set; }
+
+    /// <summary>Finite ceiling on memory. Maps to MemoryMax in Phase 10C-2.</summary>
+    public long MemoryLimitBytes { get; set; }
 }
 
 public sealed class AgentProfileConfig

@@ -51,12 +51,15 @@ public static class HubCli
 
           hub evidence show   <TASKKEY>#<attempt> [--diff] [--org <slug>]
 
+          hub doctor isolation
+
           hub workspace reconcile     --org <slug> --repo <slug>
           hub workspace release       --org <slug> --repo <slug> --path <dir> --confirm
           hub workspace purge-orphans --org <slug> --repo <slug> --confirm
 
         exit codes:
-          0 success   1 usage   2 operation refused   3 ready gate not satisfied   70 unexpected
+          0 success   1 usage   2 operation refused   3 ready gate not satisfied
+          4 hard isolation not established   70 unexpected
 
         Workspace commands never remove anything without --confirm, and an orphaned
         worktree is always reported rather than deleted.
@@ -68,7 +71,11 @@ public static class HubCli
         running task stops the work first and only then records the decision, so a cancelled
         task never means "still running".
 
-        Later phase commands are intentionally not implemented yet: doctor.
+        hub doctor isolation reports what this machine provides and changes nothing: it
+        never installs, imports, provisions or logs in. It exits 0 when every hard isolated
+        organization's environment is established, and 4 when one is not - and it can exit 0
+        while still reporting that executions are refused, because a build that can measure an
+        environment cannot necessarily run inside one yet.
         """;
 
     public static async Task<int> RunAsync(
@@ -118,6 +125,21 @@ public static class HubCli
                 return group == "run"
                     ? await RunCommands.RunAsync(session, args, output, error, ct)
                     : await RunCommands.CancelAsync(session, args, output, ct);
+            }
+
+            if (group == "doctor")
+            {
+                // Drives wsl.exe through ProcessRunner, which is Windows only by design.
+                if (!OperatingSystem.IsWindows())
+                {
+                    throw new UsageException("hub doctor requires Windows.");
+                }
+
+                return command switch
+                {
+                    "isolation" => await DoctorCommands.IsolationAsync(session, output, ct),
+                    _ => throw new UsageException($"Unknown command 'doctor {command}'. Run 'hub --help'."),
+                };
             }
 
             if (group == "workspace")

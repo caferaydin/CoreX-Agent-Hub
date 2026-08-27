@@ -1,3 +1,4 @@
+using CoreX.Hub.Application.Isolation;
 using CoreX.Hub.Domain.Audit;
 using CoreX.Hub.Domain.Catalog;
 using CoreX.Hub.Domain.Executions;
@@ -60,6 +61,27 @@ public sealed partial class ExecutionOrchestrator
         {
             throw new ExecutionStartException(
                 $"Organization '{organization.Slug}' cannot start executions: {organization.BlockReason}");
+        }
+
+        // Declared hard is intent; whether the machine provides it is a separate question,
+        // asked here and nowhere else so the CLI and the API cannot answer it differently.
+        //
+        // The absence of an authority is not permission: a Hub with no isolation service wired
+        // refuses a hard organization rather than treating the silence as a pass.
+        if (organization.IsolationLevel == IsolationLevel.Hard)
+        {
+            var admission = _isolation is null
+                ? IsolationAdmissionDecision.Refused(
+                    IsolationRefusal.NotConfigured,
+                    "this Hub has no hard isolation authority configured.")
+                : await _isolation.EvaluateAsync(organization, ct);
+
+            if (!admission.IsAllowed)
+            {
+                throw new ExecutionStartException(
+                    $"Organization '{organization.Slug}' cannot start executions "
+                    + $"[{admission.ReasonCode}]: {admission.Detail}");
+            }
         }
 
         var repository = await _store.FindRepositoryAsync(task.RepositoryId, ct)

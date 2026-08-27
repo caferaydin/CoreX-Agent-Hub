@@ -14,4 +14,14 @@
     <ProjectReference Include="..\CoreX.Hub.Verification\CoreX.Hub.Verification.csproj" />
   </ItemGroup>
 
+  <!--
+    The readiness probe's decisions are proven against a scripted command runner, because the
+    situations worth being sure about - an agent in the sudo group, an evidence directory the
+    agent can read, a kernel with no pids controller - cannot be arranged on a real machine
+    without damaging it.
+  -->
+  <ItemGroup>
+    <InternalsVisibleTo Include="CoreX.Hub.Integration.Tests" />
+  </ItemGroup>
+
 </Project>

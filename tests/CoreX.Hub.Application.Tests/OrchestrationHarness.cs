@@ -99,6 +99,16 @@ public sealed class OrchestrationHarness : IAsyncDisposable
     /// </summary>
     public IExecutionReviewer? Reviewer { get; set; }
 
+    /// <summary>
+    /// The hard isolation authority, absent by default.
+    ///
+    /// Null is what a Hub with no isolation service wired looks like, and for the logical
+    /// organization this harness seeds it changes nothing at all - which is the point. A test
+    /// about the gate sets it, or flips the organization to Hard and leaves it null to see what
+    /// an unwired Hub does.
+    /// </summary>
+    public Isolation.IIsolationAdmission? Isolation { get; set; }
+
     public VerificationProfile? VerificationProfile { get; set; }
 
     /// <summary>
@@ -213,7 +223,8 @@ public sealed class OrchestrationHarness : IAsyncDisposable
                 HeartbeatInterval = TimeSpan.FromMilliseconds(200),
                 MaximumLeaseSilence = TimeSpan.FromMinutes(2),
             },
-            Reviewer);
+            Reviewer,
+            Isolation);
     }
 
     /// <summary>
