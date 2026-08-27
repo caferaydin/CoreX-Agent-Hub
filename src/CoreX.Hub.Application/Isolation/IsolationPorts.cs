@@ -38,13 +38,23 @@ public interface IHardIsolationProfileSource
 }
 
 /// <summary>
-/// Whether this build can actually run a task inside a hard isolated environment.
+/// Whether this build can actually run a whole task inside a hard isolated environment.
 ///
-/// Deliberately a first class question rather than an assumption. Phase 10C-1 establishes the
-/// gates and nothing else: readiness can be measured and the topology can be judged, but there
-/// is no execution plane that runs an agent inside the environment yet. An organization whose
-/// environment is perfect must therefore still be refused, because the alternative - quietly
-/// running the work on Windows instead - would be precisely the failure hard isolation exists
+/// Deliberately a first class question rather than an assumption, and deliberately about the
+/// <b>whole task</b>. That distinction became load bearing once a hard process primitive
+/// existed: <see cref="IHardProcessExecutor"/> can now run a contained process inside a WSL2
+/// environment - correct identity, working directory, environment, process and memory ceilings,
+/// runtime ceiling and whole-tree cancellation - and that is not the same capability as running
+/// a Hub task there.
+///
+/// A Hub task also prepares a workspace, builds a context pack, drives git, verifies, reviews
+/// and writes evidence, and every one of those still happens on the host. Admitting an
+/// organization because a process can be contained would mean the agent ran inside the boundary
+/// while the repository, the credentials and the Hub's own record of the run stayed outside it -
+/// which is not isolation, and would be much harder to notice than an honest refusal.
+///
+/// So this answers no, and will continue to until the whole workflow moves. The alternative -
+/// quietly running the work on Windows instead - is precisely the failure hard isolation exists
 /// to prevent. There is no fallback path, and this port is where that is stated out loud.
 /// </summary>
 public interface IHardExecutionPlane
@@ -56,16 +66,21 @@ public interface IHardExecutionPlane
 }
 
 /// <summary>
-/// The execution plane as Phase 10C-1 ships it: absent, and saying so.
+/// The execution plane as this build ships it: absent, and saying so.
 ///
-/// Not a stub standing in for something that works. It is the honest description of a build
-/// that can measure a hard environment and cannot yet execute in one.
+/// Not a stub standing in for something that works, and - since Phase 10C-2 - not a placeholder
+/// waiting only for a process runner either. The process runner exists. What is absent is
+/// everything else a task needs in order to be inside the boundary rather than half inside it:
+/// the repository, the context, git, verification, review, evidence, provider authentication and
+/// control plane isolation.
 /// </summary>
 public sealed class UnavailableHardExecutionPlane : IHardExecutionPlane
 {
     public bool IsAvailable => false;
 
     public string UnavailableReason =>
-        "this build can verify a hard isolated environment but cannot yet run a task inside one; "
-        + "running the task on the host instead would defeat the isolation, so it is refused.";
+        "this build can verify a hard isolated environment and run a contained process inside one, "
+        + "but a whole task still prepares its workspace, context, git, verification, review and "
+        + "evidence on the host; running it that way would leave the work half outside the boundary, "
+        + "so it is refused.";
 }

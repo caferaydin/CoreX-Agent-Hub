@@ -3,10 +3,13 @@
 Faz 10B-1: **yarışsız Windows süreç başlatma**.
 Faz 10B-2: **Windows Job Object kaynak limitleri**.
 Faz 10C-1: **sert izolasyon hazırlığı ve topoloji kapısı** (WSL'de görev çalıştırma YOK).
+Faz 10C-2: **WSL2 sert süreç yürütme düzlemi** (systemd transient unit + cgroup çevrelemesi).
 
-Bu belge Faz 10'un sertleştirme işini kaydeder. Şu an 10B-1, 10B-2 ve 10C-1 uygulanmıştır;
-geri kalan dilimler (10C-2 ve sonrası) aşağıda ayrıca işaretlenmiştir ve
+Bu belge Faz 10'un sertleştirme işini kaydeder. Şu an 10B-1, 10B-2, 10C-1 ve 10C-2
+uygulanmıştır; geri kalan dilimler (10C-3 ve sonrası) aşağıda ayrıca işaretlenmiştir ve
 **uygulanmamıştır**.
+
+**Tam Hard görev kabulü 10C-2'den sonra da REDDEDİLMEKTEDİR** — sebebi §11.12'dedir.
 
 ## 1. Kapatılan yarış
 
@@ -240,13 +243,15 @@ yerde, sonlu limitli bir Windows Job kullanmalıdır.
 
 ## 9. Kalan sınırlamalar
 
-- Linux kaynak **zorlaması** (systemd/cgroup: `MemoryMax`, `TasksMax`,
-  `KillMode=control-group`) **10C-2**'ye aittir. 10C-1 yalnızca bu zorlamanın mümkün olup
-  olmadığını ölçer ve mümkün değilse yürütmeyi reddeder.
+- Linux kaynak zorlaması (systemd/cgroup: `MemoryMax`, `TasksMax`, `KillMode=control-group`)
+  **10C-2'de uygulandı** — bkz. §11. 10C-1 yalnızca bu zorlamanın mümkün olup olmadığını ölçer.
+- Sert izole bir ortam içinde **bir süreç** çalıştırılabilir (§11); **bir Hub görevi**
+  çalıştırılamaz. Workspace, context, git, doğrulama, review, kanıt ve sağlayıcı kimlik
+  doğrulaması hâlâ host tarafındadır ve 10C-3'e aittir.
 - CPU-rate kotası bu dilimin kapsamında değildir; yürütme süresinin otoritesi soft/idle/hard
   duvar saati zaman aşımlarıdır.
-- Sert izole bir ortam içinde görev çalıştırma yolu **yoktur**; hazır bir makine bile
-  reddedilir (§10.12).
+- Sert izole bir ortam içinde **görev** çalıştırma yolu yoktur; hazır bir makine bile
+  reddedilir (§10.12, §11.12).
 - Kontrol düzlemi **ağ** izolasyonu ölçülmemiştir ve bu build'de ölçülemez (§10.9); bu tek
   başına hiçbir sert ortamın `Ready` olamayacağı anlamına gelir.
 
@@ -559,3 +564,276 @@ gibi göstermesi olurdu.
 - Şema değişikliği, migration, API/UI alanı. `OrganizationDto` durum taşımaz ve taşımaya
   başlamadı.
 - Gerçek Kronos repository'si, bağlamı, kimlik bilgisi veya şirket verisi (ADR-0017).
+
+## 11. WSL süreç yürütme düzlemi (Faz 10C-2)
+
+**Bu dilim bir Hub görevini sert izole ETMEZ.** Yaptığı tek şey, WSL2 ortamının içinde
+*çevrelenmiş bir süreç* çalıştırabilen ilkeli eklemektir. Görevin geri kalanı — repository,
+context, git, doğrulama, review, kanıt, sağlayıcı kimlik doğrulaması — hâlâ host tarafındadır ve
+tam Hard görev kabulü **hâlâ reddedilir** (§11.12).
+
+### 11.1 Güven ayrımı
+
+```
+Windows Hub            = GÜVENİLEN kontrol düzlemi   -> distro'ya root olarak girer
+systemd transient unit = sınır
+workload               = GÜVENİLMEYEN               -> --uid=<agentUser>
+```
+
+Root'a girmek zorunludur: systemd unit oluşturmak ayrıcalıklı bir işlemdir ve çevrelemeyi
+dayatmaya izinli olmadan çevreleme istenemez. Güvenli kılan şey, aynı komutta workload'ın
+**başka bir kimliğe** verilmesidir. `--uid` olmadan workload da root olurdu ve o durumda sınır
+diye bir şey kalmazdı.
+
+Profil bir agent kullanıcısı adlandırmıyorsa istek **reddedilir**; root'a düşülmez.
+
+### 11.2 Komut yüzeyi (kurulu systemd 259'a karşı ölçüldü)
+
+Dokümantasyondan değil, makineden. Her seçenek bu sürümün `systemd-run --help` çıktısında vardır
+ve dayanılan davranış ayrıca doğrulanmıştır.
+
+```
+wsl.exe -d <environment> -u root --exec
+  /usr/bin/systemd-run
+    --quiet                       systemd-run'ın kendi gürültüsü workload stdout'una karışmasın
+    --wait                        servis bitene kadar bekler ve ÇIKIŞ KODUNU döndürür
+    --pipe                        stdin/stdout/stderr doğrudan bağlanır
+    --collect                     başarısız olsa bile unit'i kaldırır
+    --unit=corex-hub-<32 hex>.service
+    --uid=<agentUser>
+    --working-directory=<mutlak Linux yolu>
+    --property=TasksMax=<processLimit>
+    --property=MemoryMax=<memoryLimitBytes>
+    --property=MemorySwapMax=0
+    --property=KillMode=control-group
+    --property=RuntimeMaxSec=<hardTimeout + 15>
+    --setenv=NAME=VALUE ...
+    -- <executable> <argv...>
+```
+
+İptal:
+
+```
+wsl.exe -d <environment> -u root --exec /usr/bin/systemctl stop <unit>
+```
+
+`wsl.exe` sıradan bir Windows çocuğudur ve 10B-1/10B-2'de dondurulan yarışsız Job Object
+sınırından geçer. `Process.Start` yoktur, `cmd.exe` yoktur, `powershell` yoktur.
+
+### 11.3 Kabuk yoktur
+
+`systemd-run` orkestrasyondur, yorumlayıcı değil. Çalıştırılabilir ve **her** argüman ayrı birer
+argv girdisi olarak kalır; kaçırılacak bir komut satırı yoktur.
+
+`--` ayırıcısı önemlidir: ondan sonrası workload'dır, dolayısıyla `--uid=root` gibi görünen bir
+workload argümanı systemd-run tarafından kendi seçeneği sanılamaz. Bu bir testle kilitlidir.
+
+### 11.4 Unit kimliği
+
+`corex-hub-<correlation id, 32 hex>.service`
+
+Yalnızca Hub'ın ürettiği bir correlation id'den türetilir. Görev hedefi, repository adı, API
+parametresi veya agent çıktısı **hiçbir biçimde** unit adını etkileyemez — çünkü unit adı bir
+kontrol düzlemi tutamağıdır ve onu etkileyebilen, sahibi olmadığı bir unit'i adlandırabilir.
+
+`corex-hub-` öneki dekoratif değildir: iptal yolu bu öneki taşımayan hiçbir ada işlem yapmaz.
+`ssh.service`, `*`, `corex-hub-something.service` — hepsi reddedilir.
+
+Ad çakışması **fail-closed**'dır: unit zaten yüklüyse çalıştırma reddedilir, mevcut bir unit'e
+bağlanılmaz.
+
+### 11.5 Ön koşullar önce sorulur
+
+systemd, çözülemeyen bir kullanıcıyı 217, girilemeyen bir çalışma dizinini 200 ile bildirir — ve
+bunlar 217 ile çıkan bir workload'dan **ayırt edilemez**. Bu yüzden hepsi önceden sorulur:
+
+| Soru | Komut | Başarısızsa |
+|---|---|---|
+| agent kullanıcısı çözülüyor mu | `id -u <agentUser>` | reddedilir |
+| agent uid 0 mı | aynı çıktı | reddedilir |
+| çalışma dizini var mı, dizin mi | `stat -c %A <dir>` | reddedilir |
+| unit adı boşta mı | `systemctl show <unit> --property=LoadState` | reddedilir |
+
+Sonuç: bunlardan sonra `systemd-run --wait`'in döndürdüğü kod **workload'ın kendi çıkış kodudur**
+ve bu ölçülmüştür (0, 1, 124 aynen geçer). "Unit oluşturuldu" hiçbir zaman "workload 0 ile çıktı"
+diye yorumlanmaz.
+
+### 11.6 Çalışma dizini
+
+Segment bazlı doğrulama (`LinuxPath`), metin bazlı değil:
+
+- mutlak Linux yolu olmalı,
+- `..` reddedilir (çözülmez — Hub'ın kendi ürettiği bir yol değilse `..` ya hatadır ya girişim),
+- `\` veya `:` içeremez (Windows yolu),
+- `/mnt`, `/media`, `/proc`, `/sys`, `/dev` altında olamaz,
+- profilin `executionRoot`'u **altında** olmalı.
+
+`/srv/corex/execution`, `/srv/corex/exec` altında **değildir** — önek karşılaştırması bunu yanlış
+yapardı, segment karşılaştırması yapmaz.
+
+### 11.7 Ortam ve HOME
+
+Workload'ın ortamı, ortamın bir servise verdiği şey **artı** istekte açıkça adlandırılanlardır.
+Windows tarafından hiçbir şey miras alınmaz: istek isim listesi değil **değer** taşır, ve WSL
+yalnızca `WSLENV`'in adlandırdığını iletir — burada `WSLENV` ayarlanmaz.
+
+Gerçek makinede ölçülen servis ortamı: `LANG`, `PATH` (yalnızca Linux dizinleri), `USER`,
+`LOGNAME`, `HOME`, `INVOCATION_ID`, `MEMORY_PRESSURE_*`. Windows PATH'i, `ANTHROPIC_*`,
+`OPENAI_*`, `USERPROFILE`, `APPDATA` — **hiçbiri yok**.
+
+`HOME` uydurulmaz: systemd onu servisin çalıştığı uid'in passwd kaydından çözer. Windows
+`%USERPROFILE%` iletimi yoktur.
+
+### 11.8 Kaynak tavanları — ve ölçümün yakaladığı gerçek açık
+
+| Politika | systemd özelliği |
+|---|---|
+| `HardIsolationProfile.ProcessLimit` | `TasksMax` |
+| `HardIsolationProfile.MemoryLimitBytes` | `MemoryMax` |
+| *(aynı politika)* | `MemorySwapMax=0` |
+| — | `KillMode=control-group` |
+| `HardProcessRequest.HardTimeout` | `RuntimeMaxSec` (+15 sn) |
+
+Hiçbiri koşullu değildir: bir tanesi atlanmış koşu "biraz daha az çevrelenmiş" değil, atlanan
+boyutta **hiç çevrelenmemiş** bir koşudur.
+
+**`MemoryMax` tek başına bir bellek tavanı değildir.** Bu varsayılmadı, ölçüldü: 64 MiB
+`MemoryMax` altında 192 MiB isteyen bir workload 192 MiB'in **tamamını** aldı — tavanın üstündeki
+her şey swap'e gitti. Bu, gerçek WSL testi tarafından yakalandı ve üretim komutuna
+`MemorySwapMax=0` eklendi. Sayfalanarak aşılabilen bir sınır, koşunun tükettiği şeyin sınırı
+değildir.
+
+Süreç sayısı semantiği Windows Job Object ile aynıdır: **kök de sayılır**. `TasksMax=3` ölçüldü →
+workload + 2 çocuk; üçüncü `fork` `EAGAIN` aldı. Limitsiz kontrol koşusu 10 çocuğun hepsini
+oluşturdu.
+
+### 11.9 İki süre tavanı, bilinçli
+
+```
+host   : ProcessRunner hard timeout        -> HardTimeout
+Linux  : RuntimeMaxSec = HardTimeout + 15s -> Hub yokken bile geçerli
+```
+
+Redundant değildirler. `wsl.exe`'yi öldürmek, başlattığı Linux servisi hakkında **hiçbir şey**
+kanıtlamaz. Linux tavanı daha uzundur ki Hub ayaktayken host önce fark etsin ve unit'i kendisi
+durdursun; Hub yoksa da iş yine de sınırlansın.
+
+Gerçek ölçüm (§30 senaryosu): başlatıcı hemen çıktı, `RuntimeMaxSec=5` unit'i sonlandırdı
+(`Result=timeout`), cgroup kayboldu. `--collect` sayesinde başarısız unit kendini de kaldırdı —
+`reset-failed` gerekmedi.
+
+`HardProcessOutcome`'da "ortam tavanı bitirdi" diye **yedinci bir değer yoktur**. Sebebi dürüst:
+`systemd-run`, `RuntimeMaxSec` tetiklendiğinde de workload 1 ile çıktığında da aynı kodu döndürür
+(ölçüldü), ve ikisini ayırmanın tek yolu unit'i yüklü bırakıp sonradan sorgulamaktır — ki bu,
+terk edilmiş bir Hub'ın arkasında başarısız unit bırakmamasını sağlayan kendi kendine toplanmadan
+vazgeçmek demektir. Tavan bir değerle ilan edilmek yerine testle kanıtlanır.
+
+### 11.10 İptal ve ağaç temizliği
+
+İptal "wsl.exe'yi öldür ve umut et" değildir. Hub'ın **kendi** unit'ine karşı açık bir
+`systemctl stop` işlemidir, ve normal olmayan **her** bitiş (iptal, soft/idle/hard timeout) bunu
+tetikler.
+
+Gerçek ölçüm: parent + child + grandchild (`TasksCurrent=3`, cgroup'ta 3 pid) → `systemctl stop`
+→ cgroup dosyası yok, üç `/proc/<pid>` girdisinin üçü de yok, unit `LoadState=not-found`.
+
+Kanıt **cgroup üyeliğidir**, çalıştırılabilir adı değil: ada göre öldürmek meşgul bir makinede
+yanlış süreçleri bulur ve sessiz bir makinede çevreleme hakkında hiçbir şey kanıtlamaz.
+
+### 11.11 Transient unit yaşam döngüsü
+
+`--collect` ile unit, başarısız olsa bile kendini kaldırır. Kalıcı `.service` dosyası yoktur,
+`/etc/systemd/system` veya `/usr/lib/systemd/system` altına hiçbir şey yazılmaz,
+`daemon-reload` gerekmez. Test hem başarılı hem başarısız koşudan sonra `LoadState=not-found`
+doğrular.
+
+### 11.12 Hard görev kabulü HÂLÂ REDDEDİLİYOR
+
+`UnavailableHardExecutionPlane` üretimdeki tek `IHardExecutionPlane` uygulamasıdır ve
+**değişmedi**.
+
+`IHardExecutionPlane` "bu build **bütün bir görevi** sert izole ortamda çalıştırabilir mi" diye
+sorar. `IHardProcessExecutor` "bu build ortamın içinde çevrelenmiş bir süreç çalıştırabilir mi"
+diye. Bunlar **aynı yetenek değildir** ve ikincisinin var olması birincisini değiştirmez.
+
+Bir Hub görevi ayrıca workspace hazırlar, context paketi kurar, git çalıştırır, doğrular, review
+eder ve kanıt yazar — hepsi hâlâ host tarafında. Süreç çevrelenebiliyor diye kabul etmek, agent'ı
+sınırın içinde çalıştırırken repository'yi, kimlik bilgilerini ve Hub'ın kendi koşu kaydını dışarıda
+bırakmak olurdu; bu izolasyon değildir ve dürüst bir retten çok daha zor fark edilir.
+
+Bir guard, `IsolationComposition`'ın kabul otoritesini bir executor'dan **inşa edemeyeceğini**
+kaynak seviyesinde kilitler.
+
+### 11.13 Hub çöküşü / yeniden başlatma
+
+Transient unit, Windows başlatıcısından **daha uzun yaşayabilir** — `RuntimeMaxSec`'e kadar.
+10C-2'nin bu konudaki dürüst durumu:
+
+- **Kaçak koşu yoktur**: Linux tavanı her koşuyu kendiliğinden sınırlar (ölçüldü).
+- **Anında toplama iddiası yoktur**: yeniden başlayan bir Hub, önceki koşuların unit adlarını
+  bilmez. Unit adı `correlation id`'den *deterministik* olarak türer, dolayısıyla kimlik
+  yeniden inşa **edilebilir** — ama bunun için korelasyonun kalıcı olması gerekir.
+- Mevcut execution reconcile hâlâ otoritedir ve değişmedi.
+- **Kalıcılık eklenmedi.** Gerekliliği kanıtlanmadan şema açılmaz; gerçek ihtiyaç, bir görev
+  gerçekten sert izole çalıştığında (10C-3) ortaya çıkar. O noktada `Execution` satırının zaten
+  taşıdığı kimlikten unit adı türetilebilir; ayrı bir "systemd unit" tablosu bugün gerekli
+  değildir.
+
+### 11.14 Kontrol düzlemi ağı
+
+`control-plane.unreachable` **değişmedi** ve süreç çevrelemesi çalıştığı için `Pass` yapılmadı.
+Semantiği aynen 10C-1'deki gibidir (§10.9): görülebilen bir dosya sistemi yolu varsa `Fail`,
+yoksa `Unknown`. Ağ zorlaması 10C-3'e aittir.
+
+### 11.15 Gerçek makine ölçümleri
+
+Mevcut Ubuntu'da, `daemon` hesabı workload kimliği olarak, `/var/tmp` altında benzersiz ve
+sonradan silinen bir dizinde:
+
+| Ne | Sonuç |
+|---|---|
+| transient servis çalışıyor | evet, çıkış kodu 0 |
+| workload uid | `daemon` (uid 1), root değil |
+| çalışma dizini | tam olarak istenen |
+| stdout / stderr | ayrı ayrı yakalandı |
+| stdin + EOF | marker okundu, EOF görüldü |
+| çıkış kodu 0 / 3 | aynen geldi |
+| ortam izolasyonu | Windows PATH / sağlayıcı değişkeni / hesap adı **yok** |
+| `TasksMax=3` | `SPAWNED=2`; kontrol koşusu `SPAWNED=10` |
+| `MemoryMax=64MiB` | 192 MiB'e **ulaşamadı**; kontrol koşusu `REACHED=192` |
+| host deadline | koşuyu bitirdi, cgroup boşaldı |
+| terk edilmiş koşu | Linux tavanı bitirdi, `LoadState=not-found` |
+| iptal | parent+child+grandchild üçü de gitti |
+| transient unit | başarılı ve başarısız koşudan sonra `not-found` |
+| Ubuntu readiness | **hâlâ NotReady** |
+
+**Bu, Ubuntu'yu Hard-ready yapmaz.** Yalnızca systemd/cgroup mekaniklerinin mevcut olduğunu
+kanıtlar. Dağıtım hâlâ host sürücülerini bağlıyor, hâlâ Windows interop kayıtlı, hâlâ izole bir
+agent hesabı yok — 10C-1'in kanonik sonucu değişmedi.
+
+### 11.16 Dokümantasyon köken notu (10C-1 ölçümleri)
+
+İki farklı ölçüm belgede yan yana duruyor ve karıştırılmamalıdır:
+
+| Ölçüm | Agent kimliği | Nerede |
+|---|---|---|
+| **Kanonik negatif** (`hub doctor isolation`) | `cafer` — makinenin varsayılan hesabı | §10.14 |
+| Probe/adversarial testleri | `root` — her makinede aynı olsun diye | `WslReadinessProbeTests` |
+
+Kanonik olan `cafer` ile olandır: §10.14'teki 11 başarısız kontrol o koşudan gelir ve
+`agent.user.not-privileged` orada `adm, sudo` gerekçesiyle düşer. Test paketi `root` sorar çünkü
+testin hangi makinede koştuğuna bağlı olmaması gerekir; orada aynı kontrol `root` grubu
+gerekçesiyle düşer. İkisi de aynı şeyi kanıtlar, farklı hesaplarla.
+
+### 11.17 Bu dilimde YAPILMAYANLAR
+
+- Hard workspace / worktree yerleşimi (`10C-3`).
+- Hard context girdi yerleşimi.
+- Organizasyon başına evidence/CAS ayrımı.
+- Sağlayıcı kimlik doğrulama ayrımı ve sağlayıcı runtime yönlendirmesi.
+- Kontrol düzlemi ağ izolasyonu.
+- Hard sınır içinde git / doğrulama / review.
+- Orkestratör yönlendirmesi ve Hard görev kabulü.
+- Şema değişikliği, migration.
+- Provizyon: distro oluşturma/import, kullanıcı açma, `wsl.conf` düzenleme, mount değiştirme.
+- Gerçek Kronos verisi (ADR-0017). Kronos **BLOCKED**.

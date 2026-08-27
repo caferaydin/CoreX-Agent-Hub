@@ -22,6 +22,9 @@ public sealed class IsolationInvariantTests
     private const string RunnerFileName = "WslCommandRunner.cs";
     private const string AdmissionFileName = "HardIsolationAdmissionService.cs";
     private const string OrchestratorPersistenceFileName = "ExecutionOrchestrator.Persistence.cs";
+    private const string SystemdCommandFileName = "SystemdRunCommand.cs";
+    private const string ExecutorFileName = "WslHardProcessExecutor.cs";
+    private const string GatewayFileName = "WslExecutionGateway.cs";
 
     /// <summary>Everything under the Application layer's isolation namespace.</summary>
     private static readonly Assembly Application = typeof(HardIsolationReadiness).Assembly;
@@ -447,6 +450,218 @@ public sealed class IsolationInvariantTests
     }
 
     /// <summary>
+    /// Readiness and execution are different authorities with different powers.
+    ///
+    /// The read-only probe answers questions and changes nothing, and its closed tool surface is
+    /// what makes that checkable. Teaching it <c>systemd-run</c> or <c>systemctl stop</c> because
+    /// execution happens to need them would hand a component with no business changing anything a
+    /// general purpose way to start and stop services - so the two live in different files and
+    /// only one of them may name those tools.
+    /// </summary>
+    [Theory]
+    [InlineData("systemd-run")]
+    [InlineData("\"stop\"")]
+    [InlineData("\"kill\"")]
+    [InlineData("\"start\"")]
+    [InlineData("\"restart\"")]
+    [InlineData("reset-failed")]
+    [InlineData("--property=")]
+    [InlineData("--uid=")]
+    public void The_readiness_probe_never_learns_to_execute(string construct)
+    {
+        // systemctl itself is not forbidden here: readiness has to ask whether systemd is running,
+        // and `is-system-running` answers that without changing anything. What must never appear
+        // is a verb that acts.
+        Assert.DoesNotContain(construct, CodeOnly(SourceOf(ProbeFileName)), StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Only the hard execution files may drive systemd.
+    ///
+    /// One file builds the command and one file issues it; nothing else in the system knows that
+    /// systemd exists. A second place that could create or stop a unit would be a second
+    /// cancellation authority, and the whole point of deriving unit names from Hub identity is
+    /// that there is exactly one.
+    /// </summary>
+    [Fact]
+    public void Only_the_hard_execution_command_can_create_a_unit()
+    {
+        var offenders = RepoLayout.ProductionSourceFiles
+            .Where(f => CodeOnly(File.ReadAllText(f)).Contains("systemd-run", StringComparison.Ordinal))
+            .Select(f => Path.GetFileName(f))
+            .Order(StringComparer.Ordinal)
+            .ToList();
+
+        Assert.Equal([SystemdCommandFileName], offenders);
+    }
+
+    /// <summary>
+    /// Two files name systemctl, and they use it for opposite things.
+    ///
+    /// The probe asks it a question - is systemd running - and the execution command tells it to
+    /// do something. Both are legitimate and the difference matters, which is why the verbs are
+    /// guarded separately above rather than the executable being banned outright.
+    /// </summary>
+    [Fact]
+    public void Only_two_files_name_systemctl_at_all()
+    {
+        var offenders = RepoLayout.ProductionSourceFiles
+            .Where(f => CodeOnly(File.ReadAllText(f)).Contains("systemctl", StringComparison.Ordinal))
+            .Select(f => Path.GetFileName(f))
+            .Order(StringComparer.Ordinal)
+            .ToList();
+
+        Assert.Equal([SystemdCommandFileName, ProbeFileName], offenders);
+    }
+
+    /// <summary>
+    /// The generic process infrastructure stays generic.
+    ///
+    /// <c>CoreX.Hub.Execution</c> is the Windows process boundary and knows nothing of
+    /// distributions, systemd units or Linux accounts. If it did, every future backend would have
+    /// to be taught there, and the one place in the system allowed to create a process would
+    /// start making policy decisions about which environment it belongs to.
+    /// </summary>
+    [Theory]
+    [InlineData("Wsl")]
+    [InlineData("WSL")]
+    [InlineData("systemd")]
+    [InlineData("cgroup")]
+    [InlineData("TasksMax")]
+    public void The_process_infrastructure_knows_no_environment(string term)
+    {
+        var offenders = ProductionFiles("CoreX.Hub.Execution")
+            .Where(f => CodeOnly(File.ReadAllText(f)).Contains(term, StringComparison.Ordinal))
+            .Select(RepoLayout.Relative)
+            .ToList();
+
+        Assert.Empty(offenders);
+    }
+
+    /// <summary>
+    /// Both WSL gateways inherit exactly one Windows variable, and it is not negotiable.
+    ///
+    /// <c>SystemRoot</c> is there because it was measured to be necessary - wsl.exe reaches the
+    /// WSL service over RPC and that call fails without it - and nothing else is there because
+    /// nothing else has been shown to be. The reason this is a source guard rather than a
+    /// behavioural test is that widening the list is nearly invisible today: WSL forwards only
+    /// what <c>WSLENV</c> names, so extra variables sit on the host side doing nothing until the
+    /// day something sets <c>WSLENV</c>, and then they cross all at once.
+    /// </summary>
+    [Theory]
+    [InlineData(RunnerFileName)]
+    [InlineData(GatewayFileName)]
+    public void A_wsl_gateway_inherits_exactly_one_windows_variable(string fileName)
+    {
+        var allowlists = Regex.Matches(
+            CodeOnly(SourceOf(fileName)), @"EnvironmentAllowlist\s*=\s*\[(?<names>[^\]]*)\]");
+
+        Assert.NotEmpty(allowlists);
+        Assert.All(
+            allowlists.Select(m => m.Groups["names"].Value.Trim()),
+            names => Assert.Equal("SystemRootVariable", names));
+    }
+
+    /// <summary>
+    /// Nothing in the isolation work reaches for a shell.
+    ///
+    /// <c>systemd-run</c> takes an executable and an argument vector exactly as ProcessRunner
+    /// does, so there is no point anywhere in this path where a command becomes a string. A shell
+    /// here would also be the one that mattered most: it would run inside the boundary, as the
+    /// agent, with the workload's own arguments.
+    /// </summary>
+    [Theory]
+    [InlineData("/bin/sh")]
+    [InlineData("/bin/bash")]
+    [InlineData("/usr/bin/bash")]
+    [InlineData("bash -c")]
+    [InlineData("sh -c")]
+    [InlineData("--shell")]
+    public void The_isolation_work_reaches_for_no_shell(string construct)
+    {
+        var offenders = IsolationSourceFiles()
+            .Where(f => File.ReadAllText(f).Contains(construct, StringComparison.Ordinal))
+            .Select(RepoLayout.Relative)
+            .ToList();
+
+        Assert.Empty(offenders);
+    }
+
+    /// <summary>
+    /// The executor provisions nothing either.
+    ///
+    /// The same rule the probe has, for the same reason: a component that creates the directory
+    /// it was asked to work in, or the account it was asked to run as, is reporting on its own
+    /// work rather than on the machine - and is doing it with root.
+    /// </summary>
+    [Theory]
+    [InlineData("mkdir")]
+    [InlineData("chown")]
+    [InlineData("chmod")]
+    [InlineData("useradd")]
+    [InlineData("usermod")]
+    [InlineData("groupadd")]
+    [InlineData("wsl.conf")]
+    [InlineData("--import")]
+    [InlineData("--install")]
+    [InlineData("--unregister")]
+    public void The_hard_executor_never_provisions_anything(string verb)
+    {
+        var offenders = IsolationSourceFiles()
+            .Where(f => CodeOnly(File.ReadAllText(f)).Contains(verb, StringComparison.Ordinal))
+            .Select(RepoLayout.Relative)
+            .ToList();
+
+        Assert.Empty(offenders);
+    }
+
+    /// <summary>
+    /// The executor can only name the tools it needs, and one of them can only list.
+    ///
+    /// Three executables: the two systemd commands, plus the two read-only tools the
+    /// preconditions are established with. The workload's own executable is not in this set
+    /// because it arrives in the request - which is the point of the primitive.
+    /// </summary>
+    [Fact]
+    public void The_hard_executor_can_only_name_the_tools_it_needs()
+    {
+        string[] permitted =
+            ["/usr/bin/id", "/usr/bin/stat", "/usr/bin/systemctl", "/usr/bin/systemd-run"];
+
+        var named = IsolationSourceFiles()
+            .Where(f => Path.GetFileName(f) is ExecutorFileName or SystemdCommandFileName)
+            .SelectMany(f => GuestExecutable.Matches(CodeOnly(File.ReadAllText(f))).Select(m => m.Value.Trim('"')))
+            .Distinct(StringComparer.Ordinal)
+            .Order(StringComparer.Ordinal)
+            .ToList();
+
+        Assert.Equal(permitted, named);
+    }
+
+    /// <summary>
+    /// Containment is unconditional: every ceiling is stated on every run.
+    ///
+    /// A property emitted only under some condition is the shape this would most plausibly take
+    /// if it broke - a fast path, a small-run exemption - and the result would be a run that looks
+    /// entirely normal and is not contained in the dimension that was skipped.
+    /// </summary>
+    [Theory]
+    [InlineData("TasksMax")]
+    [InlineData("MemoryMax")]
+    [InlineData("MemorySwapMax")]
+    [InlineData("KillMode")]
+    [InlineData("RuntimeMaxSec")]
+    public void Every_ceiling_is_stated_on_every_run(string property)
+    {
+        var source = SourceOf(SystemdCommandFileName);
+
+        // One emission each, inside the single list the builder always produces.
+        Assert.Single(
+            Regex.Matches(CodeOnly(source), @"""--property=" + property + "="),
+            m => m.Length > 0);
+    }
+
+    /// <summary>
     /// The provider runtimes know nothing about isolation, in either direction.
     ///
     /// The companion to the provider-vocabulary guard. Isolation carries no provider vocabulary,
@@ -470,21 +685,51 @@ public sealed class IsolationInvariantTests
     }
 
     /// <summary>
-    /// The execution plane really is absent, not merely declared absent.
+    /// The process primitive is not wired into admission, and cannot be reached from it.
     ///
-    /// A half-built one would be worse than none: it would make the honest refusal look like a
-    /// switch somebody forgot to flip, and the first person to flip it would be running an agent
-    /// through a code path nothing has measured.
+    /// This replaces a Phase 10C-1 guard that asserted no systemd code existed anywhere. That was
+    /// the right invariant while there was no process plane and is the wrong one now that there
+    /// is: what must stay true is not that the mechanism is absent, but that it is not mistaken
+    /// for the whole workflow. So the admission authority is built from a readiness probe, a
+    /// profile source and an execution plane - and never from an executor.
+    /// </summary>
+    [Fact]
+    public void The_process_primitive_is_not_wired_into_admission()
+    {
+        var admission = CodeOnly(SourceOf(AdmissionFileName));
+
+        Assert.DoesNotContain(nameof(IHardProcessExecutor), admission, StringComparison.Ordinal);
+        Assert.DoesNotContain("HardProcessRequest", admission, StringComparison.Ordinal);
+
+        var composition = CodeOnly(SourceOf("IsolationComposition.cs"));
+        var admissionConstruction = composition[composition.IndexOf(
+            "new HardIsolationAdmissionService(", StringComparison.Ordinal)..];
+
+        var end = admissionConstruction.IndexOf(");", StringComparison.Ordinal);
+
+        Assert.DoesNotContain(
+            "Executor", admissionConstruction[..end], StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A workflow surface that belongs to a later slice has not been pulled forward.
+    ///
+    /// The process primitive is deliberately the only thing that moved. Repository placement,
+    /// context, evidence routing, provider authentication and control plane isolation are all
+    /// still on the host, and a half-migrated one of them would be the most dangerous possible
+    /// state: some of the work inside the boundary and some outside, with nothing saying which.
     /// </summary>
     [Theory]
-    [InlineData("systemd-run")]
-    [InlineData("MemoryMax")]
-    [InlineData("TasksMax")]
-    [InlineData("KillMode")]
-    public void No_execution_plane_is_half_built(string construct)
+    [InlineData("Worktree")]
+    [InlineData("ContextPack")]
+    [InlineData("EvidenceBlobStore")]
+    [InlineData("Repository")]
+    [InlineData("IAgentRuntime")]
+    [InlineData("VerificationProfile")]
+    public void No_later_workflow_surface_was_pulled_forward(string concept)
     {
-        var offenders = RepoLayout.ProductionSourceFiles
-            .Where(f => CodeOnly(File.ReadAllText(f)).Contains(construct, StringComparison.Ordinal))
+        var offenders = IsolationSourceFiles()
+            .Where(f => CodeOnly(File.ReadAllText(f)).Contains(concept, StringComparison.Ordinal))
             .Select(RepoLayout.Relative)
             .ToList();
 

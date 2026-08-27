@@ -77,9 +77,22 @@ public static class IsolationComposition
             new ConfiguredHardIsolationProfiles(config),
             WslReadinessProbe.Create(dataDirectory),
 
-            // Phase 10C-1 measures a hard environment and cannot execute inside one. Stating
-            // that here, rather than letting an execution find out, is what stops the only
-            // remaining alternative - running the work on the host instead.
+            // Still the production truth after Phase 10C-2. A contained process can now be run
+            // inside the environment (see CreateProcessExecutor below), but a whole task cannot,
+            // and admitting one because part of it could be contained is how work ends up half
+            // outside the boundary.
             new UnavailableHardExecutionPlane());
     }
+
+    /// <summary>
+    /// Builds the hard process primitive.
+    ///
+    /// Deliberately not reachable from <see cref="Create"/>. The admission authority above
+    /// answers a question about the whole task workflow, and nothing about this executor
+    /// existing changes that answer - wiring it into admission is Phase 10C-3's work, once the
+    /// workspace, evidence, authentication and control plane surfaces move inside the boundary
+    /// too. Until then it is available to be exercised and proven, and to nothing else.
+    /// </summary>
+    public static IHardProcessExecutor CreateProcessExecutor(string dataDirectory) =>
+        WslHardProcessExecutor.Create(dataDirectory);
 }
