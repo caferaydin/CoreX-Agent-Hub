@@ -1538,6 +1538,76 @@ Peer izolasyonu **zayıflatılmaz**. Seçenek belirlenene ve ölçülene kadar
 `peer.network.unreachable` **Unknown**, `peer.filesystem.unreachable` **Fail**, tam Hard hazırlık
 **false** ve `IHardExecutionPlane` **kullanılamaz** kalır.
 
+### 14.16 ÖLÇÜM — açık organizasyon-başına network namespace dokusu (10C-3B2C POC)
+
+§14.15 "dağıtım başına kök netns" mimarisini geçersiz kıldı. Bu bölüm, yerine önerilen dokunun
+**ölçülmüş** sonuçlarını kaydeder. Uygulama yapılmadı; üretim kodu değişmedi.
+
+Kurulum: temiz Debian 13 şablonundan iki tek-kullanımlık dağıtım, her birinde kendi sentetik
+`corex-agent-*`/`corex-service-*` hesapları, `automount=false`, `interop=false`, systemd açık.
+Doku: organizasyon başına **root'un sahibi olduğu** bir network namespace, bir veth çifti, ve
+**paylaşılan kök netns'te** Hub'a ait tek bir nftables tablosu. Operatörün Ubuntu'suna ve
+docker-desktop'a dokunulmadı; her şey temizlendi.
+
+**Çalışan kısımlar:**
+
+| Soru | Ölçüm |
+|---|---|
+| Açık netns'ler ayrı mı | **EVET** — A `4026532220`, B `4026532304`, kök `4026531833` |
+| Agent iş yükü hedef netns'e giriyor mu | **EVET** — `systemd-run --uid=<agent> --property=PrivateNetwork=yes --property=JoinsNamespaceOf=<holder>.service` |
+| Özellik verilmezse | iş yükü **paylaşılan kök netns**'e düşer — bağlanma açıkça doğrulanmalı |
+| netns içinde `127.0.0.1` | **namespace-yerel** — kök netns'in loopback servisi görünmüyor (kök kendi servisine ulaşabiliyor: kontrol) |
+| Peer A→B (politika öncesi) | **erişilebilir** (ayırt edici temel) |
+| Peer A→B ve B→A (politika sonrası) | **REDDEDİLDİ** |
+| Windows host `192.168.64.1` (politika öncesi) | **erişilebilir** — R1 düzeltmesini tekrar doğrular |
+| Windows host (politika sonrası, A ve B) | **REDDEDİLDİ** |
+| Paylaşılan kök servisi `10.77.10.1` (öncesi/sonrası) | erişilebilir → **REDDEDİLDİ** |
+| Public TCP/443 (politika sonrası, A ve B) | **İZİNLİ** (NAT üzerinden) |
+| DNS `10.255.255.254:53` (politika sonrası) | **İZİNLİ** — yalnızca o adres, yalnızca 53 |
+| Kaynak adres sahteciliği | A, B'nin adresini takınsa bile `iif cxr-a` ile sınıflanıyor → **REDDEDİLDİ** |
+| Agent `ip addr/route/link`, `nft flush/delete` | **hepsi reddedildi**, doku bozulmadı; agent yetenekleri sıfır |
+| Agent `unshare --user --net` | başarılı; ama **üst netns route değişikliği**, **Hub tablosu silme**, **kök netns'e setns**, **peer/Windows erişimi** — hepsi reddedildi |
+| Rakip tablo (`priority -400`, blanket `accept`) | Hub'ın `drop`'unu **atlatamıyor** — drop kesindir |
+
+**Ölçülen kısıtlar — tasarımın hesaba katması gerekenler:**
+
+1. **Paylaşılan kök netns, varsayılan-drop'a izin vermez.** Filtre zincirleri operatörün Ubuntu'su
+   ile aynı namespace'te yaşar; `policy drop` onun ağını da keserdi. POC bu yüzden `policy accept`
+   + **arabirim kapsamlı** drop kullandı. Sonuç: yeni bir arabirim varsayılan olarak
+   **filtrelenmemiş** olur. Organizasyon kimliği adresle değil **`iifname` ile** taşınmalı ve
+   hazırlık, beklenen her veth'in kuralda adının geçtiğini doğrulamalı.
+
+2. **`/run/netns` tanıtıcıları `wsl.exe` oturumunu aşamıyor.** `ip netns add` ile yaratılan isimli
+   tanıtıcı, oturum bitince kayboluyor (init'in mount namespace'inde `nsenter` ile yaratılsa bile).
+   Çalışan yöntem: netns'i **canlı bir root süreci** (systemd `PrivateNetwork=yes` holder birimi)
+   tutar. Bu yüzden `NetworkNamespacePath=` yerine `JoinsNamespaceOf=` kullanıldı.
+
+3. **WSL, oturum kalmayınca dağıtımı söküyor.** Hiçbir `wsl.exe` oturumu bağlı değilken dağıtım
+   sonlanır; `/run`, systemd geçici birimleri, netns'ler ve veth'ler yok olur. Doku doğası gereği
+   **geçicidir**.
+
+4. **Yeniden başlatmada asimetri — en tehlikeli bulgu.** Dağıtım yeniden başladığında Hub'ın
+   nftables tabloları **hayatta kalır** (paylaşılan kök netns WSL VM'ine aittir), ama netns'ler,
+   holder birimleri ve veth'ler **kaybolur**. Yani `nft list table` beklenen içeriği gösterirken
+   adlandırdığı arabirimler yoktur ve hiçbir şey filtrelenmiyordur. **Yalnızca tablo içeriğini
+   doğrulayan bir hazırlık, doku yokken zorlama raporlardı.**
+
+5. **`JoinsNamespaceOf=` eksik birimde sessizce geri düşüyor.** Var olmayan bir holder birimi
+   verildiğinde iş yükü hata vermeden **taze, boş bir özel netns**'te başladı
+   (`4026532370`). Erişilebilirlik açığı değil (boş netns'in bağlantısı yok) ama **bağlanma**
+   açığıdır: birimin başlaması, iş yükünün doğru organizasyonun namespace'inde olduğunu
+   **kanıtlamaz**. Hazırlık, iş yükünün netns inode'unu organizasyonunkiyle karşılaştırmalıdır.
+
+6. **`/mnt/wsl` ve `/mnt/wslg` hâlâ paylaşılıyor** ve agent, netns'in içinden bile yazabiliyor.
+   Ağ dokusu bunu değiştirmez. **G-K2 açık kalır.**
+
+**Hazırlık modeli için sonuç (uygulanmadı):** tek bir `network.policy.enforced` yetmez. En az
+`global-network-fabric.ready` (Hub tablosu + NAT + beklenen veth'ler mevcut ve doğru),
+`org-network-namespace.ready` (organizasyonun netns'i var ve root'a ait) ve
+`org-network-attachment.ready` (iş yükünün netns inode'u organizasyonunkiyle **aynı**) ayrı ayrı
+gerekir — ve bir organizasyonun politikası **asla** başka bir organizasyonun hazırlığını
+karşılamamalıdır.
+
 ### 14.3 Politika: efektler, mekanizma değil
 
 `HardNetworkPolicy` sağlayıcı-nötr bir **efekt** modelidir: hangi yetenek açık, hangi adres sınıfı
