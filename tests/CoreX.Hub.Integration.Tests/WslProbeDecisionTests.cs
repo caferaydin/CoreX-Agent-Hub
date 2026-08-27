@@ -1,5 +1,6 @@
 using System.Runtime.Versioning;
 using CoreX.Hub.Application.Isolation;
+using CoreX.Hub.Composition.Isolation;
 
 namespace CoreX.Hub.Integration.Tests;
 
@@ -59,6 +60,111 @@ public sealed class WslProbeDecisionTests
             readiness.UnmetCheckIds.Order(StringComparer.Ordinal));
 
         foreach (var id in network)
+        {
+            Assert.Equal(ReadinessStatus.Unknown, Status(readiness, id));
+        }
+
+        Assert.False(readiness.IsReady);
+    }
+
+    // -- the workload's own filesystem ------------------------------------------------------
+
+    /// <summary>
+    /// A shared surface a workload can read is a failure, and it is two failures.
+    ///
+    /// The surface question and the peer question are separate names for a reason - one says the
+    /// boundary did not close, the other says what that means - and both have to move when the
+    /// measurement does. A build where only the first noticed would report a closed peer route
+    /// while the route was open.
+    /// </summary>
+    [Theory]
+    [InlineData("-r")]
+    [InlineData("-w")]
+    public async Task A_reachable_shared_surface_fails_both_filesystem_questions(string access)
+    {
+        var script = ScriptedWslEnvironment.Correct()
+            .Sandboxed($"/usr/bin/test {access} /mnt/wsl");
+
+        var readiness = await script.ReadinessAsync();
+
+        Assert.Equal(
+            ReadinessStatus.Fail, Status(readiness, HardIsolationChecks.SharedFilesystemUnreachable));
+
+        Assert.Equal(
+            ReadinessStatus.Fail, Status(readiness, HardIsolationChecks.OtherHardEnvironmentUnreachable));
+
+        // And the environment is not ready, whatever else it got right.
+        Assert.False(readiness.IsReady);
+    }
+
+    /// <summary>
+    /// Every denied surface is asked about, not just the first.
+    ///
+    /// A boundary that closed <c>/mnt/wsl</c> and left the graphical stack's tmpfs open would be a
+    /// boundary with a hole in it, and a check that stopped at the first surface would call it
+    /// ready.
+    /// </summary>
+    [Fact]
+    public async Task Every_denied_surface_is_asked_about()
+    {
+        foreach (var surface in HardFilesystemPolicy.Phase10.DeniedSurfaces)
+        {
+            var script = ScriptedWslEnvironment.Correct()
+                .Sandboxed($"/usr/bin/test -r {surface.Path}");
+
+            Assert.Equal(
+                ReadinessStatus.Fail,
+                await StatusOf(script, HardIsolationChecks.SharedFilesystemUnreachable));
+        }
+    }
+
+    /// <summary>
+    /// A boundary that also denies the work is not a pass.
+    ///
+    /// Denying everything satisfies every negative check here, so an environment whose workspace
+    /// stopped working inside the boundary has to fail something - otherwise the easiest way to
+    /// make this phase green would be to break it.
+    /// </summary>
+    [Fact]
+    public async Task A_workspace_that_stopped_working_inside_the_boundary_fails()
+    {
+        var script = ScriptedWslEnvironment.Correct()
+            .Sandboxed("/usr/bin/test -w /srv/corex/exec", exitCode: 1);
+
+        var readiness = await script.ReadinessAsync();
+
+        Assert.Equal(
+            ReadinessStatus.Fail, Status(readiness, HardIsolationChecks.WorkloadFilesystemUsable));
+
+        // The denials are still clean, which is exactly why this has to be reported separately.
+        Assert.Equal(
+            ReadinessStatus.Pass, Status(readiness, HardIsolationChecks.SharedFilesystemUnreachable));
+
+        Assert.False(readiness.IsReady);
+    }
+
+    /// <summary>
+    /// A workload that could not be started answers nothing, and nothing is not a pass.
+    ///
+    /// The failure mode worth naming: a systemd that refused the unit, or a distribution that did
+    /// not come up, produces no output at all - which reads exactly like a refusal if the probe
+    /// only looks at exit codes. Unknown keeps the environment out.
+    /// </summary>
+    [Fact]
+    public async Task A_boundary_that_could_not_be_started_is_unknown()
+    {
+        // Correct() scripts the sandboxed questions; removing the answer for one leaves the probe
+        // with a command the environment does not respond to.
+        var script = ScriptedWslEnvironment.Correct().Unanswered(
+            "-u root --exec /usr/bin/systemd-run", "/usr/bin/test -r /mnt/wsl");
+
+        var readiness = await script.ReadinessAsync();
+
+        foreach (var id in new[]
+                 {
+                     HardIsolationChecks.SharedFilesystemUnreachable,
+                     HardIsolationChecks.OtherHardEnvironmentUnreachable,
+                 })
         {
             Assert.Equal(ReadinessStatus.Unknown, Status(readiness, id));
         }
@@ -236,21 +342,28 @@ public sealed class WslProbeDecisionTests
     }
 
     /// <summary>
-    /// The filesystem every WSL environment on one virtual machine shares.
+    /// The shared filesystem being mounted is not, by itself, a peer route.
     ///
-    /// Not a host volume and not a Windows path, which is what makes it easy to overlook: it is a
-    /// tmpfs two distributions can both write to, so one organization's environment can hand
-    /// something to another's through it.
+    /// This check used to be answered from exactly this mount table, and the answer was wrong in
+    /// the direction that costs an operator a day: every WSL distribution on the machine has
+    /// <c>/mnt/wsl</c>, so the environment could never become ready and nothing anybody did would
+    /// change it. The mount is the platform's; the boundary is the workload's, and the workload is
+    /// what is now asked. A host volume in the same table is still a finding, which is what keeps
+    /// this from being a relaxation.
     /// </summary>
     [Fact]
-    public async Task A_filesystem_shared_with_another_environment_fails()
+    public async Task The_shared_mount_existing_is_not_by_itself_a_peer_route()
     {
         var script = ScriptedWslEnvironment.Correct()
             .Service("/usr/bin/cat /proc/self/mountinfo", ScriptedWslEnvironment.HostExposedMounts);
 
+        var readiness = await script.ReadinessAsync();
+
         Assert.Equal(
-            ReadinessStatus.Fail,
-            await StatusOf(script, HardIsolationChecks.OtherHardEnvironmentUnreachable));
+            ReadinessStatus.Pass, Status(readiness, HardIsolationChecks.OtherHardEnvironmentUnreachable));
+
+        // The same table still carries a Windows volume, and that is still a failure.
+        Assert.Equal(ReadinessStatus.Fail, Status(readiness, HardIsolationChecks.HostDrivesNotMounted));
     }
 
     [Fact]
@@ -482,7 +595,6 @@ public sealed class WslProbeDecisionTests
         Assert.Equal(
             ReadinessStatus.Unknown, Status(readiness, HardIsolationChecks.HostDrivesNotMounted));
         Assert.Equal(
-            ReadinessStatus.Unknown,
-            Status(readiness, HardIsolationChecks.OtherHardEnvironmentUnreachable));
+            ReadinessStatus.Unknown, Status(readiness, HardIsolationChecks.ControlPlaneUnreachable));
     }
 }

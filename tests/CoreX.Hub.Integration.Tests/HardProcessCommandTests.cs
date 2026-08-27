@@ -96,6 +96,17 @@ public sealed class HardProcessCommandTests
                 "--property=MemorySwapMax=0",
                 "--property=KillMode=control-group",
                 "--property=RuntimeMaxSec=615",
+
+                // The shared WSL filesystem surfaces, closed before the workload starts.
+                "--property=PrivateMounts=yes",
+                "--property=InaccessiblePaths=/mnt/wsl",
+                "--property=InaccessiblePaths=/mnt/wslg",
+                "--property=InaccessiblePaths=/run/user",
+                "--property=InaccessiblePaths=-/tmp/.X11-unix",
+                "--property=ProtectProc=invisible",
+                "--property=CapabilityBoundingSet=",
+                "--property=NoNewPrivileges=yes",
+
                 "--",
                 "/usr/bin/id",
                 "-u",

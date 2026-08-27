@@ -1,6 +1,7 @@
 using System.Reflection;
 using System.Text.RegularExpressions;
 using CoreX.Hub.Application.Isolation;
+using CoreX.Hub.Composition.Isolation;
 
 // The assembly under test is held in a field called Domain, which shadows the namespace in an
 // expression, so the entity is reached through an alias rather than through that name.
@@ -206,6 +207,47 @@ public sealed class IsolationInvariantTests
         Assert.All(
             invocations.Select(m => m.Groups["args"].Value.Replace(" ", string.Empty, StringComparison.Ordinal)),
             args => Assert.Equal("," + Quoted("-n") + "," + Quoted("-l"), args));
+    }
+
+    /// <summary>
+    /// The one unit readiness may start is its own boundary probe, and nothing else.
+    ///
+    /// This is where the power granted above is bounded. The unit runs under the agent's own
+    /// account - never root, never a name written here - carries exactly the shipped boundary
+    /// rather than a set of properties spelled locally, and is anonymous, so the probe has no way
+    /// to address, adopt or collide with a unit that belongs to something else. A readiness pass
+    /// obtained against a weaker sandbox than the one workloads get would be the whole check
+    /// lying, which is why the properties come from one place.
+    /// </summary>
+    [Fact]
+    public void Readiness_starts_only_its_own_boundary_probe()
+    {
+        var probe = CodeOnly(SourceOf(ProbeFileName));
+
+        // One launch site, and it is the boundary probe.
+        Assert.Single(
+            Regex.Matches(probe, Regex.Escape("SystemdRunCommand.Executable")).Cast<Match>());
+
+        // Under the agent, from the profile.
+        Assert.Contains("\"--uid=\" + profile.AgentUser", probe, StringComparison.Ordinal);
+
+        // The shipped boundary, not a local copy of it.
+        Assert.Contains(
+            "HardMountSandbox.Properties(HardFilesystemPolicy.Phase10)", probe, StringComparison.Ordinal);
+
+        // No property is spelled here, so none can drift from the one that ships.
+        Assert.DoesNotContain("--property=Private", probe, StringComparison.Ordinal);
+        Assert.DoesNotContain("--property=Inaccessible", probe, StringComparison.Ordinal);
+        Assert.DoesNotContain("--property=Protect", probe, StringComparison.Ordinal);
+
+        // Anonymous: it cannot name a unit, so it cannot reach one it did not create.
+        Assert.DoesNotContain("--unit=", probe, StringComparison.Ordinal);
+
+        // And it is transient in every direction - it waits for its own answer and unloads.
+        foreach (var required in new[] { "\"--wait\"", "\"--collect\"", "\"--quiet\"" })
+        {
+            Assert.Contains(required, probe, StringComparison.Ordinal);
+        }
     }
 
     private static string Quoted(string value) => "\"" + value + "\"";
@@ -465,21 +507,25 @@ public sealed class IsolationInvariantTests
     /// <summary>
     /// Readiness and execution are different authorities with different powers.
     ///
-    /// The read-only probe answers questions and changes nothing, and its closed tool surface is
-    /// what makes that checkable. Teaching it <c>systemd-run</c> or <c>systemctl stop</c> because
-    /// execution happens to need them would hand a component with no business changing anything a
-    /// general purpose way to start and stop services - so the two live in different files and
-    /// only one of them may name those tools.
+    /// The probe answers questions and changes nothing, and a closed surface is what makes that
+    /// checkable. It may not stop, start or reset a unit; teaching it those because execution
+    /// happens to need them would hand a component with no business changing anything a general
+    /// purpose way to control services on the machine.
+    ///
+    /// What it may now do is start one transient unit of its own, and only because the question it
+    /// has to answer cannot be answered any other way. Whether an untrusted workload can reach a
+    /// shared mount is a fact about that workload's own mount namespace: reading the environment's
+    /// mount table answers a different question - and answered it wrongly for as long as this
+    /// probe did so, because every distribution on the machine has <c>/mnt/wsl</c> and no operator
+    /// could ever clear the finding. The narrower powers this needs are pinned by the test below,
+    /// and the tool surface it runs inside that unit is still the read only one.
     /// </summary>
     [Theory]
-    [InlineData("systemd-run")]
     [InlineData("\"stop\"")]
     [InlineData("\"kill\"")]
     [InlineData("\"start\"")]
     [InlineData("\"restart\"")]
     [InlineData("reset-failed")]
-    [InlineData("--property=")]
-    [InlineData("--uid=")]
     public void The_readiness_probe_never_learns_to_execute(string construct)
     {
         // systemctl itself is not forbidden here: readiness has to ask whether systemd is running,
@@ -1893,6 +1939,300 @@ public sealed class IsolationInvariantTests
             .ToList();
 
         Assert.Equal([nameof(UnavailableHardExecutionPlane)], implementations);
+    }
+
+    // -- the shared filesystem boundary ------------------------------------------------------
+
+    /// <summary>
+    /// The two shared WSL surfaces are denied, and the denial is not optional.
+    ///
+    /// <c>/mnt/wsl</c> was measured carrying a file from one disposable environment to another, in
+    /// both directions and off the same kernel device. It is the reason this policy exists, so it
+    /// cannot quietly leave the list; <c>/mnt/wslg</c> is per environment on the measured build and
+    /// is denied anyway, because it carries a read only bind of the whole root filesystem and
+    /// "shared today" is not worth re-measuring on every WSL update.
+    /// </summary>
+    [Fact]
+    public void The_shared_wsl_surfaces_are_always_denied()
+    {
+        var denied = HardFilesystemPolicy.Phase10.DeniedSurfaces.Select(d => d.Path).ToList();
+
+        Assert.Contains("/mnt/wsl", denied);
+        Assert.Contains("/mnt/wslg", denied);
+
+        // Every entry says why it is there, so the next person can judge it rather than guess.
+        Assert.All(
+            HardFilesystemPolicy.Phase10.DeniedSurfaces,
+            surface => Assert.False(string.IsNullOrWhiteSpace(surface.Reason)));
+
+        // And the boundary really renders each one.
+        var properties = HardMountSandbox.Properties(HardFilesystemPolicy.Phase10);
+
+        Assert.All(
+            HardFilesystemPolicy.Phase10.DeniedSurfaces,
+            surface => Assert.Contains(
+                "InaccessiblePaths=" + (surface.Optional ? "-" : string.Empty) + surface.Path, properties));
+
+        // A private mount namespace is what makes any of it a per workload fact.
+        Assert.Contains("PrivateMounts=yes", properties);
+    }
+
+    /// <summary>
+    /// The boundary reaches the launch path, and a vector that lost it is not a run.
+    ///
+    /// "The unit started" is not evidence of containment. A run missing one of these properties is
+    /// not a slightly less isolated run; it is an unisolated one in the dimension left out, which
+    /// is why the command re-reads what it built before handing it back.
+    /// </summary>
+    [Fact]
+    public void Every_hard_launch_carries_the_boundary()
+    {
+        var code = CodeOnly(SourceOf("SystemdRunCommand.cs"));
+
+        Assert.Contains("HardMountSandbox.Properties(HardFilesystemPolicy.Phase10)", code, StringComparison.Ordinal);
+        Assert.Contains("HardMountSandbox.IsFullyApplied", code, StringComparison.Ordinal);
+
+        // Not conditional on anything: no branch decides whether a workload gets the boundary.
+        Assert.DoesNotContain("if (HardMountSandbox", code, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Nothing a caller can spell reaches the boundary.
+    ///
+    /// An agent that could name a path to expose, or ask for a weaker sandbox, would be an agent
+    /// choosing its own isolation. The request carries a working directory, an argument vector and
+    /// an environment, and none of those is a sandbox property.
+    /// </summary>
+    [Fact]
+    public void A_workload_cannot_ask_for_a_weaker_boundary()
+    {
+        var request = CodeOnly(SourceOf("HardProcess.cs"));
+
+        foreach (var forbidden in new[]
+                 {
+                     "InaccessiblePaths", "PrivateMounts", "BindPaths", "BindReadOnlyPaths",
+                     "TemporaryFileSystem", "ProtectSystem", "ProtectHome", "MountFlags",
+                     "PrivateTmp", "ProtectProc", "Sandbox", "DeniedSurface",
+                 })
+        {
+            Assert.DoesNotContain(forbidden, request, StringComparison.Ordinal);
+        }
+
+        // The renderer reads the policy and nothing else - no request, no configuration.
+        var sandbox = CodeOnly(SourceOf("HardMountSandbox.cs"));
+
+        foreach (var forbidden in new[]
+                 {
+                     "HardProcessRequest", "AgentRunRequest", "IHubConfig", "Task",
+                     "Environment.GetEnvironmentVariable",
+                 })
+        {
+            Assert.DoesNotContain(forbidden, sandbox, StringComparison.Ordinal);
+        }
+    }
+
+    /// <summary>
+    /// The boundary is a mount namespace and never a change to the machine.
+    ///
+    /// Unmounting a shared WSL surface would take it away from the developer's own distributions
+    /// and from every other product using them, and it would outlive the run. Nothing in this
+    /// build unmounts anything.
+    /// </summary>
+    [Fact]
+    public void Nothing_unmounts_a_shared_surface()
+    {
+        var offenders = RepoLayout.ProductionSourceFiles
+            .Where(f => CodeOnly(File.ReadAllText(f)) is var code
+                        && (code.Contains("umount", StringComparison.OrdinalIgnoreCase)
+                            || code.Contains("\"mount\"", StringComparison.Ordinal)))
+            .Select(RepoLayout.Relative)
+            .ToList();
+
+        Assert.Empty(offenders);
+    }
+
+    /// <summary>
+    /// No production code names the operator's own distributions.
+    ///
+    /// The environment a hard organization runs in comes from its profile. A build that mentioned
+    /// the developer's Ubuntu or the Docker Desktop distribution by name would be a build with a
+    /// path to mutating them.
+    /// </summary>
+    [Fact]
+    public void No_production_code_names_the_operators_distributions()
+    {
+        var offenders = RepoLayout.ProductionSourceFiles
+            .Where(f => CodeOnly(File.ReadAllText(f)) is var code
+                        && (code.Contains("docker-desktop", StringComparison.OrdinalIgnoreCase)
+                            || code.Contains("\"Ubuntu", StringComparison.Ordinal)))
+            .Select(RepoLayout.Relative)
+            .ToList();
+
+        Assert.Empty(offenders);
+    }
+
+    /// <summary>
+    /// Readiness answers the peer filesystem question by running a workload, not by reading a file.
+    ///
+    /// This check used to parse the environment's mount table, which could only ever say that
+    /// <c>/mnt/wsl</c> exists - it does, in every distribution on the machine - so it failed
+    /// permanently for a condition nobody could clear, and it answered a question about the
+    /// distribution rather than about the workload. The measurement now runs as the agent, inside
+    /// the boundary the agent will actually get.
+    /// </summary>
+    [Fact]
+    public void Peer_filesystem_readiness_is_measured_from_the_workload()
+    {
+        var code = CodeOnly(SourceOf("WslReadinessProbe.cs"));
+
+        Assert.Contains("HardMountSandbox.Properties(HardFilesystemPolicy.Phase10)", code, StringComparison.Ordinal);
+        Assert.Contains("\"--uid=\" + profile.AgentUser", code, StringComparison.Ordinal);
+
+        // Present is not the same as used. The surface loop has to be what runs the workload, or
+        // the launch helper becomes dead code beside a verdict somebody decided another way - which
+        // is a mutation that leaves every string this guard looks for exactly where it was.
+        var loop = code[code.IndexOf("foreach (var surface in policy.DeniedSurfaces)", StringComparison.Ordinal)..];
+
+        Assert.Contains("await InSandboxAsync(runner, profile, [Test, \"-r\", surface.Path], ct)", loop, StringComparison.Ordinal);
+        Assert.Contains("await InSandboxAsync(runner, profile, [Test, \"-w\", surface.Path], ct)", loop, StringComparison.Ordinal);
+
+        // And the verdicts are read off what those answered, rather than constructed.
+        Assert.Contains("reachable.Add(surface.Path", loop, StringComparison.Ordinal);
+
+        // The mount table no longer answers it, and no path literal stands in for the policy.
+        Assert.DoesNotContain("CrossEnvironmentMountPoints", code, StringComparison.Ordinal);
+        Assert.DoesNotContain("\"/mnt/wsl\"", code, StringComparison.Ordinal);
+
+        // Both directions are reported, so a boundary that denied everything is not a pass.
+        Assert.Contains("HardIsolationChecks.WorkloadFilesystemUsable", code, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The filesystem questions are required, and the pair cannot answer for each other.
+    ///
+    /// Two environments can be perfectly separated on the filesystem and share a subnet, or the
+    /// reverse. A single check reporting both would let either answer stand for the other, which
+    /// is the same reason the network questions are split.
+    /// </summary>
+    [Fact]
+    public void The_filesystem_questions_are_required_and_distinct()
+    {
+        foreach (var id in new[]
+                 {
+                     HardIsolationChecks.SharedFilesystemUnreachable,
+                     HardIsolationChecks.OtherHardEnvironmentUnreachable,
+                     HardIsolationChecks.WorkloadFilesystemUsable,
+                 })
+        {
+            Assert.Contains(id, HardIsolationChecks.Required);
+        }
+
+        Assert.NotEqual(
+            HardIsolationChecks.SharedFilesystemUnreachable,
+            HardIsolationChecks.PeerNetworkUnreachable);
+
+        Assert.NotEqual(
+            HardIsolationChecks.OtherHardEnvironmentUnreachable,
+            HardIsolationChecks.PeerNetworkUnreachable);
+    }
+
+    /// <summary>
+    /// The mount boundary does not decide anything about the network.
+    ///
+    /// The two boundaries are composed at launch, and the reason to keep the renderers apart is
+    /// that solving one by dropping the other is the easy mistake: a mount sandbox that emitted
+    /// its own network property could quietly move a workload out of its organization's namespace
+    /// and every filesystem test would still pass.
+    /// </summary>
+    [Fact]
+    public void The_mount_boundary_decides_nothing_about_the_network()
+    {
+        var properties = HardMountSandbox.Properties(HardFilesystemPolicy.Phase10);
+
+        Assert.DoesNotContain(properties, p => p.StartsWith("PrivateNetwork", StringComparison.Ordinal));
+        Assert.DoesNotContain(properties, p => p.StartsWith("NetworkNamespacePath", StringComparison.Ordinal));
+
+        var sandbox = CodeOnly(SourceOf("HardMountSandbox.cs"));
+
+        Assert.DoesNotContain("Network", sandbox, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The boundary does not replace the temporary directories.
+    ///
+    /// It did, briefly, and the machine tests caught it. <c>PrivateTmp=yes</c> was there to close
+    /// <c>/tmp/.X11-unix</c>, which is bound from the graphical stack's tmpfs; what it also does is
+    /// give the unit a private <c>/var/tmp</c>, so an execution root underneath that one stopped
+    /// existing the moment the workload started and every run died with a chdir failure before
+    /// reaching its first instruction.
+    ///
+    /// The lesson is the one this phase is scoped by: close the shared surface, not the directory
+    /// it happens to live in. The socket is denied by name instead, and a workload keeps the
+    /// temporary directories it has always had.
+    /// </summary>
+    [Fact]
+    public void The_boundary_does_not_replace_the_temporary_directories()
+    {
+        var properties = HardMountSandbox.Properties(HardFilesystemPolicy.Phase10);
+
+        Assert.DoesNotContain(properties, p => p.StartsWith("PrivateTmp", StringComparison.Ordinal));
+        Assert.DoesNotContain(properties, p => p.StartsWith("TemporaryFileSystem", StringComparison.Ordinal));
+
+        // Neither temporary root is denied wholesale; the one shared thing inside them is.
+        Assert.DoesNotContain("InaccessiblePaths=/tmp", properties);
+        Assert.DoesNotContain("InaccessiblePaths=/var/tmp", properties);
+        Assert.Contains("InaccessiblePaths=-/tmp/.X11-unix", properties);
+    }
+
+    /// <summary>
+    /// A surface that must be there and is not refuses the launch; one that may be absent does not.
+    ///
+    /// Both halves matter. A typo in the denied list must not become a boundary that quietly
+    /// closes nothing - systemd refuses the unit, which is the right answer. But demanding a path
+    /// that only exists while the graphical stack is running would refuse every workload on a
+    /// machine where it is not, and there is nothing to hide when it is absent.
+    /// </summary>
+    [Fact]
+    public void Only_a_surface_that_may_be_absent_is_marked_optional()
+    {
+        var policy = HardFilesystemPolicy.Phase10;
+
+        // The measured cross environment channel is never optional.
+        Assert.False(policy.DeniedSurfaces.Single(s => s.Path == "/mnt/wsl").Optional);
+        Assert.False(policy.DeniedSurfaces.Single(s => s.Path == "/mnt/wslg").Optional);
+
+        var properties = HardMountSandbox.Properties(policy);
+
+        foreach (var surface in policy.DeniedSurfaces)
+        {
+            Assert.Contains(
+                "InaccessiblePaths=" + (surface.Optional ? "-" : string.Empty) + surface.Path, properties);
+        }
+    }
+
+    /// <summary>
+    /// Neither the domain nor a provider runtime knows any of this exists.
+    ///
+    /// A mount property in the domain would make containment a modelling concern; a shared WSL
+    /// path in a provider adapter would make it that vendor's business. It is neither.
+    /// </summary>
+    [Fact]
+    public void The_domain_and_the_providers_know_nothing_of_the_boundary()
+    {
+        foreach (var project in new[] { "CoreX.Hub.Domain", "CoreX.Hub.Agents" })
+        {
+            var offenders = ProductionFiles(project)
+                .Where(f => CodeOnly(File.ReadAllText(f)) is var code
+                            && (code.Contains("/mnt/wsl", StringComparison.Ordinal)
+                                || code.Contains("InaccessiblePaths", StringComparison.Ordinal)
+                                || code.Contains("PrivateMounts", StringComparison.Ordinal)
+                                || code.Contains("HardFilesystemPolicy", StringComparison.Ordinal)
+                                || code.Contains("HardMountSandbox", StringComparison.Ordinal)))
+                .Select(RepoLayout.Relative)
+                .ToList();
+
+            Assert.Empty(offenders);
+        }
     }
 
     private static readonly Regex WslWord = new(@"\bWSL\b|\bWsl", RegexOptions.CultureInvariant);

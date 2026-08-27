@@ -157,6 +157,12 @@ public static class SystemdRunCommand
             "--property=RuntimeMaxSec=" + RuntimeSeconds(request.HardTimeout).ToString(CultureInfo.InvariantCulture),
         };
 
+        // The shared WSL filesystem surfaces, closed before the workload starts rather than after.
+        // Unconditional and not derived from the request: there is one policy, Composition owns it,
+        // and nothing a caller can spell reaches it.
+        built.AddRange(
+            HardMountSandbox.Properties(HardFilesystemPolicy.Phase10).Select(p => "--property=" + p));
+
         // Ordered, so the same request always produces the same vector and a test can compare
         // one against a literal rather than against a set.
         foreach (var entry in request.Environment.OrderBy(e => e.Key, StringComparer.Ordinal))
@@ -169,6 +175,15 @@ public static class SystemdRunCommand
         built.Add("--");
         built.Add(request.Executable.Trim());
         built.AddRange(request.Arguments);
+
+        // Re-read what was actually built rather than trusting that the lines above ran. The
+        // boundary is the reason this command exists; a vector that lost part of it between here
+        // and exec must not become a run.
+        if (!HardMountSandbox.IsFullyApplied(built, HardFilesystemPolicy.Phase10))
+        {
+            problem = "the shared filesystem boundary is not fully expressed in the launch command.";
+            return false;
+        }
 
         arguments = built;
         return true;

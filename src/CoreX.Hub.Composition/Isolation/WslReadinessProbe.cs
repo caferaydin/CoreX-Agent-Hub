@@ -47,6 +47,9 @@ public sealed class WslReadinessProbe : IHardIsolationReadinessProbe
     /// </summary>
     private const string Sudo = "/usr/bin/sudo";
 
+    /// <summary>The identity allowed to impose containment. Never the workload's.</summary>
+    private const string TrustedControlUser = "root";
+
     /// <summary>The path every batched <c>stat</c> asks about. See <see cref="WslStatResponse"/>.</summary>
     private const string ControlPath = WslStatResponse.ControlPath;
 
@@ -211,6 +214,7 @@ public sealed class WslReadinessProbe : IHardIsolationReadinessProbe
         await CheckHostReachabilityAsync(_runner, profile, checks, ct);
         await CheckRootsAsync(_runner, profile, checks, ct);
         await CheckResourceControlAsync(_runner, profile, checks, ct);
+        await CheckWorkloadFilesystemAsync(_runner, profile, checks, ct);
         await CheckNetworkAsync(organizationSlug, profile, checks, ct);
 
         return HardIsolationReadiness.From(organizationSlug, checks);
@@ -461,7 +465,6 @@ public sealed class WslReadinessProbe : IHardIsolationReadinessProbe
                          HardIsolationChecks.HostDrivesNotMounted,
                          HardIsolationChecks.HostProviderAuthUnreachable,
                          HardIsolationChecks.ControlPlaneUnreachable,
-                         HardIsolationChecks.OtherHardEnvironmentUnreachable,
                      })
             {
                 checks.Add(ReadinessCheck.Unknown(id, "The environment's mount table could not be read."));
@@ -526,22 +529,6 @@ public sealed class WslReadinessProbe : IHardIsolationReadinessProbe
                 "No filesystem route to the Hub's control plane was found, and whether one exists "
                 + "over the network has not been established; this build has no probe for it."));
 
-        // Reported as the shared roots rather than as every mount beneath them: WSL puts a
-        // dozen bind mounts under those two, and naming all of them buries the finding.
-        var shared = WslMountTable.CrossEnvironmentMountPoints
-            .Where(root => entries.Any(
-                e => e.MountPoint.Equals(root, StringComparison.Ordinal)
-                     || e.MountPoint.StartsWith(root + "/", StringComparison.Ordinal)))
-            .ToList();
-
-        checks.Add(shared.Count == 0
-            ? ReadinessCheck.Passed(
-                HardIsolationChecks.OtherHardEnvironmentUnreachable,
-                "No filesystem shared with another WSL environment is mounted.")
-            : ReadinessCheck.Failed(
-                HardIsolationChecks.OtherHardEnvironmentUnreachable,
-                $"{string.Join(", ", shared)} is shared by every environment on this WSL virtual machine, "
-                + "so one organization's environment can pass data to another's."));
     }
 
     // ---------------------------------------------------------------------------------------
@@ -604,15 +591,7 @@ public sealed class WslReadinessProbe : IHardIsolationReadinessProbe
 
         foreach (var check in network.Concat(fabric))
         {
-            var existing = checks.FindIndex(c => string.Equals(c.Id, check.Id, StringComparison.Ordinal));
-
-            if (existing < 0)
-            {
-                checks.Add(check);
-                continue;
-            }
-
-            checks[existing] = Stricter(checks[existing], check);
+            Merge(checks, check);
         }
     }
 
@@ -1011,6 +990,200 @@ public sealed class WslReadinessProbe : IHardIsolationReadinessProbe
                 id,
                 $"The '{controller}' controller is not delegated, so the declared ceiling cannot be enforced."));
     }
+
+    // ---------------------------------------------------------------------------------------
+    // The workload's own filesystem
+    // ---------------------------------------------------------------------------------------
+
+    /// <summary>
+    /// What a workload can actually reach, asked by starting one.
+    ///
+    /// This replaces a mount table reading, and the replacement is the point. Every WSL
+    /// distribution on the machine has <c>/mnt/wsl</c> - it is the platform's, not the
+    /// environment's - so a check that looked for it in the mount table could only ever answer
+    /// "still there", which is what it did, permanently, for a condition no operator could clear.
+    /// It was also answering a question nobody asked: the claim is not that the distribution lacks
+    /// the surface, it is that an untrusted workload cannot use it.
+    ///
+    /// So the boundary is established the way the workload will meet it. A transient unit is
+    /// started with exactly the properties a real run gets, under the agent's own account, and
+    /// asked to do the things it must not be able to do. A refusal from the operating system is
+    /// the evidence; nothing here reads configuration.
+    ///
+    /// Both directions are reported, under separate names. A sandbox that hid the entire
+    /// filesystem would satisfy every denial below and be useless, so whether the workspace still
+    /// works is part of readiness rather than a test only property - and when it does not, the
+    /// environment is not ready.
+    /// </summary>
+    private async Task CheckWorkloadFilesystemAsync(
+        IWslCommandRunner runner,
+        HardIsolationProfile profile,
+        List<ReadinessCheck> checks,
+        CancellationToken ct)
+    {
+        var policy = HardFilesystemPolicy.Phase10;
+        var reachable = new List<string>();
+        var unanswered = new List<string>();
+
+        foreach (var surface in policy.DeniedSurfaces)
+        {
+            // Asked as permissions rather than as actions, and deliberately. A write attempt
+            // would be a stronger measurement and would also leave a file on a surface shared by
+            // every distribution on the machine in exactly the case where it must not - the case
+            // where the boundary is not working. Readiness establishes; it does not change.
+            //
+            // Read and write are separate questions: a surface can be unreadable and still accept
+            // a file at a name the workload already knows.
+            var readable = await InSandboxAsync(runner, profile, [Test, "-r", surface.Path], ct);
+            var writable = await InSandboxAsync(runner, profile, [Test, "-w", surface.Path], ct);
+
+            if (readable.ExitCode is null || writable.ExitCode is null)
+            {
+                unanswered.Add(surface.Path);
+                continue;
+            }
+
+            if (readable.Ok)
+            {
+                reachable.Add(surface.Path + " (readable)");
+            }
+
+            if (writable.Ok)
+            {
+                reachable.Add(surface.Path + " (writable)");
+            }
+        }
+
+        checks.Add(Surfaces(reachable, unanswered));
+
+        // The peer question is the same measurement read for what it means. The surfaces above are
+        // one kernel device shared by every distribution on this machine - measured, with a file
+        // written in one environment and read back in another - so a workload that cannot reach
+        // them has no filesystem route to a peer organization, and one that can has exactly that
+        // whether or not anybody has used it yet.
+        checks.Add(Peer(reachable, unanswered));
+
+        // Whether a Windows volume is reachable is asked here too, and not only of the environment.
+        // Automount is a distribution setting and the mount table read as the service identity is
+        // the right place to notice it being on - but the claim this phase makes is about what the
+        // workload can reach, and the two are only the same until something mounts a drive into a
+        // unit. The stricter of the two answers wins, so this can find a volume the environment
+        // level reading missed and can never excuse one it found.
+        var workloadMounts = await InSandboxAsync(runner, profile, [Cat, "/proc/self/mountinfo"], ct);
+
+        Merge(checks, workloadMounts.Ok
+            ? Drives(WslMountTable.Parse(workloadMounts.Lines))
+            : ReadinessCheck.Unknown(
+                HardIsolationChecks.HostDrivesNotMounted,
+                "A workload's own mount table could not be read."));
+
+        var usable = await InSandboxAsync(runner, profile, [Test, "-w", profile.ExecutionRoot], ct);
+
+        checks.Add(usable.ExitCode is null
+            ? ReadinessCheck.Unknown(
+                HardIsolationChecks.WorkloadFilesystemUsable,
+                "Whether a workload can still use its own execution root was not established.")
+            : usable.Ok
+                ? ReadinessCheck.Passed(
+                    HardIsolationChecks.WorkloadFilesystemUsable,
+                    $"A workload inside the boundary can still write to '{profile.ExecutionRoot}'.")
+                : ReadinessCheck.Failed(
+                    HardIsolationChecks.WorkloadFilesystemUsable,
+                    $"A workload inside the boundary cannot write to '{profile.ExecutionRoot}', "
+                    + "so the boundary is denying the work as well as the shared surfaces."));
+    }
+
+    /// <summary>What a workload's own mount table says about Windows volumes.</summary>
+    private static ReadinessCheck Drives(IReadOnlyList<MountEntry> entries)
+    {
+        var volumes = entries
+            .Where(WslMountTable.IsForeign)
+            .Where(e => e.HostDriveLetter is not null)
+            .Select(e => e.MountPoint)
+            .ToList();
+
+        return volumes.Count == 0
+            ? ReadinessCheck.Passed(
+                HardIsolationChecks.HostDrivesNotMounted,
+                "A workload running as the agent has no Windows volume mounted.")
+            : ReadinessCheck.Failed(
+                HardIsolationChecks.HostDrivesNotMounted,
+                $"A workload running as the agent reaches the host filesystem at "
+                + $"{string.Join(", ", volumes)}.");
+    }
+
+    /// <summary>Adds an answer, or lets the stricter of two answers to one question win.</summary>
+    private static void Merge(List<ReadinessCheck> checks, ReadinessCheck check)
+    {
+        var existing = checks.FindIndex(c => string.Equals(c.Id, check.Id, StringComparison.Ordinal));
+
+        if (existing < 0)
+        {
+            checks.Add(check);
+            return;
+        }
+
+        checks[existing] = Stricter(checks[existing], check);
+    }
+
+    private static ReadinessCheck Surfaces(IReadOnlyList<string> reachable, IReadOnlyList<string> unanswered)
+    {
+        if (unanswered.Count > 0)
+        {
+            return ReadinessCheck.Unknown(
+                HardIsolationChecks.SharedFilesystemUnreachable,
+                $"A workload could not be started to establish whether {string.Join(", ", unanswered)} "
+                + "is reachable.");
+        }
+
+        return reachable.Count == 0
+            ? ReadinessCheck.Passed(
+                HardIsolationChecks.SharedFilesystemUnreachable,
+                "Every shared WSL surface was refused to a workload running as the agent.")
+            : ReadinessCheck.Failed(
+                HardIsolationChecks.SharedFilesystemUnreachable,
+                $"A workload running as the agent reached {string.Join(", ", reachable)}.");
+    }
+
+    private static ReadinessCheck Peer(IReadOnlyList<string> reachable, IReadOnlyList<string> unanswered) =>
+        unanswered.Count > 0
+            ? ReadinessCheck.Unknown(
+                HardIsolationChecks.OtherHardEnvironmentUnreachable,
+                "Whether a workload has a filesystem route to another organization's environment "
+                + "was not established.")
+            : reachable.Count == 0
+                ? ReadinessCheck.Passed(
+                    HardIsolationChecks.OtherHardEnvironmentUnreachable,
+                    "A workload running as the agent has no filesystem shared with another environment.")
+                : ReadinessCheck.Failed(
+                    HardIsolationChecks.OtherHardEnvironmentUnreachable,
+                    $"A workload running as the agent reached {string.Join(", ", reachable)}, which is "
+                    + "shared by every environment on this WSL virtual machine, so one organization's "
+                    + "workload can pass data to another's.");
+
+    /// <summary>
+    /// Runs one question inside the boundary a real workload gets.
+    ///
+    /// As root, because imposing containment is privileged - the same split the executor uses -
+    /// and under the agent's account, because the account is what the answer is about. The
+    /// properties come from <see cref="HardMountSandbox"/> rather than from a list here, so a
+    /// readiness pass cannot be obtained against a weaker boundary than the one that ships.
+    /// </summary>
+    private static Task<WslResult> InSandboxAsync(
+        IWslCommandRunner runner,
+        HardIsolationProfile profile,
+        IReadOnlyList<string> command,
+        CancellationToken ct) =>
+        runner.RunAsync(
+            [
+                "-d", profile.EnvironmentId, "-u", TrustedControlUser, "--exec",
+                SystemdRunCommand.Executable, "--quiet", "--pipe", "--wait", "--collect",
+                "--uid=" + profile.AgentUser.Trim(),
+                .. HardMountSandbox.Properties(HardFilesystemPolicy.Phase10).Select(p => "--property=" + p),
+                "--",
+                .. command,
+            ],
+            ct);
 
     // ---------------------------------------------------------------------------------------
     // Plumbing

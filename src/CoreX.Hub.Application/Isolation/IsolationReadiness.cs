@@ -72,7 +72,38 @@ public static class HardIsolationChecks
     public const string MemoryLimitDeclared = "policy.memory-limit";
 
     public const string HostProviderAuthUnreachable = "host.provider-auth.unreachable";
+
+    /// <summary>
+    /// Whether another organization's environment is reachable through a shared mount.
+    ///
+    /// Answered from inside a workload rather than from the environment's mount table, and the
+    /// difference is the whole of this check. Every WSL distribution on the machine has
+    /// <c>/mnt/wsl</c>, so a mount table reading can only ever say "yes it is there", which was
+    /// this check's answer for as long as it read one - permanently not ready, for a condition
+    /// nothing could clear. The boundary is not the distribution's; it is the workload's own mount
+    /// namespace, and the only way to establish that is to run as the agent and try.
+    /// </summary>
     public const string OtherHardEnvironmentUnreachable = "peer.filesystem.unreachable";
+
+    /// <summary>
+    /// Whether the shared WSL surfaces are unreachable from a workload, each one measured.
+    ///
+    /// Kept apart from the peer question above because the two fail differently and a single
+    /// answer would let either stand for the other: this one says the surfaces are closed, and
+    /// that one says a peer organization's marker could not be read through them. A sandbox that
+    /// hid the wrong directory would satisfy the first and not the second.
+    /// </summary>
+    public const string SharedFilesystemUnreachable = "shared-filesystem.surface-unreachable";
+
+    /// <summary>
+    /// Whether a workload can still do its work inside that boundary.
+    ///
+    /// Deliberately part of readiness rather than a test only property. A boundary is trivially
+    /// satisfiable by denying everything, and an environment whose workspace stopped working is
+    /// not ready however clean its denials look.
+    /// </summary>
+    public const string WorkloadFilesystemUsable = "workload-filesystem.usable";
+
     public const string ControlPlaneUnreachable = "control-plane.unreachable";
 
     /// <summary>
@@ -165,6 +196,8 @@ public static class HardIsolationChecks
         MemoryLimitDeclared,
         HostProviderAuthUnreachable,
         OtherHardEnvironmentUnreachable,
+        SharedFilesystemUnreachable,
+        WorkloadFilesystemUsable,
         ControlPlaneUnreachable,
         NetworkModeSupported,
         HostLoopbackDisabled,

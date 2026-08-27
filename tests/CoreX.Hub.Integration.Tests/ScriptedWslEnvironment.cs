@@ -89,6 +89,16 @@ internal sealed class ScriptedWslEnvironment : IWslCommandRunner
             + $"{ExecutionRoot}|drwxrwx---|corex-hub|corex-agent|770\n"
             + $"{EvidenceRoot}|drwx------|corex-hub|corex-hub|700");
 
+        // Inside the boundary, every shared surface is refused and the workspace still works.
+        foreach (var surface in HardFilesystemPolicy.Phase10.DeniedSurfaces)
+        {
+            script.Sandboxed($"/usr/bin/test -r {surface.Path}", exitCode: 1);
+            script.Sandboxed($"/usr/bin/test -w {surface.Path}", exitCode: 1);
+        }
+
+        script.Sandboxed($"/usr/bin/test -w {ExecutionRoot}");
+        script.Sandboxed("/usr/bin/cat /proc/self/mountinfo", NativeMounts);
+
         script.Service("/usr/bin/systemctl is-system-running", "running");
         script.Service("/usr/bin/stat -f -c %T /sys/fs/cgroup", "cgroup2fs");
         script.Service("/usr/bin/cat /sys/fs/cgroup/cgroup.controllers", "cpuset cpu io memory hugetlb pids rdma");
@@ -110,6 +120,46 @@ internal sealed class ScriptedWslEnvironment : IWslCommandRunner
     {
         _answers[$"-d {EnvironmentId} -u {ServiceUser} --exec {command}"] =
             new WslResult(true, exitCode, stdout, string.Empty);
+
+        return this;
+    }
+
+    /// <summary>
+    /// Replaces what the environment answers when asked from inside the real boundary.
+    ///
+    /// The signature is built from <see cref="HardMountSandbox"/> rather than written out, so a
+    /// script cannot keep answering a launch shape the probe has stopped using - the tests would
+    /// go Unknown, which is never a pass, rather than silently keep passing.
+    /// </summary>
+    public ScriptedWslEnvironment Sandboxed(string command, string stdout = "", int exitCode = 0)
+    {
+        var properties = string.Join(
+            ' ', HardMountSandbox.Properties(HardFilesystemPolicy.Phase10).Select(p => "--property=" + p));
+
+        _answers[
+                $"-d {EnvironmentId} -u root --exec /usr/bin/systemd-run --quiet --pipe --wait --collect "
+                + $"--uid={AgentUser} {properties} -- {command}"] =
+            new WslResult(true, exitCode, stdout, string.Empty);
+
+        return this;
+    }
+
+    /// <summary>
+    /// Forgets one scripted answer, so the environment stops responding to that command.
+    ///
+    /// Matched on two fragments rather than on the whole signature, because the sandbox properties
+    /// in the middle belong to the shipped boundary and a test that spelled them would be a test
+    /// that had to be edited every time the boundary changed.
+    /// </summary>
+    public ScriptedWslEnvironment Unanswered(string containing, string alsoContaining)
+    {
+        foreach (var key in _answers.Keys
+                     .Where(k => k.Contains(containing, StringComparison.Ordinal)
+                                 && k.Contains(alsoContaining, StringComparison.Ordinal))
+                     .ToList())
+        {
+            _answers.Remove(key);
+        }
 
         return this;
     }

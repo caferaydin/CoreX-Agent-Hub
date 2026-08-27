@@ -38,15 +38,6 @@ internal static class WslMountTable
         };
 
     /// <summary>
-    /// Mount points shared between every environment on the same WSL virtual machine.
-    ///
-    /// These are not host volumes and nothing about them is a Windows path, which is exactly
-    /// what makes them easy to overlook: they are a tmpfs that two distributions can both
-    /// write to, so one hard environment can hand something to another through them.
-    /// </summary>
-    public static IReadOnlyList<string> CrossEnvironmentMountPoints { get; } = ["/mnt/wsl", "/mnt/wslg"];
-
-    /// <summary>
     /// Reads the entries this probe cares about out of a mountinfo dump.
     ///
     /// The format is positional up to a variable length optional field list, which ends at a
