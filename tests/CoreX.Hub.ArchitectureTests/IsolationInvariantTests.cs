@@ -27,6 +27,10 @@ public sealed class IsolationInvariantTests
     private const string GatewayFileName = "WslExecutionGateway.cs";
     private const string HardCommandsFileName = "HardGitCommands.cs";
     private const string HardWorkspaceFileName = "HardWorkspaceGateway.cs";
+    private const string HardEvidenceStoreFileName = "HardEvidenceStore.cs";
+    private const string HardEvidenceLayoutFileName = "HardEvidenceLayout.cs";
+    private const string HardEvidenceCommandsFileName = "HardEvidenceCommands.cs";
+    private const string HardEvidenceGatewayFileName = "HardEvidenceGateway.cs";
     /// <summary>Spelled through a constant so this file is not itself an offender.</summary>
     private static readonly string HardGitExecutable = "/usr/bin/" + "git";
 
@@ -896,6 +900,335 @@ public sealed class IsolationInvariantTests
     }
 
     /// <summary>
+    /// Every hard organization's evidence root comes from its own profile, and from nothing else.
+    ///
+    /// The whole per-organization property rests on this one derivation. A shared constant, a
+    /// default, or a root taken from a request would put two organizations in one store - and a
+    /// content addressed store shared between two tenants answers "do these bytes already exist"
+    /// to whoever asks, which is a question about somebody else's content.
+    /// </summary>
+    [Fact]
+    public void A_hard_evidence_root_comes_only_from_the_organizations_own_profile()
+    {
+        var store = CodeOnly(SourceOf(HardEvidenceStoreFileName));
+
+        Assert.Contains("HardEvidenceLayout.For(profile.EvidenceRoot)", store, StringComparison.Ordinal);
+
+        // No shared root, no default, no fallback: the layout has exactly one way in.
+        var layout = CodeOnly(SourceOf(HardEvidenceLayoutFileName));
+
+        Assert.DoesNotContain("Path.GetTempPath", layout, StringComparison.Ordinal);
+        Assert.DoesNotContain("shared", layout, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("Default", layout, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The evidence store is reached by content identity, never by a path a caller supplied.
+    ///
+    /// There is no traversal to defend against because a path cannot be asked for: the one narrow
+    /// point takes sixty-four hexadecimal characters or it throws.
+    /// </summary>
+    [Fact]
+    public void Hard_evidence_is_addressed_by_content_and_never_by_a_caller_path()
+    {
+        var store = CodeOnly(SourceOf(HardEvidenceStoreFileName));
+
+        Assert.DoesNotContain("string path", store, StringComparison.Ordinal);
+        Assert.DoesNotContain("relativePath", store, StringComparison.Ordinal);
+        Assert.Contains("HardEvidenceLayout.IsHash", store, StringComparison.Ordinal);
+
+        var layout = CodeOnly(SourceOf(HardEvidenceLayoutFileName));
+
+        Assert.Contains("hash.Length != 64", layout, StringComparison.Ordinal);
+        Assert.Contains("Uri.IsHexDigit", layout, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A blob is published by a rename that refuses to replace, and by nothing else.
+    ///
+    /// Publication is the one moment a content addressed name comes into existence. A copy, a
+    /// write straight to the final name, or a rename that overwrites would each let a reader see
+    /// a blob whose bytes are not the ones its name describes.
+    /// </summary>
+    [Fact]
+    public void A_hard_blob_is_published_only_by_a_non_replacing_rename()
+    {
+        var commands = CodeOnly(SourceOf(HardEvidenceCommandsFileName));
+
+        Assert.Contains("[Mv, \"-n\", pendingPath, blobPath]", commands, StringComparison.Ordinal);
+
+        foreach (var forbidden in new[] { "\"cp\"", "/usr/bin/cp", "[Mv, \"-f\"", "\"install\"" })
+        {
+            Assert.DoesNotContain(forbidden, commands, StringComparison.Ordinal);
+        }
+
+        // And what was received is hashed before it is given a name.
+        var store = CodeOnly(SourceOf(HardEvidenceStoreFileName));
+
+        var hashed = store.IndexOf("HashPending", StringComparison.Ordinal);
+        var published = store.IndexOf("Publish(pending", StringComparison.Ordinal);
+
+        Assert.True(hashed > 0 && published > hashed);
+    }
+
+    /// <summary>
+    /// The Windows Hub never reaches the environment's filesystem to store or read evidence.
+    ///
+    /// A <c>\\wsl$</c> path or a mounted drive would be a second way to the same bytes, outside
+    /// the ownership model and outside the control channel - and it would work, which is what
+    /// makes it worth a guard rather than a comment.
+    /// </summary>
+    [Theory]
+    [InlineData("\\\\wsl$")]
+    [InlineData("\\\\wsl.localhost")]
+    [InlineData("/mnt/c")]
+    [InlineData("File.ReadAllBytes")]
+    [InlineData("File.WriteAllBytes")]
+    [InlineData("FileStream")]
+    public void Hard_evidence_never_touches_the_environment_filesystem_directly(string construct)
+    {
+        var offenders = HardEvidenceSourceFiles()
+            .Where(f => CodeOnly(File.ReadAllText(f)).Contains(construct, StringComparison.Ordinal))
+            .Select(RepoLayout.Relative)
+            .ToList();
+
+        Assert.Empty(offenders);
+    }
+
+    /// <summary>
+    /// There is one secret catalogue, and hard evidence uses it.
+    ///
+    /// A second list for hard organizations would be a second definition of what a secret is, and
+    /// the weaker of the two would decide what got written to disk.
+    /// </summary>
+    [Fact]
+    public void Hard_evidence_redacts_through_the_one_shared_catalogue()
+    {
+        var gateway = CodeOnly(SourceOf(HardEvidenceGatewayFileName));
+
+        Assert.Contains("EvidenceRedactor", gateway, StringComparison.Ordinal);
+
+        // Redaction happens before the bytes are hashed, so the hash covers what is stored.
+        var redacted = gateway.IndexOf("_redactor.Redact", StringComparison.Ordinal);
+        var written = gateway.IndexOf("_store.WriteTextAsync", StringComparison.Ordinal);
+
+        Assert.True(redacted > 0 && written > redacted);
+
+        // And no second pattern list anywhere in the hard work.
+        var offenders = HardEvidenceSourceFiles()
+            .Where(f => CodeOnly(File.ReadAllText(f)).Contains("Regex", StringComparison.Ordinal))
+            .Select(RepoLayout.Relative)
+            .ToList();
+
+        Assert.Empty(offenders);
+    }
+
+    /// <summary>
+    /// Nothing in the hard work reads a provider session.
+    ///
+    /// Auth is agent-owned secret state. The workspace and the evidence store are the trusted
+    /// control plane, and a control plane that also read credentials would hold both the record
+    /// and the means of producing it.
+    /// </summary>
+    [Theory]
+    [InlineData("claude")]
+    [InlineData("codex")]
+    [InlineData("ANTHROPIC")]
+    [InlineData("OPENAI")]
+    [InlineData("credentials.json")]
+    [InlineData("auth.json")]
+    public void The_hard_control_plane_never_reads_a_provider_session(string construct)
+    {
+        var offenders = HardEvidenceSourceFiles()
+            .Concat(HardWorkspaceSourceFiles())
+            .Concat(IsolationSourceFiles())
+            .Where(f => CodeOnly(File.ReadAllText(f)).Contains(construct, StringComparison.OrdinalIgnoreCase))
+            .Select(RepoLayout.Relative)
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
+
+        Assert.Empty(offenders);
+    }
+
+    /// <summary>
+    /// The one place the host's own profile is named uses it for a drive letter and nothing else.
+    ///
+    /// Readiness has to answer whether the developer's session is reachable from inside the
+    /// environment, and that question cannot be asked without knowing which drive it is on. What
+    /// would turn a reachability check into a disclosure is reading anything there, or carrying a
+    /// session path into a report - so the derivation is narrowed to a single character here.
+    /// </summary>
+    [Fact]
+    public void The_host_profile_is_used_only_to_derive_a_drive_letter()
+    {
+        var probe = CodeOnly(SourceOf(ProbeFileName));
+
+        Assert.Matches(
+            @"DriveLetterOf\(\s*Environment\.GetFolderPath\(Environment\.SpecialFolder\.UserProfile\)\)",
+            probe);
+
+        // One mention, and it is that one.
+        Assert.Single(Regex.Matches(probe, "SpecialFolder"));
+
+        // Ordinal for the framework calls, because "profile." contains "file." when case is
+        // ignored and the guard would then be answering a different question.
+        foreach (var forbidden in new[] { "Directory.", "File." })
+        {
+            Assert.DoesNotContain(forbidden, probe, StringComparison.Ordinal);
+        }
+
+        foreach (var provider in new[] { ".claude", "codex", "anthropic", "openai" })
+        {
+            Assert.DoesNotContain(provider, probe, StringComparison.OrdinalIgnoreCase);
+        }
+    }
+
+    /// <summary>
+    /// The agent is never made the owner of anything in the evidence tree.
+    ///
+    /// Ownership is the whole boundary, so this is the single line that would undo it. Evidence is
+    /// what a human decision is made from, and a party that can read or alter the record of its own
+    /// run is a party whose record means nothing - which is why the agent has no access even to its
+    /// own execution's evidence.
+    /// </summary>
+    [Fact]
+    public void The_agent_is_never_an_owner_inside_the_evidence_tree()
+    {
+        var store = CodeOnly(SourceOf(HardEvidenceStoreFileName));
+
+        Assert.DoesNotContain("AgentUser", store, StringComparison.Ordinal);
+
+        // The one chown names the service identity, and the mode admits nobody else.
+        Assert.Contains("Own(_profile.ServiceUser.Trim()", store, StringComparison.Ordinal);
+        Assert.Contains("HardEvidenceCommands.Close(", store, StringComparison.Ordinal);
+
+        var commands = CodeOnly(SourceOf(HardEvidenceCommandsFileName));
+
+        Assert.Contains("[Chmod, \"-R\", \"0700\", path]", commands, StringComparison.Ordinal);
+
+        foreach (var loosened in new[] { "0770", "0750", "0755", "0777", "g+r", "o+r", "a+r" })
+        {
+            Assert.DoesNotContain(loosened, commands, StringComparison.Ordinal);
+        }
+    }
+
+    /// <summary>
+    /// No hard organization is given a group that could span more than one of them.
+    ///
+    /// A single service group across every hard root would read like tidy administration and would
+    /// quietly make every organization's evidence readable to every other - the exact property the
+    /// per-organization store exists to prevent.
+    /// </summary>
+    [Fact]
+    public void No_group_is_ever_granted_across_hard_roots()
+    {
+        var offenders = HardEvidenceSourceFiles()
+            .Concat(HardWorkspaceSourceFiles())
+            .Where(f => CodeOnly(File.ReadAllText(f)) is var code
+                        && (code.Contains("groupadd", StringComparison.Ordinal)
+                            || code.Contains("usermod", StringComparison.Ordinal)
+                            || code.Contains("chgrp", StringComparison.Ordinal)))
+            .Select(RepoLayout.Relative)
+            .ToList();
+
+        Assert.Empty(offenders);
+    }
+
+    /// <summary>
+    /// The one place HOME is set points it away from a session rather than at one.
+    ///
+    /// git reads a global configuration from HOME, and an unset HOME inside the environment would
+    /// resolve to whatever the passwd database says - a directory the agent may own. Pinning it to
+    /// the service's control root means the transfer's configuration is the Hub's and nobody
+    /// else's, which is the reverse of carrying a session in.
+    /// </summary>
+    [Fact]
+    public void Home_is_pinned_to_the_control_root_rather_than_to_a_session()
+    {
+        var commands = CodeOnly(SourceOf(HardCommandsFileName));
+
+        Assert.Contains("\"HOME=\" + layout.ControlRoot", commands, StringComparison.Ordinal);
+
+        // And nowhere else in the hard adapters is HOME named at all.
+        var offenders = HardEvidenceSourceFiles()
+            .Concat(HardWorkspaceSourceFiles())
+            .Where(f => !f.EndsWith(HardCommandsFileName, StringComparison.Ordinal))
+            .Where(f => CodeOnly(File.ReadAllText(f)).Contains("HOME", StringComparison.Ordinal))
+            .Select(RepoLayout.Relative)
+            .ToList();
+
+        Assert.Empty(offenders);
+    }
+
+    /// <summary>
+    /// Nothing carries the host's own session into the environment.
+    ///
+    /// Copying the developer's credentials in would make every isolation property above cosmetic:
+    /// the boundary would hold and the thing it was built to contain would already be inside it.
+    /// </summary>
+    [Theory]
+    [InlineData("USERPROFILE")]
+    [InlineData("SpecialFolder")]
+    [InlineData("\"cp\"")]
+    [InlineData("rsync")]
+    [InlineData("scp")]
+    public void The_hosts_own_session_is_never_carried_into_the_environment(string construct)
+    {
+        var offenders = HardEvidenceSourceFiles()
+            .Concat(HardWorkspaceSourceFiles())
+            .Where(f => CodeOnly(File.ReadAllText(f)).Contains(construct, StringComparison.Ordinal))
+            .Select(RepoLayout.Relative)
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
+
+        Assert.Empty(offenders);
+    }
+
+    /// <summary>
+    /// The isolation profile has no place to put a provider's session.
+    ///
+    /// Asserted on the type rather than on the source, so a field cannot be added under a
+    /// different spelling. Isolation supplies identities and boundaries; where a provider keeps
+    /// its state inside them belongs to that adapter.
+    /// </summary>
+    [Fact]
+    public void The_isolation_profile_stays_provider_neutral()
+    {
+        Assert.Equal(
+            [
+                "AgentUser", "Backend", "EnvironmentId", "EvidenceRoot", "ExecutionRoot",
+                "MemoryLimitBytes", "ProcessLimit", "ServiceUser",
+            ],
+            typeof(HardIsolationProfile)
+                .GetProperties()
+                .Select(p => p.Name)
+                .Order(StringComparer.Ordinal));
+    }
+
+    /// <summary>
+    /// No network boundary was implemented, and none was claimed.
+    ///
+    /// The network is the next slice, and the failure mode this guards against is a half-built
+    /// one: a firewall rule that exists, looks enforced, and has never been measured.
+    /// </summary>
+    [Theory]
+    [InlineData("nftables")]
+    [InlineData("iptables")]
+    [InlineData("netns")]
+    [InlineData("ip netns")]
+    [InlineData("firewall")]
+    [InlineData("proxy")]
+    public void No_network_boundary_was_implemented(string construct)
+    {
+        var offenders = RepoLayout.ProductionSourceFiles
+            .Where(f => CodeOnly(File.ReadAllText(f)).Contains(construct, StringComparison.OrdinalIgnoreCase))
+            .Select(RepoLayout.Relative)
+            .ToList();
+
+        Assert.Empty(offenders);
+    }
+
+    /// <summary>
     /// The provider runtimes know nothing about isolation, in either direction.
     ///
     /// The companion to the provider-vocabulary guard. Isolation carries no provider vocabulary,
@@ -1077,6 +1410,11 @@ public sealed class IsolationInvariantTests
     private static IEnumerable<string> HardWorkspaceSourceFiles() =>
         RepoLayout.ProductionSourceFiles.Where(
             f => f.Contains($"{Path.DirectorySeparatorChar}HardWorkspace{Path.DirectorySeparatorChar}", StringComparison.Ordinal));
+
+    /// <summary>The hard evidence adapter, likewise.</summary>
+    private static IEnumerable<string> HardEvidenceSourceFiles() =>
+        RepoLayout.ProductionSourceFiles.Where(
+            f => f.Contains($"{Path.DirectorySeparatorChar}HardEvidence{Path.DirectorySeparatorChar}", StringComparison.Ordinal));
 
     private static IEnumerable<string> ProductionFiles(string project) =>
         RepoLayout.ProductionSourceFiles.Where(

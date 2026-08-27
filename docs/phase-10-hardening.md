@@ -1179,3 +1179,188 @@ evidence, sağlayıcı kimlik doğrulaması ve ağ hâlâ host tarafındadır.
 - Şema değişikliği, migration, yeni API/UI yüzeyi.
 - Provizyon: distro/kullanıcı/grup oluşturma, `wsl.conf`, mount değişikliği.
 - Gerçek Kronos verisi (ADR-0017). Kronos **BLOCKED**.
+
+## 13. Sert kanıt ve sağlayıcı kimlik sınırı (Faz 10C-3B1)
+
+Bu bölüm 10C-3B1'in ne kurduğunu ve neyi hâlâ kurmadığını anlatır. Bir cümle önden: **Evidence /
+Auth sınır ilkelleri var ≠ Tam Hard Görev kullanılabilir.** Bu dilim ne ağ izolasyonu getirir ne de
+Hard görev kabulünü açar.
+
+### 13.1 Organizasyon başına fiziksel CAS
+
+Sert bir organizasyonun kanıtı kendi ortamının içinde, kendi köküyle yaşar. İki organizasyon aynı
+baytları saklarsa iki ayrı dosya oluşur ve hiçbiri diğerinin sakladığını gözlemleyemez.
+
+Ortak bir içerik adresli depo bunu yapamaz: "bu baytlar zaten var mı?" sorusunu soran herkese
+cevaplar ve o cevap başkasının içeriği hakkındadır. Bu yüzden Hard organizasyonlar mevcut ortak
+blob CAS'ını **paylaşmaz**.
+
+Yerleşim mevcut `EvidenceBlobStore` düzeniyle aynıdır — `blobs/<sha[0:2]>/<sha>` ve `_pending` —
+ama kök, organizasyonun kendi profilinden gelir ve başka hiçbir yerden gelmez. Sabit yok, varsayılan
+yok, çağıranın verdiği yol yok.
+
+### 13.2 Sahiplik: servis kimliği yazar, agent hiçbir şey göremez
+
+Kanıt ağacının sahibi organizasyonun servis kimliğidir, modu `0700`'dür. Agent:
+
+- dizini listeleyemez,
+- hash'ini bildiği bir blob'u okuyamaz,
+- blob yazamaz,
+- **kendi çalıştırmasının** kanıtına bile erişemez.
+
+Sonuncusu bir katılık gösterisi değil: kanıt, insanın karar verdiği kayıttır. Kendi çalıştırmasının
+kaydını okuyabilen ya da değiştirebilen bir taraf, kaydı hiçbir şey ifade etmeyen taraftır.
+
+Bu, tahmin edilemeyen isimlerle değil sahiplikle sağlanır. **Hash bir sır değildir.** Dosya adının
+bilinmesi erişim vermemelidir; burada vermiyor da — ölçülen ret gerçek bir işletim sistemi reddidir.
+
+Tek ayrıcalıklı adım kurulumdur: kök dizin `root` olarak oluşturulur, sonra servis kimliğine
+devredilir ve kapatılır. Saklanan hiçbir blob bu adımdan geçmez.
+
+Organizasyonlar arasında paylaşılan bir Linux grubu yoktur ve bir guard `groupadd` / `usermod` /
+`chgrp` kullanımını kilitler: tek bir servis grubu düzenli yönetim gibi görünür ve her
+organizasyonun kanıtını her diğerine okutur — organizasyon başına deponun engellemek için var
+olduğu özelliğin tam kendisi.
+
+### 13.3 Bayt taşıma ve atomik yayımlama
+
+Windows Hub, bunların hiçbirini yapmak için ortamın dosya sistemine dokunmaz. Yetki yolunda
+`\\wsl$` yolu yoktur, bağlı sürücü yoktur, `File.ReadAllBytes` yoktur.
+
+Baytlar kontrol kanalında base64 olarak taşınır. Bu tercih, dondurulmuş `ProcessRunner`
+sözleşmesine ikili bir stdin eklememek içindir (ADR-0020).
+
+Yayımlama tek bir yerde olur:
+
+1. Hub gönderdiği baytların SHA-256'sını ölçer.
+2. Baytlar `_pending` altındaki geçici bir isme yazılır — **asla nihai isme**.
+3. Ortam, aldığı dosyayı kendi tarafında yeniden hash'ler.
+4. İki ölçüm uyuşmazsa hiçbir şey yayımlanmaz.
+5. Uyuşurlarsa `mv -n` ile içerik adresli isim oluşur.
+
+Böylece bir blob'un adı her zaman içindeki baytları tarif eder. Yarıda kalan bir aktarım en kötü
+ihtimalle yayımlanmamış bir dosya bırakır, asla bir blob bırakmaz: o ismi yalnızca yeniden
+adlandırma yaratır.
+
+Çağıranın verdiği SHA'ya tek başına güvenilmez; okuma da geri döndüğü baytları kendi adına karşı
+doğrular. İkili kanıt bozulmaz: hostile bir yük (gömülü `0x00`, `0xFF`, CRLF, geçersiz UTF-8)
+baytı baytına geri gelir.
+
+Depolama tavanı 16 MiB'dır. Bu bir depolama sınırıdır, API'nin indirme tavanı değildir; iki kavram
+ayrıdır ve ortak bir sayıları yoktur.
+
+### 13.4 Redaksiyon: tek katalog
+
+Sert kanıt, Windows tarafının kullandığı **aynı** `EvidenceRedactor` kataloğundan geçer ve
+redaksiyon hash'lemeden **önce** çalışır. Hard organizasyonlar için ikinci bir desen listesi, sırrın
+ne olduğuna dair ikinci bir tanım olurdu ve zayıf olan, disk'e yazılanı belirlerdi.
+
+### 13.5 SQLite metadata güvenilen Windows tarafında kalır
+
+Blob'lar ortamın içindedir; kanıt kaydı (`EvidenceArtifact`) Hub'ın veritabanında kalır.
+`EvidenceArtifact` zaten `organizationId` taşıdığı için depo yönlendirmesi belirsiz değildir —
+**şema değişikliği ve migration gerekmedi**.
+
+SQLite WSL'e taşınmadı: kontrol düzlemi güvenilen taraftır.
+
+### 13.6 Sağlayıcı kimlik doğrulama güven modeli
+
+Üç taraf vardır ve yalnızca biri izinlidir:
+
+| Taraf | Erişim | Neden |
+|---|---|---|
+| Agent'ın kendi oturumu | **Okur ve günceller** | Sağlayıcı süreci o kimlik olarak çalışır; kendi durumunu yenileyebilmelidir. |
+| Başka organizasyonun oturumu | **Reddedilir** | İki gerçek uid, dört gerçek ret (oku/listele/yaz/yerleştir), iki yönde de. |
+| Host geliştiricinin oturumu | **Ulaşılamaz olmalı** | Aksi hâlde sınır tutar ama içermek için kurulduğu şey zaten içeridedir. |
+
+Organizasyonun servis kimliğinin de bir oturumda işi yoktur. Auth, agent'a ait gizli durumdur;
+workspace ve kanıtı yöneten servis aynı zamanda kimlik bilgilerini de okuyabilseydi, tek bir kimlik
+hem kaydı hem onu üretme aracını elinde tutardı.
+
+`HardIsolationProfile` sekiz alan taşır ve hiçbiri sağlayıcıya ait değildir: `claudeHome`,
+`codexHome`, `anthropicToken`, `openaiToken` **yoktur ve eklenmeyecektir**. İzolasyon kimlikleri ve
+sınırları verir; bir sağlayıcının kendi durumunu bunların içinde nerede tuttuğu o adaptörün işidir.
+
+Agent'ın ev dizini `getent passwd` alan 5'ten çözülür ve **yargılanır**: var olmalı, dizin olmalı,
+agent'a ait olmalı, Linux-native olmalı. `/home/<agentUser>` string birleştirmesiyle **asla
+üretilmez** — üretilseydi doğru görünen, var olmayan ve izolasyon diye raporlanacak bir yol çıkardı.
+Operatörün dağıtımındaki stand-in hesaplarda cevap bir reddir (`daemon`'ın evi `/usr/sbin` ve
+root'a aittir) ve bu doğru cevaptır: evi başkasına ait olan bir agent orada oturum tutamaz, tutsaydı
+da sahibi onu okuyabilirdi.
+
+Host'un oturumunun ortama taşınmasına ait tek bir kod yolu yoktur. Readiness'ın host profilini
+adlandırdığı tek yer bir sürücü harfi türetmek içindir; içerik okunmaz, hiçbir oturum yolu rapora
+girmez. `HOME`'un atandığı tek yer, git'in global yapılandırma okumasını servis kontrol köküne
+sabitler — bir oturumu içeri taşımanın tersi.
+
+**Kimlik bilgisi içeriği hiçbir yerde okunmaz, yazdırılmaz veya raporlanmaz.**
+
+Bu makinede host sürücüleri bağlı olduğu için host oturumu **ulaşılabilirdir** ve
+`host.provider-auth.unreachable` `Fail` raporlar. Test, ulaşılmazlığı değil **ikisinin
+uyuştuğunu** doğrular: agent'ın host dosya sistemini okuyabildiği hâlde readiness'ın o kontrole
+`Pass` dediği bir yapı, iki hatanın tek başına olduğundan çok daha kötüdür.
+
+### 13.7 Sentetik doğrulama — ve ne kanıtlamadığı
+
+Testler dört gerçek Linux kimliği kullanır (`bin`, `daemon`, `sys`, `games`) ve tek kullanımlık bir
+`/var/tmp` ağacında çalışır. Bunlar gerçek uid'lerdir, dolayısıyla retler gerçek işletim sistemi
+retleridir — bir modelleme değil. Hesap, grup, mount, `wsl.conf` veya sağlayıcı ev dizini
+**değiştirilmez**; ağaç sonunda silinir.
+
+Oturum işaretçileri sentetiktir. **Gerçek bir Claude/Codex sırrı kullanılmadı**, hiçbir sağlayıcı
+çalıştırılmadı, hiçbir oturum açılmadı: soru bir işletim sistemi sorusudur ve onu gerçek bir kimlik
+bilgisiyle sormak, bir test uğruna gerçek bir kimlik bilgisini bir yere koymak olurdu.
+
+**Kanıtlanmayan:** organizasyonlar arası **distro** ayrımı. Her iki organizasyon da tek bir
+dağıtımın içindedir. Kurulan şey depolama ve sahiplik modelidir — ayrı ortamların anlam taşıması
+için önce doğru olması gereken kısım. Gerçek çoklu-distro ayrımı `wsl --import` gerektirirdi; brief
+bunu önce durup rapor etmeden yasakladığı için **yapılmadı**. Dolayısıyla:
+
+> **G-K3 / G-K4 AÇIK kalır.** Organizasyon başına fiziksel CAS ayrımı ve çapraz-kimlik reddi tek
+> distro içinde ölçülmüştür; çapraz-distro reddi ölçülmemiştir.
+
+Gerçek ortamda kanal yalan söyleyemez, bu yüzden hash uyuşmazlığı senaryosu betiklenmiş bir ağ
+geçidiyle ayrıca test edilir. Çalışan bir boru her zaman gönderileni teslim eder ve o hâlde
+karşılaştırma hiçbir şeyin sebebi olmaz — tek bir test fark etmeden kaldırılabilecek bir korumanın
+tam da şekli budur.
+
+### 13.8 Ağ bu dilimde YOK
+
+`nftables`, `iptables`, `netns`, firewall, proxy: **hiçbiri yok** ve bir guard bunu kilitler.
+Yarım kurulmuş bir ağ sınırı — var olan, uygulanmış görünen ve hiç ölçülmemiş bir kural — bu
+dilimin en kötü çıktısı olurdu.
+
+`control-plane.unreachable` **değişmedi**: dosya sistemi yolu görünürse `Fail`, aksi hâlde
+`Unknown`. `Pass` yoktur ve olamaz.
+
+### 13.9 Hard görev kabulü HÂLÂ REDDEDİLİYOR
+
+`UnavailableHardExecutionPlane` üretimdeki tek `IHardExecutionPlane` uygulamasıdır ve
+**değişmedi**. `IsolationComposition.CreateEvidence` ve `CreateAgentHome` bilinçli olarak kabul
+otoritesinden erişilemez.
+
+Çalışan bir kanıt deposu bu ortamı Hard-ready yapmaz; kanıt saklamak `control-plane.unreachable`'ı
+`Pass` yapmaz. İkisi de testle sabittir.
+
+### 13.10 10C-3B2'ye devir — ağ sınırı
+
+Bir sonraki dilimin cevaplaması gerekenler:
+
+- Hard agent, Hub'ın API'sine loopback yönlendirme, host ağ geçidi veya mirrored networking
+  üzerinden ulaşabiliyor mu?
+- Ulaşamadığı **ölçülebilir** mi? (Bir yapılandırma varsayımı ölçüm kılığına giremez.)
+- `control-plane.unreachable` hangi kanıtla `Unknown`'dan çıkabilir?
+- Sağlayıcı egress'i hangi yolla açık kalır, hangi yolla kapanır?
+
+Bunlar cevaplanana kadar hiçbir Hard ortam `Ready` olamaz.
+
+### 13.11 Bu dilimde YAPILMAYANLAR
+
+- Ağ izolasyonu (`10C-3B2`).
+- Tam Hard görev kabulü ve orkestratör yönlendirmesi (`10C-4`).
+- Evidence GC / saklama politikası.
+- Sağlayıcı runtime'ının Hard sınır içinde çalıştırılması; Claude/Codex **çalıştırılmadı**.
+- Hard context girdi yerleşimi, sınır içi doğrulama ve review.
+- Şema değişikliği, migration, yeni API/UI yüzeyi.
+- Provizyon: distro/kullanıcı/grup oluşturma, `wsl.conf`, mount değişikliği.
+- Gerçek Kronos verisi (ADR-0017). Kronos **BLOCKED**.

@@ -105,6 +105,24 @@ public static class IsolationComposition
     /// the host, and admitting a task because part of it could be isolated is how work ends up
     /// half outside the boundary.
     /// </summary>
+    /// <summary>
+    /// Builds one organization's hard evidence store.
+    ///
+    /// Which organization's store this is comes from the profile and from nothing else - not a
+    /// provider, not a task, not a request. There is deliberately no argument here through which
+    /// a caller could name a different root.
+    /// </summary>
+    public static HardEvidence.HardEvidenceGateway CreateEvidence(
+        HardIsolationProfile profile,
+        string dataDirectory) =>
+        HardEvidence.HardEvidenceGateway.Create(profile, dataDirectory);
+
+    /// <summary>Resolves where a hard isolated agent's own state may live.</summary>
+    public static HardEvidence.HardAgentHome CreateAgentHome(
+        HardIsolationProfile profile,
+        string dataDirectory) =>
+        HardEvidence.HardAgentHome.Create(profile, dataDirectory);
+
     public static HardWorkspace.HardWorkspaceGateway CreateWorkspace(
         CoreX.Hub.Workspace.WorkspaceManager windows,
         Func<Guid, Orchestration.RepositoryLocation> locate,
