@@ -38,6 +38,23 @@ public interface IHardIsolationProfileSource
 }
 
 /// <summary>
+/// Whatever can be established about an environment's network, said in readiness terms.
+///
+/// Deliberately mechanism free. The Application layer knows there are questions about the network
+/// that only the machine can answer - is the arrangement the supported one, is the host reachable,
+/// is another organization reachable, is the Hub's own policy loaded - and it knows that an
+/// unanswered one is not ready. What it does not know is nftables, and it must not: the policy is
+/// a set of effects, and the day the mechanism changes should be a day this file does not.
+///
+/// An absent implementation is not a pass. A build with no network probe reports every network
+/// check as unknown, which keeps the environment out of execution rather than letting it in.
+/// </summary>
+public interface IHardNetworkProbe
+{
+    Task<IReadOnlyList<ReadinessCheck>> ProbeAsync(HardIsolationProfile profile, CancellationToken ct);
+}
+
+/// <summary>
 /// Whether this build can actually run a whole task inside a hard isolated environment.
 ///
 /// Deliberately a first class question rather than an assumption, and deliberately about the

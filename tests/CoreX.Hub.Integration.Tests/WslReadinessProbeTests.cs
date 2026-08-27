@@ -125,10 +125,15 @@ public sealed class WslReadinessProbeTests
             return;
         }
 
+        // Two exceptions, and both are about something this machine cannot supply rather than
+        // something the probe failed to ask. The control plane's answer needs the permitted
+        // control to work as well as the refusals; the peer question needs a second hard
+        // environment, and there is one machine here.
         var unknown = readiness.Checks
             .Where(c => c.Status == ReadinessStatus.Unknown)
             .Select(c => c.Id)
-            .Where(id => id != HardIsolationChecks.ControlPlaneUnreachable);
+            .Where(id => id != HardIsolationChecks.ControlPlaneUnreachable)
+            .Where(id => id != HardIsolationChecks.PeerNetworkUnreachable);
 
         Assert.Empty(unknown);
     }

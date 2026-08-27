@@ -213,6 +213,45 @@ public sealed class LoopZeroInvariantTests
         }
     }
 
+    /// <summary>The one file allowed to name a socket type, and the reason it is allowed.</summary>
+    private const string NetworkProbeFileName = "WslHardNetworkProbe.cs";
+
+    /// <summary>
+    /// The exempted file can be connected to and cannot connect.
+    ///
+    /// The exemption above would be worthless without this. A listener is evidence; an outbound
+    /// client is a capability, and the difference is the whole reason one is permitted here. So
+    /// this pins the narrower claim: the probe opens endpoints, accepts what arrives, and has no
+    /// way to originate a connection to anywhere - no client construction, no connect call, no
+    /// address it did not measure, and no URL at all.
+    /// </summary>
+    [Fact]
+    public void The_network_probe_can_be_connected_to_and_cannot_connect()
+    {
+        var probe = CodeOnly(Source(NetworkProbeFileName));
+
+        // It listens.
+        Assert.Contains("new TcpListener(", probe, StringComparison.Ordinal);
+        Assert.Contains("AcceptTcpClientAsync", probe, StringComparison.Ordinal);
+
+        // It cannot originate anything.
+        foreach (var outbound in new[]
+                 {
+                     "new TcpClient(", "ConnectAsync", ".Connect(", "HttpClient", "WebRequest",
+                     "WebSocket", "http://", "https://", "SendAsync",
+                 })
+        {
+            Assert.False(
+                probe.Contains(outbound, StringComparison.OrdinalIgnoreCase),
+                NetworkProbeFileName + " originates: " + outbound);
+        }
+
+        // And it binds only what it measured or the loopback the Hub itself binds.
+        Assert.Contains("IPAddress.Loopback", probe, StringComparison.Ordinal);
+        Assert.Contains("topology.DefaultGateway", probe, StringComparison.Ordinal);
+        Assert.DoesNotContain("IPAddress.Any", probe, StringComparison.Ordinal);
+    }
+
     [Fact]
     public void Nothing_in_the_shipped_system_can_reach_a_network_or_a_provider()
     {
@@ -222,6 +261,19 @@ public sealed class LoopZeroInvariantTests
 
         foreach (var file in RepoLayout.ProductionSourceFiles)
         {
+            // One file listens, and only listens.
+            //
+            // Proving that an isolated agent cannot reach the Hub requires something for it to
+            // fail to reach; there is no way to establish a negative about reachability without
+            // opening the endpoint whose unreachability is the claim. So the network probe may
+            // accept a connection - and may not make one, which is what the companion test below
+            // pins. The connecting in that measurement is done by the agent, inside its own
+            // environment, which is the identity whose reach is in question.
+            if (string.Equals(Path.GetFileName(file), NetworkProbeFileName, StringComparison.Ordinal))
+            {
+                continue;
+            }
+
             var code = CodeOnly(File.ReadAllText(file));
 
             Assert.False(pattern.IsMatch(code), RepoLayout.Relative(file) + " reaches the network");

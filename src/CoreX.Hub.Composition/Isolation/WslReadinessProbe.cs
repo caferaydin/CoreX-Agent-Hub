@@ -90,16 +90,27 @@ public sealed class WslReadinessProbe : IHardIsolationReadinessProbe
     private readonly char? _controlPlaneDrive;
     private readonly char? _hostProfileDrive;
 
+    /// <summary>
+    /// Who answers the network questions, when anybody does.
+    ///
+    /// Kept behind the Application's port so this file never learns a filtering mechanism. Absent
+    /// is not permissive: with no network probe every network check is unknown, and unknown is not
+    /// ready.
+    /// </summary>
+    private readonly IHardNetworkProbe? _network;
+
     private WslReadinessProbe(
         IWslCommandRunner? runner,
         string? unavailable,
         char? controlPlaneDrive,
-        char? hostProfileDrive)
+        char? hostProfileDrive,
+        IHardNetworkProbe? network)
     {
         _runner = runner;
         _unavailable = unavailable;
         _controlPlaneDrive = controlPlaneDrive;
         _hostProfileDrive = hostProfileDrive;
+        _network = network;
     }
 
     /// <summary>
@@ -118,9 +129,11 @@ public sealed class WslReadinessProbe : IHardIsolationReadinessProbe
         var hostProfileDrive = DriveLetterOf(
             Environment.GetFolderPath(Environment.SpecialFolder.UserProfile));
 
+        var network = HardNetwork.WslHardNetworkProbe.Create(dataDirectory);
+
         return WslCommandRunner.TryCreate(dataDirectory, out var runner, out var problem)
-            ? new WslReadinessProbe(runner, null, controlPlaneDrive, hostProfileDrive)
-            : new WslReadinessProbe(null, problem, controlPlaneDrive, hostProfileDrive);
+            ? new WslReadinessProbe(runner, null, controlPlaneDrive, hostProfileDrive, network)
+            : new WslReadinessProbe(null, problem, controlPlaneDrive, hostProfileDrive, network);
     }
 
     /// <summary>
@@ -136,8 +149,9 @@ public sealed class WslReadinessProbe : IHardIsolationReadinessProbe
     internal static WslReadinessProbe Scripted(
         IWslCommandRunner runner,
         char? controlPlaneDrive = null,
-        char? hostProfileDrive = null) =>
-        new(runner, null, controlPlaneDrive, hostProfileDrive);
+        char? hostProfileDrive = null,
+        IHardNetworkProbe? network = null) =>
+        new(runner, null, controlPlaneDrive, hostProfileDrive, network);
 
     public async Task<HardIsolationReadiness> ProbeAsync(
         string organizationSlug,
@@ -190,6 +204,7 @@ public sealed class WslReadinessProbe : IHardIsolationReadinessProbe
         await CheckHostReachabilityAsync(_runner, profile, checks, ct);
         await CheckRootsAsync(_runner, profile, checks, ct);
         await CheckResourceControlAsync(_runner, profile, checks, ct);
+        await CheckNetworkAsync(profile, checks, ct);
 
         return HardIsolationReadiness.From(organizationSlug, checks);
     }
@@ -520,6 +535,77 @@ public sealed class WslReadinessProbe : IHardIsolationReadinessProbe
                 HardIsolationChecks.OtherHardEnvironmentUnreachable,
                 $"{string.Join(", ", shared)} is shared by every environment on this WSL virtual machine, "
                 + "so one organization's environment can pass data to another's."));
+    }
+
+    // ---------------------------------------------------------------------------------------
+    // Network
+    // ---------------------------------------------------------------------------------------
+
+    /// <summary>
+    /// Adds what the network probe established, and lets the stricter answer win.
+    ///
+    /// The control plane is asked about twice on purpose, because there are two ways to reach it
+    /// and each has its own evidence. The mount table answers whether there is a filesystem route
+    /// to the Hub's own directory; the network probe answers whether there is a route over the
+    /// network. Neither can speak for the other, so the two verdicts are combined by taking the
+    /// worse - a Pass over the network does not undo a host volume being mounted, and a clean
+    /// mount table does not make an open port unreachable.
+    /// </summary>
+    private async Task CheckNetworkAsync(
+        HardIsolationProfile profile,
+        List<ReadinessCheck> checks,
+        CancellationToken ct)
+    {
+        var network = _network is null
+            ? []
+            : await _network.ProbeAsync(profile, ct);
+
+        if (network.Count == 0)
+        {
+            foreach (var id in new[]
+                     {
+                         HardIsolationChecks.NetworkModeSupported,
+                         HardIsolationChecks.NetworkPolicyEnforced,
+                         HardIsolationChecks.HostLoopbackDisabled,
+                         HardIsolationChecks.ProxyNotInherited,
+                         HardIsolationChecks.PeerNetworkUnreachable,
+                     })
+            {
+                checks.Add(ReadinessCheck.Unknown(id, "This build asked nothing about the network."));
+            }
+
+            return;
+        }
+
+        foreach (var check in network)
+        {
+            var existing = checks.FindIndex(c => string.Equals(c.Id, check.Id, StringComparison.Ordinal));
+
+            if (existing < 0)
+            {
+                checks.Add(check);
+                continue;
+            }
+
+            checks[existing] = Stricter(checks[existing], check);
+        }
+    }
+
+    /// <summary>Fail beats Unknown beats Pass, and the losing detail is kept beside the winner.</summary>
+    private static ReadinessCheck Stricter(ReadinessCheck first, ReadinessCheck second)
+    {
+        static int Weight(ReadinessStatus status) => status switch
+        {
+            ReadinessStatus.Fail => 2,
+            ReadinessStatus.Unknown => 1,
+            _ => 0,
+        };
+
+        var (winner, other) = Weight(first.Status) >= Weight(second.Status)
+            ? (first, second)
+            : (second, first);
+
+        return winner with { Detail = winner.Detail + " " + other.Detail };
     }
 
     private static bool Reachable(IReadOnlyList<MountEntry> hostVolumes, char? drive, out string mountPoint)

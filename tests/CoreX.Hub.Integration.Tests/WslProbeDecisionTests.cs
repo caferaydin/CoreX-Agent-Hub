@@ -26,24 +26,40 @@ public sealed class WslProbeDecisionTests
         Status(await script.ReadinessAsync(), id);
 
     /// <summary>
-    /// A correct environment passes everything this build can measure - and is still not ready.
+    /// A correct environment passes everything this script can answer - and is still not ready.
     ///
-    /// Both halves are the point. Every check that can be satisfied is satisfied, so none of the
-    /// failures below is an artefact of a script that was wrong to begin with; and the one
-    /// remaining Unknown is the control plane, which has no probe in this build and therefore
-    /// keeps even a perfect environment out.
+    /// Both halves are the point. Every check the command runner can satisfy is satisfied, so none
+    /// of the failures below is an artefact of a script that was wrong to begin with; and what
+    /// remains unmet is the network, which this scripted environment has no probe for.
+    ///
+    /// That the network questions cannot be answered from a command script is not a gap in the
+    /// script. They are about reachability from the agent's own account, and the only honest way
+    /// to answer them is to ask the operating system - which is why an absent probe reports
+    /// unknown here rather than nothing, and why unknown keeps a perfect environment out.
     /// </summary>
     [Fact]
-    public async Task A_correct_environment_passes_everything_except_the_control_plane()
+    public async Task A_correct_environment_passes_everything_except_the_network()
     {
         var readiness = await ScriptedWslEnvironment.Correct().ReadinessAsync();
 
-        Assert.Equal(
-            [HardIsolationChecks.ControlPlaneUnreachable],
-            readiness.UnmetCheckIds);
+        string[] network =
+        [
+            HardIsolationChecks.ControlPlaneUnreachable,
+            HardIsolationChecks.NetworkModeSupported,
+            HardIsolationChecks.NetworkPolicyEnforced,
+            HardIsolationChecks.HostLoopbackDisabled,
+            HardIsolationChecks.ProxyNotInherited,
+            HardIsolationChecks.PeerNetworkUnreachable,
+        ];
 
         Assert.Equal(
-            ReadinessStatus.Unknown, Status(readiness, HardIsolationChecks.ControlPlaneUnreachable));
+            network.Order(StringComparer.Ordinal),
+            readiness.UnmetCheckIds.Order(StringComparer.Ordinal));
+
+        foreach (var id in network)
+        {
+            Assert.Equal(ReadinessStatus.Unknown, Status(readiness, id));
+        }
 
         Assert.False(readiness.IsReady);
     }

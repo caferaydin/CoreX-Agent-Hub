@@ -1394,3 +1394,275 @@ Bunlar cevaplanana kadar hiçbir Hard ortam `Ready` olamaz.
 - Şema değişikliği, migration, yeni API/UI yüzeyi.
 - Provizyon: distro/kullanıcı/grup oluşturma, `wsl.conf`, mount değişikliği.
 - Gerçek Kronos verisi (ADR-0017). Kronos **BLOCKED**.
+
+## 14. Sert ağ sınırı (Faz 10C-3B2)
+
+Bir cümle önden: **ağ politikası ve hazırlık otoritesi var; gerçek zorlama ölçülmedi.** Bu bölüm
+neyin kurulduğunu, neyin ölçüldüğünü ve neyin hâlâ kanıtlanmadığını ayırır.
+
+### 14.1 Ölçülen topoloji (10C-3B2A)
+
+Bu makinede WSL2 **NAT** modundadır — bir yapılandırma anahtarının yokluğundan değil, çalışma
+zamanı gerçeğinden:
+
+| Gerçek | Değer |
+|---|---|
+| Guest `eth0` | `192.168.66.185/20` |
+| Default route | `via 192.168.64.1` |
+| Windows adaptörü | `vEthernet (WSL (Hyper-V firewall))` = `192.168.64.1/20` |
+| Guest `lo` ek adres | `10.255.255.254/32` (DNS tüneli uç noktası) |
+| `/etc/resolv.conf` | symlink → `/mnt/wsl/resolv.conf`, `nameserver 10.255.255.254` |
+| `.wslconfig` ağ anahtarı | yalnızca `localhostForwarding=true` |
+| Hyper-V firewall (WSL VMCreatorId `{40E0AC32-…}`) | `Enabled=True`, `DefaultInboundAction=Block`, `DefaultOutboundAction=Allow`, `LoopbackEnabled=True`, `AllowHostPolicyMerge=True` |
+| Host proxy | **yok** (WinHTTP direct, `ProxyEnable=0`, `AutoConfigURL` yok) |
+| Public internet | **erişilebilir** (`1.1.1.1:443` TCP) |
+
+Guest `127.0.0.1` guest'in **kendi** loopback'idir; Windows loopback'ine ulaşmaz. Bu, NAT modunun
+sonucudur, bir sınırın değil.
+
+### 14.1.1 10C-3B2A raporuna düzeltme — host, alt ağ adresinde ERİŞİLEBİLİR
+
+10C-3B2A keşfi, guest'ten `192.168.64.1`'e (Windows'un WSL alt ağındaki adresi) TCP bağlantısının
+**timeout** verdiğini raporlamıştı. **Bu sonuç yanlıştı.** 10C-3B2B'de aynı yol tekrar ölçüldü:
+Windows tarafında `192.168.64.1:<port>`'a bağlanan sentetik bir dinleyici, guest'ten ayrıcalıksız
+agent kimliğiyle `nc` ile **art arda üç kez** başarıyla okundu ve marker geri geldi.
+
+Doğru tablo:
+
+| Yol | Ölçülen |
+|---|---|
+| Guest → Windows `127.0.0.1` | **ulaşılamaz** (guest'in kendi loopback'i) |
+| Guest → `localhost` | **ulaşılamaz** (guest'e çözülüyor) |
+| Guest → host'un alt ağ adresi (`192.168.64.1`), loopback'e bağlı servis | **ulaşılamaz** (servis orada dinlemiyor) |
+| Guest → host'un alt ağ adresi, **o adrese bağlı** servis | **ERİŞİLEBİLİR** |
+
+Sonuç: `DefaultInboundAction=Block` tek başına bu yolu kapatmıyor (148 mevcut Hyper-V kuralından
+biri izin veriyor olabilir; `AllowHostPolicyMerge=True` de host kurallarının karışmasına izin
+veriyor). Dolayısıyla:
+
+> **Loopback-only bağlama, Hard için bir güvenlik sınırı DEĞİLDİR.** Hub bugün ulaşılamaz durumda,
+> ama bu Hub'ın nereye bağlandığının bir sonucu; bir sınırın değil. Windows'ta o adrese bağlanan
+> herhangi bir servis bugün guest'ten erişilebilir.
+
+Bu düzeltme, guest tarafı nftables'ın **birincil** otorite seçilmesini doğruluyor.
+
+### 14.2 Birincil otorite: kök network namespace'te root sahipli nftables
+
+Karar (10C-3B2 kilitli): birincil per-org ağ otoritesi, her Hard organizasyonun **kök network
+namespace**'inde root'a ait nftables politikasıdır. Hyper-V/Windows firewall savunmada derinlik ve
+topoloji kanıtı olarak kalır, tek sınır değildir.
+
+Gerekçe ölçüldü: `New-NetFirewallHyperVRule` yalnızca **VMCreatorId** hedefleyebiliyor — yani tüm
+WSL. Parametre listesinde dağıtım, VM veya arabirim yok. Hyper-V firewall Hard-A ile Hard-B'yi
+**birbirinden ayıramaz**.
+
+AgentUser'ın bu politikayı değiştiremediği ölçüldü:
+
+| Deneme | Sonuç |
+|---|---|
+| `CapEff` / `CapPrm` / `CapAmb` | `0000000000000000` — CAP_NET_ADMIN yok, CAP_NET_RAW yok |
+| `ip route add` (kök netns) | **Operation not permitted**, route tablosu değişmedi |
+| `unshare -n` (düz) | **Operation not permitted** |
+| `unshare --user --net --map-root-user` | **başarılı** — iç içe namespace kurulabiliyor |
+| userns içinde `CapEff` | `000001ffffffffff` (tam) |
+| userns içinden `ip route add` (**kök netns**) | **Operation not permitted**, route tablosu değişmedi |
+
+Dar ve doğru değişmez şudur — geniş olanı yanlıştır:
+
+> Kullanıcı namespace'leri **kapalı değildir**. Agent bir tane açıp içinde root olabilir. Elde
+> edemediği şey, **kendisinin yaratmadığı** network namespace üzerinde yetkidir; o namespace bir üst
+> user namespace'e aittir. Agent'ın kendisi için yarattığı bir netns erişimi yalnızca **daraltabilir**.
+
+### 14.3 Politika: efektler, mekanizma değil
+
+`HardNetworkPolicy` sağlayıcı-nötr bir **efekt** modelidir: hangi yetenek açık, hangi adres sınıfı
+kapalı, ve her kapatmanın **gerekçesi**. nftables, zincir, öncelik geçmez.
+
+**İzin verilenler** (ad değil, yetenek):
+- ad çözümleme: ölçülen resolver adresine, **yalnızca** UDP/TCP 53
+- public HTTPS: TCP 443
+
+**Reddedilenler** (her biri gerekçeli): `10/8`, `172.16/12`, `192.168/16` (RFC1918), `100.64/10`
+(CGNAT), `169.254/16` (link-local), `127/8` (loopback arabirimi dışından), `0.0.0.0/8`, `224/4`
+(multicast), `240/4` (reserved); IPv6 karşılıkları `::1/128`, `fc00::/7`, `fe80::/10`, `ff00::/8`,
+`::/128`.
+
+IPv6 bu makinede yönlenmese de kapatılır: yalnızca operatörün bugün kullandığı adres ailesi için
+tutan bir sınır, bu değiştiği ilk anda **izin veren** yönde bozulur.
+
+Politika **yapılandırılamaz**: tek bir donmuş örnek, public kurucu yok, set edilebilir özellik yok,
+`Configuration` altında adı geçmiyor. Bir organizasyon kendi sınırını yapılandırmayla genişletemez.
+
+**Sağlayıcı adı yok.** Hostname allowlist'i hem izolasyonu sağlayıcı-şekilli yapardı hem de
+göründüğünden zayıf olurdu: filtrelenen ad, iş yükünün kendisinin verdiği addır.
+
+### 14.4 Varsayılan duruş ve sıralama
+
+Üç zincir, üçü de `policy drop`, üçü de açık `drop` ile biter: `output`, `input`, `forward`.
+`forward` hiçbir şeye izin vermez — iş yükü yönlendirici değildir.
+
+Sıralama tesadüf değil, testle sabit:
+
+1. `oifname "lo" ip daddr 127.0.0.0/8 accept` — loopback **arabirim** olarak, adres olarak değil.
+   Başka bir arabirimden çıkan 127.0.0.1 paketi, köprülenmiş bir host loopback'inin göründüğü şekildir
+   ve aşağıda düşürülür.
+2. Resolver izni — **özel adres reddinden önce**. Resolver'ın kendisi özel bir adrestir; reddin
+   arkasına konsa kural yüklenir, doğru okunur ve **hiç eşleşmez**.
+3. Tüm özel/reserved hedef reddi.
+4. `tcp dport 443 accept` — **tüm reddin arkasında**. "Public" olmasını sağlayan budur; öne
+   konsaydı tek bir port üzerinde sınırsız giden trafik olurdu ve incelemede aynı görünürdü.
+5. `input` zincirinde `ct state established,related accept`, **kaynak reddinden sonra**. Reddedilen
+   bir hedefe açılmış akış, "kurulmuş olmakla" kabul edilebilir hâle gelmez.
+
+### 14.4.1 Gateway tuzağı
+
+Default gateway özel bir adrestir ve public trafiğin **sonraki atlaması**dır. Kurallar **hedef**
+adrese göre eşleşir: `192.168.0.0/16` hedefini reddetmek, `1.1.1.1`'e adreslenmiş paketin aynı
+gateway üzerinden yönlenmesini engellemez. Ruleset gateway'i **hiçbir yerde ad olarak anmaz** ve
+hiçbir kural giden public trafik için arabirim eşleşmesi yapmaz — bu, reddi rotaya bağlamış olurdu.
+
+### 14.5 Hub'ın sahip olduğu tek tablo
+
+`inet corex_hard`. Makinenin ruleset'i **flush edilmez**, okunmaz, yargılanmaz; operatörün kuralları
+onundur. Yükleme, Hub'ın kendi tablosunun `delete`+`add`'idir (nft dosyayı atomik uygular), asla
+`flush ruleset` değil.
+
+Paylaşılan bir ruleset'te bunun otorite olmasının nedeni mekanizmanın kendisidir: nftables'ta bir
+hook'a kayıtlı **her** base chain paketi görür; **accept** paketi diğer zincirlerden muaf tutmaz,
+ama **drop** kesindir. Yani başka bir tablo, bu tablonun düşürdüğü trafiği kurtaramaz — önceliği ne
+olursa olsun. Mekanizma değişirse bu özellik yeniden kurulmalıdır.
+
+### 14.6 Politika kimliği
+
+Hub "kurallar var mı" diye sormaz. Render **bayt düzeyinde deterministiktir** ve render edilen
+metnin SHA-256'sı politikanın kimliğidir. Hazırlık, yüklü tabloyu geri okur, ikisini aynı biçime
+normalize eder ve karşılaştırır.
+
+Normalizasyon yalnızca gürültüyü atar: `# handle N`, boşluk, ve yüklü tablonun parçası olmayan
+delete-preamble. **Tanımadığı hiçbir satırı atmaz** — bir adres, bir verdict veya bir kural
+değişirse eşleşme bozulur. Testler bunu doğrudan kanıtlar: `10.0.0.0/8 drop` → `10.0.0.0/32 drop`,
+`drop` → `accept`, `dport 443` → `dport 1-65535`, `policy drop` → `policy accept` ve **silinmiş bir
+kural** — hepsi eşleşmiyor.
+
+Çevre değişirse kimlik değişir: farklı resolver → farklı hash.
+
+### 14.7 Hazırlık kontrolleri
+
+Zorunlu kontrol kümesi 21'den **26**'ya çıktı. Yeni beşi:
+
+| Kontrol | Pass koşulu |
+|---|---|
+| `network.mode.supported` | Ölçülen düzen NAT. Mirrored → **Fail**, sınıflandırılamayan → **Unknown** |
+| `network.host-loopback.disabled` | Agent, Hub'ın dinleyicisine hiçbir yoldan ulaşamadı **ve** izinli kontrol çalıştı |
+| `network.proxy.not-inherited` | Agent hiçbir `*_PROXY` değişkeni miras almadı |
+| `network.policy.enforced` | Yüklü tablo, bu build'in render ettiği politikanın **aynısı** |
+| `peer.network.unreachable` | İki yönlü peer reddi — **bu build'de her zaman Unknown** |
+
+`control-plane.unreachable` yükseltildi: artık hem mount tablosundan (dosya sistemi yolu) hem de
+ağ probe'undan cevap alır ve **daha katı olan kazanır**. Ağdan gelen bir Pass, bağlı bir host
+biriminin `Fail`'ini iptal etmez; temiz bir mount tablosu da açık bir portu kapatmaz.
+
+Ağ probe'u hiç yoksa beş kontrol de **Unknown**'dır — yokluk izin değildir.
+
+### 14.8 Probe modeli: her ret bir kabulle eşlenir
+
+Negatif cevaplar **agent'ın kendi hesabından**, hedef ortamın içinden, iş yükünün kullanacağı
+mekanizmayla ölçülür. Hub, probe süresince kendi dinleyicilerini açar: biri `127.0.0.1`'de (Hub'ın
+kendi bağladığı yer), biri ortamın **kendi alt ağındaki host adresinde**. Makinenin her arabirimine
+bağlanmaz — bir teşhis, güvenli olup olmadığını öğrenmek için operatörün ağına port koymamalıdır.
+
+Her negatif cevap bir **pozitif kontrol** ile eşlenir: politikanın izin verdiği resolver, izin
+verdiği portta. Kontrol de başarısızsa sonuç **Unknown**'dır. Sebebi: ağı tamamen kopmuş bir ortam
+her şeyi reddeder, ve bunu izolasyon diye raporlamak en güçlü verdict'i en zayıf gerekçeyle vermek
+olurdu.
+
+Teşhis, hangi yolun açık olduğunu **söyler** — ve iki farklı arızayı birbirinin adıyla anmaz:
+ortamın kendi loopback'i üzerinden ulaşıldıysa host loopback'i köprülenmiştir; host'un alt ağ
+adresinden ulaşıldıysa host basitçe erişilebilirdir. Operatörün gideceği yer farklıdır.
+
+Proxy kontrolü **yalnızca değişken adlarını** raporlar; bir proxy değeri kimlik bilgisi taşıyabilir
+ve onu yazdıran bir teşhis, onu bu çıktıyı yakalayan her log'a koyardı.
+
+### 14.9 `.wslconfig` salt-okunur
+
+Hub `.wslconfig` veya `wsl.conf` **yazmaz**, Windows/Hyper-V firewall kuralı **oluşturmaz veya
+değiştirmez**. Bir guard, bu adları anan hiçbir üretim dosyasının aynı zamanda dosya yazma API'si
+taşımamasını kilitler.
+
+Yapılandırma metni ile çalışma zamanı gerçeği çeliştiğinde **çalışma zamanı kazanır** ve hazırlık
+sürüklenmeyi raporlar. Gizli bir self-heal yoktur: ölçtüğünü onaran bir teşhis, her zaman başarı
+raporlayabilirdi.
+
+### 14.10 Hub API kimlik doğrulaması — KAPSAM DIŞI
+
+Bu dilimde **uygulanmadı** ve bir ikame olarak da ele alınmadı. `Negotiate`, JWT, API key, client
+sertifikası, yeni login — hiçbiri yok, guard'la kilitli.
+
+Sert ağ sınırı bağımsız olarak zorunludur. API kimlik doğrulaması gelecekte **savunmada derinlik**
+olabilir — ağ politikası başarısız olsa bile tutan ikinci bir katman — ama birincisinin yerine
+geçmez. §14.1.1'deki düzeltme bunu daha da acil kılıyor: loopback-only bugün bir sınır değil.
+
+### 14.11 Provizyon sınırı ve KANITLANMAYAN
+
+Gerçek nftables **zorlaması** bu dilimde **ölçülmedi**.
+
+Neden: mevcut Ubuntu'ya nftables kurmak yasaktı (o, negatif/keşif fikstürü olarak kalır) ve temiz
+tek-kullanımlık bir dağıtım **provizyonlanamadı** — `wsl --install -d Debian --no-launch` denendi ve
+oturumun izin sınıflandırıcısı tarafından reddedildi ("Blocked by classifier"). Mevcut Ubuntu'nun
+klonlanması da yasak: `/home`, `/root`, sağlayıcı oturumu ve makineye özgü kullanıcı verisi taşırdı.
+
+Bu yüzden **kanıtlanmamış** olanlar:
+
+- Host reddinin bir **kural** tarafından yapıldığı (bugünkü davranış bu makinenin tesadüfi
+  yapılandırmasıdır — ve §14.1.1'e göre host aslında **erişilebilir**).
+- Peer reddi (A→B, B→A) — iki tek-kullanımlık ortam gerekir.
+- Politika yüklüyken public HTTPS'in hâlâ çalıştığı (§14.4.1'deki gateway argümanı **ölçülmedi**).
+- Politikanın WSL yeniden başlatmasından sonra yeniden uygulandığı.
+- Politikanın iş yükünden **önce** aktif olduğu.
+- `nft list table` çıktısının gerçek biçimiyle normalizasyonun uyuştuğu — karşılaştırıcı gerçek
+  `nft` çıktısına karşı **doğrulanmadı**.
+
+Bunların hiçbiri sessizce "çalışıyor" sayılmaz: `network.policy.enforced` bu makinede **Fail**'dir,
+`peer.network.unreachable` **Unknown**'dır, dolayısıyla hiçbir Hard ortam `Ready` olamaz ve
+`IHardExecutionPlane` **kullanılamaz** kalır.
+
+### 14.12 Paylaşılan `/mnt/wsl` — ayrı ve açık bir engel
+
+Keşif, `/mnt/wsl`'in her WSL2 dağıtımı arasında paylaşılan `1777` bir tmpfs olduğunu ve
+**AgentUser'ın yazabildiğini** ölçtü; `/mnt/wslg` de paylaşılıyor. Peer dağıtımın socket dizinleri
+(`docker-desktop/shared-sockets/{host,guest}-services`) Ubuntu'dan görünüyor.
+
+Bu bir **dosya sistemi** engelidir ve ağ politikasının kabulünü geçersiz kılmaz — ama tam Hard
+hazırlığını false tutar ve **G-K2'yi açık bırakır**. `peer.filesystem.unreachable`, ağ peer
+izolasyonu çalıştı diye **Pass yapılmaz**; ikisi ayrı kontrollerdir ve nihai G-K kabulü ikisini de
+ister.
+
+Gelecekteki provizyon gereksinimi: Hard ortam `Ready` olmadan önce paylaşılan WSL mount
+yüzeylerinin agent erişiminden **kaldırılması/maskelenmesi/reddedilmesi**.
+
+### 14.13 10C-4'e devir
+
+Provizyon yetkilendirildiğinde iki tek-kullanımlık Hard dağıtımla (`corex-hard-net-a-<guid>`,
+`corex-hard-net-b-<guid>`, temiz rootfs, sonunda unregister) kanıtlanması gerekenler:
+
+1. A → B sentetik TCP: **DENY**; B → A: **DENY**.
+2. A ve B → Windows sentetik uç noktaları (loopback, alt ağ adresi, LAN adresi): **DENY**.
+3. A ve B → izinli public HTTPS: **ALLOW** (aksi hâlde politika kullanışsızdır).
+4. Politika WSL yeniden başlatmasından sonra yüklü; hazırlık doğruluyor.
+5. Politika iş yükünden önce aktif (root sahipli systemd birimi, Hub yürütme biriminden önce).
+6. AgentUser politikayı değiştiremiyor (A ve B'de ayrı ayrı).
+7. Politika eksik/yanlışsa kabul **reddediliyor** — filtresiz yürütmeye geri dönüş yok.
+8. `/mnt/wsl` ve `/mnt/wslg` hâlâ paylaşılıyor mu — kayda geçer, bu dilimde düzeltilmez.
+
+### 14.14 Bu dilimde YAPILMAYANLAR
+
+- Gerçek nftables zorlaması (temiz tek-kullanımlık ortam provizyonu gerekiyor).
+- İki-distro peer kabulü.
+- Politikayı **uygulayan** üretim kodu — bu build yalnızca render eder ve doğrular.
+- Mevcut Ubuntu'ya kurulum veya kural yükleme; `.wslconfig` / `wsl.conf` / firewall değişikliği.
+- Hub API kimlik doğrulaması.
+- Tam Hard görev kabulü ve orkestratör yönlendirmesi (`10C-4`).
+- Şema değişikliği, migration, yeni API/UI yüzeyi. Ağ hazırlığı **kalıcı doğru olarak saklanmaz**.
+- Sağlayıcı çağrısı; Claude/Codex **çalıştırılmadı**.
+- Gerçek Kronos verisi (ADR-0017). Kronos **BLOCKED**.
+- G-K1..G-K5 **AÇIK** kalır.

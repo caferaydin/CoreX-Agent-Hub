@@ -31,6 +31,9 @@ public sealed class IsolationInvariantTests
     private const string HardEvidenceLayoutFileName = "HardEvidenceLayout.cs";
     private const string HardEvidenceCommandsFileName = "HardEvidenceCommands.cs";
     private const string HardEvidenceGatewayFileName = "HardEvidenceGateway.cs";
+    private const string NetworkCommandsFileName = "HardNetworkCommands.cs";
+    private const string NetworkProbeFileName = "WslHardNetworkProbe.cs";
+    private const string RulesetFileName = "NftablesRuleset.cs";
     /// <summary>Spelled through a constant so this file is not itself an offender.</summary>
     private static readonly string HardGitExecutable = "/usr/bin/" + "git";
 
@@ -1240,22 +1243,226 @@ public sealed class IsolationInvariantTests
     }
 
     /// <summary>
-    /// No network boundary was implemented, and none was claimed.
+    /// The network mechanism lives in one place, and it is not above the composition layer.
     ///
-    /// The network is the next slice, and the failure mode this guards against is a half-built
-    /// one: a firewall rule that exists, looks enforced, and has never been measured.
+    /// The policy is a set of effects - what may be reached, what may not, and why each range is
+    /// denied. The mechanism that enforces those effects is a detail of one platform. Keeping the
+    /// two apart is what lets the mechanism be replaced without anybody re-deciding what a hard
+    /// workload is allowed to reach.
     /// </summary>
     [Theory]
+    [InlineData("nft")]
     [InlineData("nftables")]
     [InlineData("iptables")]
     [InlineData("netns")]
-    [InlineData("ip netns")]
-    [InlineData("firewall")]
-    [InlineData("proxy")]
-    public void No_network_boundary_was_implemented(string construct)
+    [InlineData("daddr")]
+    public void Only_the_composition_layer_knows_how_the_network_is_filtered(string construct)
     {
         var offenders = RepoLayout.ProductionSourceFiles
+            .Where(f => !f.Contains($"{Path.DirectorySeparatorChar}CoreX.Hub.Composition{Path.DirectorySeparatorChar}", StringComparison.Ordinal))
             .Where(f => CodeOnly(File.ReadAllText(f)).Contains(construct, StringComparison.OrdinalIgnoreCase))
+            .Select(RepoLayout.Relative)
+            .ToList();
+
+        Assert.Empty(offenders);
+    }
+
+    /// <summary>
+    /// The policy names capabilities, never a service.
+    ///
+    /// A hostname allowlist would make isolation provider-shaped, and it would be weaker than it
+    /// looks: the name it filtered on is one the workload itself supplies. So the allowance is a
+    /// port and a destination class, and which service a workload then talks to is not isolation's
+    /// business.
+    /// </summary>
+    [Fact]
+    public void The_network_policy_names_no_service()
+    {
+        var policy = File.ReadAllText(
+            RepoLayout.ProductionSourceFiles.Single(f => f.EndsWith("HardNetworkPolicy.cs", StringComparison.Ordinal)));
+
+        foreach (var named in new[]
+                 {
+                     "anthropic", "openai", "claude", "codex", ".com", ".ai", "http://", "https://",
+                 })
+        {
+            Assert.DoesNotContain(named, policy, StringComparison.OrdinalIgnoreCase);
+        }
+
+        // Allowances are ports; denials are address ranges. Both are stated, neither is a name.
+        Assert.Equal(443, HardNetworkPolicy.Phase10.PublicHttpsPort);
+        Assert.Equal(53, HardNetworkPolicy.Phase10.DnsPort);
+        Assert.All(HardNetworkPolicy.Phase10.DeniedDestinations, d => Assert.Contains('/', d.Cidr));
+        Assert.All(HardNetworkPolicy.Phase10.DeniedDestinations, d => Assert.NotEmpty(d.Reason));
+    }
+
+    /// <summary>
+    /// The policy is product behaviour, not configuration.
+    ///
+    /// An organization that could widen its own boundary through configuration would be an
+    /// organization whose boundary means whatever its configuration file says.
+    /// </summary>
+    [Fact]
+    public void The_network_policy_cannot_be_widened_by_configuration()
+    {
+        Assert.Empty(
+            typeof(HardNetworkPolicy).GetConstructors(BindingFlags.Public | BindingFlags.Instance));
+
+        Assert.DoesNotContain(typeof(HardNetworkPolicy).GetProperties(), p => p.SetMethod is not null);
+
+        // And nothing in configuration can name one.
+        var offenders = RepoLayout.ProductionSourceFiles
+            .Where(f => f.Contains($"{Path.DirectorySeparatorChar}Configuration{Path.DirectorySeparatorChar}", StringComparison.Ordinal))
+            .Where(f => File.ReadAllText(f).Contains("Network", StringComparison.Ordinal))
+            .Select(RepoLayout.Relative)
+            .ToList();
+
+        Assert.Empty(offenders);
+    }
+
+    /// <summary>
+    /// Readiness measures the network; it never installs it.
+    ///
+    /// A diagnostic that provisioned what it was measuring would always be able to report success.
+    /// The one filtering tool the probe may name is only ever asked to list, and there is no
+    /// package installation anywhere near this work.
+    /// </summary>
+    [Fact]
+    public void The_network_probe_measures_and_never_provisions()
+    {
+        var commands = CodeOnly(SourceOf(NetworkCommandsFileName));
+
+        var verbs = Regex.Matches(commands, @"\[Nft,\s*""(?<verb>[a-z]+)""");
+
+        Assert.NotEmpty(verbs);
+        Assert.All(verbs.Select(m => m.Groups["verb"].Value), v => Assert.Equal("list", v));
+
+        var offenders = HardNetworkSourceFiles()
+            .Where(f => CodeOnly(File.ReadAllText(f)) is var code
+                        && (code.Contains("apt-get", StringComparison.Ordinal)
+                            || code.Contains("apt install", StringComparison.Ordinal)
+                            || code.Contains("dnf", StringComparison.Ordinal)
+                            || code.Contains("pacman", StringComparison.Ordinal)
+                            || code.Contains("flush", StringComparison.Ordinal)))
+            .Select(RepoLayout.Relative)
+            .ToList();
+
+        Assert.Empty(offenders);
+    }
+
+    /// <summary>
+    /// The Hub owns one table and never the machine's ruleset.
+    ///
+    /// An operator's rules are theirs. A boundary that began by flushing them would be one nobody
+    /// could run beside anything else - and the authority does not need it: in this mechanism a
+    /// drop in one base chain is final whatever another chain accepted, which is why a Hub-owned
+    /// table is an authority rather than a suggestion.
+    /// </summary>
+    [Fact]
+    public void The_hub_owns_exactly_one_table()
+    {
+        var ruleset = CodeOnly(SourceOf(RulesetFileName));
+
+        Assert.Contains("TableName = \"corex_hard\"", ruleset, StringComparison.Ordinal);
+
+        foreach (var wholesale in new[] { "flush ruleset", "flush table", "list ruleset" })
+        {
+            Assert.DoesNotContain(wholesale, ruleset, StringComparison.OrdinalIgnoreCase);
+        }
+
+        // Every chain the Hub declares starts from a denial rather than from permission.
+        Assert.Equal(3, Regex.Matches(ruleset, "policy drop;").Count);
+    }
+
+    /// <summary>
+    /// The environment applies the policy; the workload never does.
+    ///
+    /// A workload that installed its own boundary would be a workload that chose it. Nothing in
+    /// this work runs a filtering command as the agent, and the one read of the loaded table is
+    /// made as root.
+    /// </summary>
+    [Fact]
+    public void The_agent_never_applies_or_reads_the_policy()
+    {
+        var probe = CodeOnly(SourceOf(NetworkProbeFileName));
+
+        // The table is read as root; the agent is only ever asked to try to reach things.
+        Assert.Contains("RootAsync(profile, HardNetworkCommands.ActivePolicy()", probe, StringComparison.Ordinal);
+
+        foreach (Match agentCall in Regex.Matches(probe, @"AgentAsync\(\s*profile,\s*HardNetworkCommands\.(?<c>\\w+)"))
+        {
+            Assert.Contains(agentCall.Groups["c"].Value, new[] { "Reach", "ProxyEnvironment" });
+        }
+    }
+
+    /// <summary>
+    /// A working network policy does not open hard execution.
+    ///
+    /// The boundary is one of several a whole task needs, and the peer question cannot even be
+    /// asked from a single environment. Admitting an organization because its egress is filtered
+    /// would put the rest of the work outside the boundary with nothing saying so.
+    /// </summary>
+    [Fact]
+    public void The_network_policy_does_not_make_hard_execution_available()
+    {
+        Assert.False(new UnavailableHardExecutionPlane().IsAvailable);
+
+        var composition = CodeOnly(SourceOf("IsolationComposition.cs"));
+
+        Assert.DoesNotContain("HardNetwork", composition, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The Hub reads the machine's network configuration and never writes it.
+    ///
+    /// Self-healing a topology would make readiness a statement about what the Hub had just done
+    /// rather than about what the machine is. Drift has to be reported, not repaired.
+    /// </summary>
+    [Theory]
+    [InlineData(".wslconfig")]
+    [InlineData("wsl.conf")]
+    [InlineData("networkingMode")]
+    [InlineData("hostAddressLoopback")]
+    [InlineData("New-NetFirewall")]
+    [InlineData("Set-NetFirewall")]
+    public void The_hub_never_writes_a_network_configuration(string construct)
+    {
+        // Naming one is allowed and useful - the operator has to be told what to look at. What no
+        // file may do is name one and also hold a way to write a file, which is the shape a quiet
+        // self-heal would take.
+        string[] writes =
+        [
+            "File.WriteAllText", "File.WriteAllBytes", "File.AppendAll", "StreamWriter",
+            "File.Create", "Set-Content", "Out-File",
+        ];
+
+        var offenders = RepoLayout.ProductionSourceFiles
+            .Where(f => File.ReadAllText(f) is var text
+                        && text.Contains(construct, StringComparison.OrdinalIgnoreCase)
+                        && writes.Any(w => text.Contains(w, StringComparison.Ordinal)))
+            .Select(RepoLayout.Relative)
+            .ToList();
+
+        Assert.Empty(offenders);
+    }
+
+    /// <summary>
+    /// No Hub API authentication was introduced, and none is treated as a substitute.
+    ///
+    /// The boundary this slice builds is an operating system boundary. An authentication layer
+    /// would be a second, independent defence and is deliberately not this slice's work - and it
+    /// would not have replaced the first one if it were.
+    /// </summary>
+    [Theory]
+    [InlineData("Negotiate")]
+    [InlineData("JwtBearer")]
+    [InlineData("AddAuthentication")]
+    [InlineData("ApiKey")]
+    [InlineData("ClientCertificate")]
+    public void No_hub_api_authentication_was_introduced(string construct)
+    {
+        var offenders = RepoLayout.ProductionSourceFiles
+            .Where(f => File.ReadAllText(f).Contains(construct, StringComparison.Ordinal))
             .Select(RepoLayout.Relative)
             .ToList();
 
@@ -1444,6 +1651,11 @@ public sealed class IsolationInvariantTests
     private static IEnumerable<string> HardWorkspaceSourceFiles() =>
         RepoLayout.ProductionSourceFiles.Where(
             f => f.Contains($"{Path.DirectorySeparatorChar}HardWorkspace{Path.DirectorySeparatorChar}", StringComparison.Ordinal));
+
+    /// <summary>The hard network adapter, likewise.</summary>
+    private static IEnumerable<string> HardNetworkSourceFiles() =>
+        RepoLayout.ProductionSourceFiles.Where(
+            f => f.Contains($"{Path.DirectorySeparatorChar}HardNetwork{Path.DirectorySeparatorChar}", StringComparison.Ordinal));
 
     /// <summary>The hard evidence adapter, likewise.</summary>
     private static IEnumerable<string> HardEvidenceSourceFiles() =>

@@ -75,6 +75,50 @@ public static class HardIsolationChecks
     public const string OtherHardEnvironmentUnreachable = "peer.filesystem.unreachable";
     public const string ControlPlaneUnreachable = "control-plane.unreachable";
 
+    /// <summary>
+    /// The topology the network boundary was designed against, and measured rather than declared.
+    ///
+    /// Mirrored networking gives the environment the host's own loopback, which would make every
+    /// destination rule below beside the point: the control plane would be reachable at an address
+    /// no destination policy denies. So mirrored is not a weaker supported mode, it is unsupported.
+    /// </summary>
+    public const string NetworkModeSupported = "network.mode.supported";
+
+    /// <summary>
+    /// Whether the host's loopback is bridged into the environment.
+    ///
+    /// A separate question from the mode, because it has its own switch and can be turned on
+    /// under NAT. Both a configuration reading and a probe from the agent's own identity, since
+    /// either alone answers a different question than the one being asked.
+    /// </summary>
+    public const string HostLoopbackDisabled = "network.host-loopback.disabled";
+
+    /// <summary>
+    /// Whether the environment inherited the host's proxy configuration.
+    ///
+    /// A host proxy is a host channel, and one that can carry credentials. Inherited or unknown
+    /// is not ready; there is no supported way for a hard environment to borrow the developer's.
+    /// </summary>
+    public const string ProxyNotInherited = "network.proxy.not-inherited";
+
+    /// <summary>
+    /// Whether the Hub's own network policy is loaded, and is the one the Hub expects.
+    ///
+    /// Not "are there some rules". The active managed table is read back and compared against the
+    /// policy this build renders, because a table that exists and says something else is worse
+    /// than no table: it looks like enforcement in every diagnostic.
+    /// </summary>
+    public const string NetworkPolicyEnforced = "network.policy.enforced";
+
+    /// <summary>
+    /// Whether another organization's environment is reachable over the network.
+    ///
+    /// Deliberately not folded into <see cref="OtherHardEnvironmentUnreachable"/>, which is about
+    /// shared mounts. Two environments can be perfectly separated on the filesystem and sit on one
+    /// subnet, and a single check reporting both would let either answer stand for the other.
+    /// </summary>
+    public const string PeerNetworkUnreachable = "peer.network.unreachable";
+
     /// <summary>Every check that must pass. All of them; there are no optional ones.</summary>
     public static IReadOnlyList<string> Required { get; } =
     [
@@ -99,6 +143,11 @@ public static class HardIsolationChecks
         HostProviderAuthUnreachable,
         OtherHardEnvironmentUnreachable,
         ControlPlaneUnreachable,
+        NetworkModeSupported,
+        HostLoopbackDisabled,
+        ProxyNotInherited,
+        NetworkPolicyEnforced,
+        PeerNetworkUnreachable,
     ];
 }
 

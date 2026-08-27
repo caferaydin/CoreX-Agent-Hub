@@ -254,8 +254,15 @@ public sealed class ProviderNeutralityTests
             // The secret pattern catalog names a token shape to redact. The Codex invocation
             // builder names an environment prefix a child process never receives - a denial
             // list, which is the opposite of a gateway. Both exemptions are proven below.
+            // A third exemption, for a type name rather than a capability.
+            //
+            // The hard network probe accepts connections so that an isolated agent has something
+            // to fail to reach, and the accept call hands back a TcpClient. It never constructs
+            // one, never connects, and names no provider - LoopZeroInvariantTests pins that
+            // narrower claim, which is what makes this line an exemption rather than a hole.
             if (string.Equals(Path.GetFileName(file), SecretCatalogFileName, StringComparison.Ordinal)
-                || string.Equals(Path.GetFileName(file), CodexInvocationFileName, StringComparison.Ordinal))
+                || string.Equals(Path.GetFileName(file), CodexInvocationFileName, StringComparison.Ordinal)
+                || string.Equals(Path.GetFileName(file), "WslHardNetworkProbe.cs", StringComparison.Ordinal))
             {
                 continue;
             }
