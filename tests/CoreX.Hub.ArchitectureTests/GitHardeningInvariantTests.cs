@@ -10,7 +10,16 @@ namespace CoreX.Hub.ArchitectureTests;
 public sealed class GitHardeningInvariantTests
 {
     /// <summary>The hard isolated workspace: a second implementation of the same rules.</summary>
-    private const string HardWorkspaceFileName = "HardWorkspaceGateway.cs";
+    /// <summary>
+    /// The single hard-side authority allowed to build a worktree command.
+    ///
+    /// It used to be the workspace gateway. When review needed a tree of its own the obvious move
+    /// was a second implementation beside it, and this guard refused - correctly, because two
+    /// implementations of one operation is how one of them quietly stops reading HEAD back or stops
+    /// running hardened. The mechanical operation was extracted instead, so the exemption is still
+    /// exactly one file and the rule got stronger rather than looser.
+    /// </summary>
+    private const string HardWorkspaceFileName = "HardWorktreeAuthority.cs";
 
     private const string WorkspaceManagerFileName = "WorkspaceManager.cs";
     private const string GitEnvironmentFileName = "GitEnvironment.cs";
@@ -190,9 +199,10 @@ public sealed class GitHardeningInvariantTests
                 continue;
             }
 
-            // The hard isolated workspace is the second implementation of the same rule, and it
-            // is named rather than implied. Its own exemption test below proves it creates a
-            // worktree at a pinned commit, exactly as this one does.
+            // The hard side has one authority for this, named rather than implied. Its own
+            // exemption test below proves it really creates a worktree at a pinned commit, exactly
+            // as the Windows module does - so this is a second implementation of the rule and never
+            // a second place the rule is bypassed.
             if (string.Equals(Path.GetFileName(file), HardWorkspaceFileName, StringComparison.Ordinal))
             {
                 continue;
@@ -202,6 +212,17 @@ public sealed class GitHardeningInvariantTests
             var name = RepoLayout.Relative(file);
 
             Assert.False(code.Contains("\"worktree\"", StringComparison.Ordinal), $"{name} builds a worktree command");
+
+            // Reading a ref is not creating a tree, and the hard workspace module legitimately does
+            // it - capture asks what HEAD is, and the review snapshot asks the same question about
+            // the tree it was given. What must stay in one place is the creation, above.
+            if (file.Contains(
+                    Path.DirectorySeparatorChar + "HardWorkspace" + Path.DirectorySeparatorChar,
+                    StringComparison.Ordinal))
+            {
+                continue;
+            }
+
             Assert.False(code.Contains("rev-parse", StringComparison.Ordinal), $"{name} builds a rev-parse command");
         }
     }
@@ -225,7 +246,17 @@ public sealed class GitHardeningInvariantTests
         var code = File.ReadAllText(gateway!);
 
         Assert.Contains("\"worktree\", \"add\"", code, StringComparison.Ordinal);
-        Assert.Contains("baseCommit", code, StringComparison.Ordinal);
+        Assert.Contains("commitSha", code, StringComparison.Ordinal);
+
+        // Both shapes the hard side needs live here: a branched tree for the agent to work in and
+        // a detached one for a result to be examined at. A second file appearing with either of
+        // them is what the scan above refuses.
+        Assert.Contains("\"-b\", branch", code, StringComparison.Ordinal);
+        Assert.Contains("\"--detach\"", code, StringComparison.Ordinal);
+
+        // And it refuses anything that is not already an object name, so a branch or a revision
+        // expression cannot reach the argument vector where the contract says commit.
+        Assert.Contains("IsResolvedCommit", code, StringComparison.Ordinal);
     }
 
     [Fact]

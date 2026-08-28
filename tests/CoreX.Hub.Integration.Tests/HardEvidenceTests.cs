@@ -24,6 +24,15 @@ namespace CoreX.Hub.Integration.Tests;
 [SupportedOSPlatform("windows")]
 public sealed class HardEvidenceTests : IAsyncLifetime
 {
+    /// <summary>
+    /// The execution these writes belong to.
+    ///
+    /// A real identity rather than a placeholder: the evidence contract requires one, production
+    /// refuses Guid.Empty, and a test that passed an empty id would be asserting on a shape the
+    /// product does not accept.
+    /// </summary>
+    private static readonly Guid ExecutionIdentity = Guid.Parse("0195b1c0-0000-7000-8000-00000000e57a");
+
     private static readonly UTF8Encoding Utf8 = new(encoderShouldEmitUTF8Identifier: false);
 
     private readonly HardEvidenceFixture _fixture = new();
@@ -481,6 +490,7 @@ public sealed class HardEvidenceTests : IAsyncLifetime
         const string Raw = "authorization: Bearer sk-ant-api03-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
 
         var written = await _fixture.GatewayA().WriteAsync(
+            ExecutionIdentity,
             Raw, EvidenceKind.AgentStdout, "text/plain", CancellationToken.None);
 
         Assert.NotNull(written);
@@ -504,6 +514,7 @@ public sealed class HardEvidenceTests : IAsyncLifetime
         }
 
         Assert.Null(await _fixture.GatewayA().WriteAsync(
+            ExecutionIdentity,
             string.Empty, EvidenceKind.AgentStdout, "text/plain", CancellationToken.None));
     }
 

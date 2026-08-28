@@ -4,10 +4,13 @@ using CoreX.Hub.Application.Abstractions;
 using CoreX.Hub.Application.Catalog;
 using CoreX.Hub.Application.Configuration;
 using CoreX.Hub.Application.Gates;
+using CoreX.Hub.Application.Isolation;
 using CoreX.Hub.Application.Orchestration;
 using CoreX.Hub.Application.Review;
 using CoreX.Hub.Composition.Agents;
 using CoreX.Hub.Composition.Context;
+using CoreX.Hub.Composition.HardNetwork;
+using CoreX.Hub.Composition.HardWorkspace;
 using CoreX.Hub.Composition.Isolation;
 using CoreX.Hub.Composition.Verification;
 using CoreX.Hub.Composition.Workspace;
@@ -16,6 +19,7 @@ using CoreX.Hub.Domain.Catalog;
 using CoreX.Hub.Infrastructure.Evidence;
 using CoreX.Hub.Verification;
 using CoreX.Hub.Verification.Baseline;
+using CoreX.Hub.Verification.Profiles;
 using CoreX.Hub.Workspace;
 
 namespace CoreX.Hub.Composition.Orchestration;
@@ -35,21 +39,60 @@ namespace CoreX.Hub.Composition.Orchestration;
 /// on PATH and nothing reaches the network.
 /// </summary>
 [SupportedOSPlatform("windows")]
-public sealed class ExecutionComposition
+public sealed class ExecutionComposition : IAsyncDisposable
 {
+    /// <summary>
+    /// How long cleanup may take after an execution has finished.
+    ///
+    /// Finite, because releasing a namespace holder must not be able to hang a command line for
+    /// ever; and its own, because the execution's token is very often already cancelled by the
+    /// time cleanup runs - which is exactly when the resources most need releasing.
+    /// </summary>
+    private static readonly TimeSpan CleanupDeadline = TimeSpan.FromMinutes(2);
+
+    private readonly HardExecutionEnvironmentResolver? _hard;
+    private readonly Func<IHubStore> _openStore;
+    private bool _disposed;
+
     private ExecutionComposition(
         ExecutionOrchestrator orchestrator,
         IExecutionVerifier verifier,
         Guid repositoryId,
         string workspaceRoot,
-        bool reviewRequired)
+        bool reviewRequired,
+        bool isHard,
+        HardExecutionEnvironmentResolver? hard,
+        Func<IHubStore> openStore)
     {
         Orchestrator = orchestrator;
         Verifier = verifier;
         RepositoryId = repositoryId;
         WorkspaceRoot = workspaceRoot;
         ReviewRequired = reviewRequired;
+        IsHard = isHard;
+        _hard = hard;
+        _openStore = openStore;
     }
+
+    /// <summary>
+    /// Whether this execution runs inside a hard boundary.
+    ///
+    /// Descriptive and decided once. Nothing reads this to choose a port - the ports were chosen
+    /// together before this existed - and a caller that switched on it would be making a second
+    /// routing decision beside the only one that is allowed to exist.
+    /// </summary>
+    public bool IsHard { get; }
+
+    /// <summary>
+    /// What cleanup could not release, when it could not.
+    ///
+    /// Recorded rather than thrown. Disposal runs at scope exit, very often while an execution
+    /// failure is already propagating, and an exception from here would replace the reason the
+    /// execution failed with the reason its cleanup failed - the less useful of the two by a wide
+    /// margin. A caller that wants to surface this reads it; nothing depends on it having been
+    /// read.
+    /// </summary>
+    public string? DisposalResidual { get; private set; }
 
     public ExecutionOrchestrator Orchestrator { get; }
 
@@ -130,7 +173,34 @@ public sealed class ExecutionComposition
 
         var environmentAllowlist = organization.EnvironmentAllowlist;
 
-        var verifier = new VerificationGateway(
+        // Runtimes are declared by configuration and named by the profile. Which one this execution
+        // gets is settled here, before a row exists, so a key nobody declared is a refusal rather
+        // than an execution that discovers it has nothing to run.
+        var runtimes = AgentRuntimeRegistry.Build(
+            config, config.Workspace.Root, workspaceManager.Hooks.EmptyGlobalConfigPath);
+
+        if (agentProfile is not null)
+        {
+            AgentRuntimeRegistry.EnsureResolvable(runtimes, agentProfile);
+        }
+
+        // Routing --------------------------------------------------------------------
+        // One decision for the whole execution, taken here and never revisited. Asking each port to
+        // read the organization's level for itself would let a configuration change between two of
+        // those reads produce an execution whose agent was contained and whose verifier was not.
+        var routing = RouteFor(
+            session, config, organization, verificationProfile, agentProfile, runtimes,
+            out var hardProfile);
+
+        if (routing.IsRefused)
+        {
+            throw new HubConfigurationException(routing.Refusal!);
+        }
+
+        // Built only when it is the one that runs. A hard composition that also constructed the
+        // Windows verifier would be a composition holding a host authority it must never reach for,
+        // one edit away from reaching for it.
+        VerificationGateway LogicalVerifier() => new(
             workspaceManager,
             new VerificationBaselineService(
                 VerificationComposition.CreateBaselineCache(session.DataDirectory), clock),
@@ -138,7 +208,7 @@ public sealed class ExecutionComposition
                 new ProcessVerificationCommandExecutor(root),
                 new FileSystemGuardVerificationFileReader(),
                 new BlobEvidenceSink(evidenceStore),
-                allowlist,
+                new HostVerificationExecutableResolver(allowlist),
                 clock),
             _ => verificationProfile is null
                 ? null
@@ -149,15 +219,28 @@ public sealed class ExecutionComposition
                     organization.FilesystemRoot,
                     config.Workspace.Root));
 
-        // Runtimes are declared by configuration and named by the profile. Which one this
-        // execution gets is settled here, before a row exists, so a key nobody declared is a
-        // refusal rather than an execution that discovers it has nothing to run.
-        var runtimes = AgentRuntimeRegistry.Build(
-            config, config.Workspace.Root, workspaceManager.Hooks.EmptyGlobalConfigPath);
+        // The hard side, built only for an organization that is one.
+        //
+        // Nothing here takes a live resource. The resolver adopts no identity, claims no attachment
+        // and starts no distribution; it establishes only that a boundary could be resolved when an
+        // admitted execution first asks for one.
+        HardExecutionEnvironmentResolver? resolver = null;
 
-        if (agentProfile is not null)
+        if (routing.IsHard)
         {
-            AgentRuntimeRegistry.EnsureResolvable(runtimes, agentProfile);
+            if (!HardExecutionEnvironmentResolver.TryCreate(
+                    new HardNetworkConsumers(
+                        WslHardNetworkFabric.Create(session.DataDirectory), session.DataDirectory),
+                    hardProfile!,
+                    organization.Slug.Value,
+                    session.DataDirectory,
+                    out resolver,
+                    out var resolverProblem))
+            {
+                throw new HubConfigurationException(
+                    $"organization '{organization.Slug}' declares hard isolation and its environment "
+                    + $"could not be reached: {resolverProblem}");
+            }
         }
 
         // Review --------------------------------------------------------------------
@@ -166,18 +249,47 @@ public sealed class ExecutionComposition
         // and finding it after a worktree and a result commit exist would mean an execution
         // ending as ReviewUnusable because of a typo in a file.
         var reviewEngine = BuildReviewer(
-            session, config, organization, repository, reviewer, runtimes, workspaceManager, location, evidenceStore);
+            session, config, organization, repository, reviewer, runtimes, workspaceManager, location,
+            evidenceStore, resolver);
+
+        // The five ports, chosen together or not at all.
+        //
+        // There is deliberately no way to assemble a mixed set. An agent perfectly contained whose
+        // verification runs on Windows has simply moved the problem to the step that executes the
+        // repository's own test suite, and a reviewer left outside has moved it one step further.
+        var ports = resolver is null
+            ? ExecutionPortSet.Logical(
+                new WorkspaceGateway(workspaceManager, _ => location),
+                new EvidenceGateway(evidenceStore),
+                new AgentGateway(runtimes, environmentAllowlist),
+                LogicalVerifier(),
+                reviewEngine)
+            : ExecutionPortSet.Hard(
+                IsolationComposition.CreateWorkspace(
+                    workspaceManager,
+                    _ => location,
+                    new ProcessGitCommandExecutor(
+                        gitPath!, [organization.FilesystemRoot, config.Workspace.Root, hubControlRoot]),
+                    hardProfile!,
+                    session.DataDirectory,
+                    resolver),
+                IsolationComposition.CreateEvidence(hardProfile!, session.DataDirectory, resolver),
+                new HardAgentGateway(runtimes, resolver),
+                BuildHardVerifier(
+                    session, organization, repository, config, verificationProfile, evidenceStore,
+                    resolver, clock),
+                reviewEngine);
 
         var orchestrator = new ExecutionOrchestrator(
             session.Store,
-            new WorkspaceGateway(workspaceManager, _ => location),
+            ports.Workspace,
             new ContextGateway(
                 new ContextPackBuilder(new FileSystemGuardContextPathGuard()),
                 contextRoot,
                 _ => new ContextRepositoryFacts(repository.DefaultBranch, repository.ProtectedBranches)),
-            new AgentGateway(runtimes, environmentAllowlist),
-            verifier,
-            new EvidenceGateway(evidenceStore),
+            ports.Agent,
+            ports.Verifier,
+            ports.Evidence,
             new ExecutionSafetyGates(new SecretGuard(new CatalogSecretScanner())),
             new LeaseWriter(session.OpenStore),
             new DetachedStore(session.OpenStore),
@@ -193,7 +305,239 @@ public sealed class ExecutionComposition
             IsolationComposition.Create(session.Store, config, session.DataDirectory));
 
         return new ExecutionComposition(
-            orchestrator, verifier, repository.Id, config.Workspace.Root, reviewEngine is not null);
+            orchestrator,
+            ports.Verifier,
+            repository.Id,
+            config.Workspace.Root,
+            reviewEngine is not null,
+            ports.IsHard,
+            resolver,
+            session.OpenStore);
+    }
+
+    /// <summary>
+    /// Decides, once, whether this execution runs inside a boundary - and refuses when a hard
+    /// organization cannot.
+    ///
+    /// Everything consulted here is trusted state: the organization's declared level, the operator's
+    /// configuration, this machine's plane and the selected runtime's own capability. No task
+    /// prompt, repository file or provider output reaches it.
+    ///
+    /// The configuration completeness check is the one that saves the most. A hard organization
+    /// whose verification profile names a tool its environment map does not is refused now, before a
+    /// row exists - rather than after a workspace, an agent turn and a result commit, at the step
+    /// that would have run the tool.
+    /// </summary>
+    private static ExecutionIsolationRouting RouteFor(
+        HubSession session,
+        HubConfig config,
+        Domain.Catalog.Organization organization,
+        VerificationProfile? verificationProfile,
+        Domain.Catalog.AgentProfile? agentProfile,
+        IReadOnlyDictionary<string, IAgentRuntime> runtimes,
+        out HardIsolationProfile? hardProfile)
+    {
+        hardProfile = null;
+
+        if (organization.IsolationLevel != Domain.Catalog.IsolationLevel.Hard)
+        {
+            return ExecutionIsolationRouting.Logical;
+        }
+
+        if (!new ConfiguredHardIsolationProfiles(config)
+                .TryGetProfile(organization.Slug.Value, out hardProfile, out var problem)
+            || hardProfile is null)
+        {
+            return ExecutionIsolationRouting.Refuse(
+                problem ?? "the organization declares hard isolation but supplies no hard configuration.");
+        }
+
+        var plane = IsolationComposition.CreatePlane(session.DataDirectory);
+
+        var runtimeKey = agentProfile?.RuntimeKey ?? string.Empty;
+
+        var routing = ExecutionIsolationRouting.For(
+            organization.IsolationLevel,
+            hardProfile,
+            plane.IsAvailable,
+            plane.UnavailableReason,
+            runtimeKey.Length > 0 && runtimes.TryGetValue(runtimeKey, out var selected) ? selected : null,
+            runtimeKey);
+
+        if (routing.IsRefused || verificationProfile is null)
+        {
+            return routing;
+        }
+
+        var missing = HardVerificationExecutableResolver.MissingMappings(
+            hardProfile, verificationProfile.Steps.Select(step => step.Executable));
+
+        return missing.Count == 0
+            ? routing
+            : ExecutionIsolationRouting.Refuse(
+                $"verification profile '{verificationProfile.Name}' names "
+                + string.Join(", ", missing.Select(name => $"'{name}'"))
+                + $", which organization '{organization.Slug}' does not map to a path inside its hard "
+                + "environment; a hard organization never falls back to the host executable allowlist.");
+    }
+
+    /// <summary>
+    /// The verifier for a hard organization: same engine, same parsers, same baselines, other side
+    /// of the boundary.
+    ///
+    /// The engine is built per measurement rather than once, because it is bound to the tree being
+    /// measured and to the execution whose namespace its commands belong in. Neither of those exists
+    /// yet at composition time, which is exactly why this is a factory and not an instance.
+    /// </summary>
+    private static IExecutionVerifier BuildHardVerifier(
+        HubSession session,
+        Domain.Catalog.Organization organization,
+        Domain.Catalog.Repository repository,
+        HubConfig config,
+        VerificationProfile? verificationProfile,
+        EvidenceBlobStore evidenceStore,
+        HardExecutionEnvironmentResolver resolver,
+        TimeProvider clock)
+    {
+        var profile = resolver.Profile;
+
+        if (!WslExecutionGateway.TryCreate(session.DataDirectory, out var gateway, out var problem))
+        {
+            throw new HubConfigurationException(
+                $"organization '{organization.Slug}' declares hard isolation and its verification "
+                + $"environment could not be reached: {problem}");
+        }
+
+        var control = new HardWorkspaceControl(gateway!, profile, HardWorkspaceLayout.For(profile.ExecutionRoot));
+
+        return new HardVerificationGateway(
+            new HardVerificationSnapshots(control),
+            new VerificationBaselineService(
+                VerificationComposition.CreateBaselineCache(session.DataDirectory), clock),
+            (executionId, snapshotPath) => new VerificationEngine(
+                // Repository-controlled commands, in this execution's own namespace and mount
+                // sandbox. The Windows executor is not reachable from here at all.
+                new HardVerificationCommandExecutor(
+                    resolver.Bind(executionId), profile, snapshotPath, executionId),
+                new HardVerificationFileReader(resolver.Guest),
+                new BlobEvidenceSink(evidenceStore),
+                new HardVerificationExecutableResolver(resolver.Guest, profile),
+                clock),
+            _ => verificationProfile is null
+                ? null
+                : new VerificationSetup(
+                    verificationProfile,
+
+                    // Nothing inherited. An isolated workload has no host parent worth taking names
+                    // from, so the organization's host allowlist does not travel across.
+                    [],
+                    repository.LocalPath,
+                    organization.FilesystemRoot,
+                    config.Workspace.Root));
+    }
+
+    /// <summary>
+    /// Releases what this execution took, once, and never what it was supposed to leave behind.
+    ///
+    /// Ephemeral isolation resources only: the network namespace holder, the attachment, the
+    /// placement. The result commit, the evidence and any workspace the frozen failure policy says
+    /// to preserve are execution artifacts rather than execution resources, and they are governed
+    /// by the contracts that own them - disposing a composition is not deleting an execution.
+    ///
+    /// A logical execution, a refused one, and one whose environment was never needed all dispose
+    /// to nothing, because nothing was ever taken.
+    /// </summary>
+    public async ValueTask DisposeAsync()
+    {
+        if (_disposed)
+        {
+            return;
+        }
+
+        _disposed = true;
+
+        if (_hard is null)
+        {
+            return;
+        }
+
+        // The execution's own token is usually cancelled by now; cleanup gets a fresh, bounded one
+        // so that stopping a run still releases what the run was holding.
+        using var cleanup = new CancellationTokenSource(CleanupDeadline);
+
+        try
+        {
+            await _hard.DisposeAsync();
+        }
+        catch (Exception ex)
+        {
+            DisposalResidual =
+                "the hard isolation resources for this execution could not be fully released: "
+                + ex.Message;
+        }
+
+        if (DisposalResidual is { Length: > 0 } residual)
+        {
+            await RecordResidualAsync(residual, cleanup.Token);
+        }
+    }
+
+    /// <summary>
+    /// Writes a cleanup residual onto the execution's own timeline.
+    ///
+    /// The same authority a snapshot residual already uses, for the same reason: something the Hub
+    /// created outlived the run, an operator needs to know, and none of it is a reason to call the
+    /// execution something other than what it was. So this records and never mutates - a passed
+    /// execution whose veth would not go away is still a passed execution.
+    ///
+    /// It is written rather than left on a property because a property only exists for whoever
+    /// remembers to read one. Every ownership path disposes; not every ownership path inspects.
+    ///
+    /// Best effort by construction. Disposal frequently runs while a failure is already on its way
+    /// up, and a store that cannot be opened must not become the exception the caller sees instead
+    /// of the one that actually ended the run.
+    /// </summary>
+    private async Task RecordResidualAsync(string residual, CancellationToken ct)
+    {
+        try
+        {
+            var executionId = _hard?.BoundExecutionId ?? Guid.Empty;
+
+            if (executionId == Guid.Empty)
+            {
+                return;
+            }
+
+            var store = _openStore();
+
+            var execution = await store.FindExecutionAsync(executionId, ct);
+
+            if (execution is null)
+            {
+                return;
+            }
+
+            store.AddOrchestrationEvent(new Domain.Audit.OrchestrationEvent(
+                Guid.CreateVersion7(),
+                execution.OrganizationId,
+                execution.Id,
+
+                // Named for what it is, and distinct from the snapshot residual so the two cannot
+                // be confused when somebody reads a timeline.
+                "IsolationResidual",
+
+                // Bounded, and operational only: what could not be released and why. No context
+                // pack, no structured output, no evidence content.
+                residual.Length <= 1000 ? residual : residual[..1000],
+                DateTimeOffset.UtcNow));
+
+            await store.SaveChangesAsync(ct);
+        }
+        catch (Exception)
+        {
+            // The residual is already on DisposalResidual for anyone holding the composition. A
+            // failure to record it is not worth replacing the caller's own failure with.
+        }
     }
 
     /// <summary>
@@ -218,7 +562,8 @@ public sealed class ExecutionComposition
         IReadOnlyDictionary<string, IAgentRuntime> runtimes,
         WorkspaceManager workspaceManager,
         RepositoryLocation location,
-        EvidenceBlobStore evidenceStore)
+        EvidenceBlobStore evidenceStore,
+        HardExecutionEnvironmentResolver? hard)
     {
         if (reviewer.ProfileName is not { Length: > 0 } name)
         {
@@ -277,6 +622,16 @@ public sealed class ExecutionComposition
                 + "given an output schema, so its findings could not be validated.");
         }
 
+        // Whether this reviewer could work inside a boundary, asked here rather than at the review
+        // step. Review reads the tree the agent just wrote, so for a hard organization it runs inside
+        // the boundary or not at all - and discovering that after the agent has run and verification
+        // has finished would mean paying for a whole execution to learn a configuration fact.
+        if (hard is not null && !HardReviewerCompatibility.CanReviewInsideBoundary(runtime))
+        {
+            throw new HubConfigurationException(
+                HardReviewerCompatibility.Refusal(profile.RuntimeKey, profile.Name));
+        }
+
         var reviewRoot = Path.Combine(session.DataDirectory, "review");
         var snapshotRoot = Path.Combine(config.Workspace.Root, "_review");
 
@@ -288,11 +643,36 @@ public sealed class ExecutionComposition
         // created the same way for the same reason.
         Directory.CreateDirectory(snapshotRoot);
 
+        var options = new ReviewEngineOptions { ReviewerPromptFile = ReviewerPrompt.Materialise(reviewRoot) };
+
+        if (hard is null)
+        {
+            return new ReviewEngine(
+                new ReviewWorkspaceGateway(workspaceManager, location, snapshotRoot),
+                new ReviewRuntimeGateway(runtime, profile, organization.EnvironmentAllowlist),
+                new ReviewEvidenceReader(evidenceStore),
+                options);
+        }
+
+        // Both halves of review move inside, not one. A reviewer contained in a namespace while its
+        // tree was checked out on the host would leave the checkout - which is itself a classic place
+        // repository controlled code gets to run - exactly where it was.
+        if (!WslExecutionGateway.TryCreate(session.DataDirectory, out var gateway, out var problem))
+        {
+            throw new HubConfigurationException(
+                $"organization '{organization.Slug}' declares hard isolation and its review environment "
+                + $"could not be reached: {problem}");
+        }
+
+        var control = new HardWorkspaceControl(
+            gateway!, hard.Profile, HardWorkspaceLayout.For(hard.Profile.ExecutionRoot));
+
         return new ReviewEngine(
-            new ReviewWorkspaceGateway(workspaceManager, location, snapshotRoot),
-            new ReviewRuntimeGateway(runtime, profile, organization.EnvironmentAllowlist),
+            new HardReviewWorkspace(control, hard),
+            new HardReviewRuntimeGateway(
+                HardAgentRuntimeCompatibility.AsHardCapable(runtime)!, hard, hard.Profile, profile),
             new ReviewEvidenceReader(evidenceStore),
-            new ReviewEngineOptions { ReviewerPromptFile = ReviewerPrompt.Materialise(reviewRoot) });
+            options);
     }
 }
 

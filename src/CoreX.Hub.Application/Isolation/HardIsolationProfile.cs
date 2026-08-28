@@ -41,6 +41,24 @@ public sealed record HardIsolationProfile
     public required long MemoryLimitBytes { get; init; }
 
     /// <summary>
+    /// Where this organization's verification tools live inside its own environment.
+    ///
+    /// Keyed by the logical name a verification step declares, exactly as the host allowlist is, so
+    /// a profile is written once and means the same thing on either side of the boundary. What
+    /// differs is the answer, because the environment is a different machine.
+    ///
+    /// Empty is a valid configuration and not a permissive one: a hard organization with no entries
+    /// can run no verification step at all, because there is nothing else for a logical name to
+    /// resolve through. That is the intended failure - falling back to the host map would run a
+    /// Windows path in a Linux namespace, and translating one into the other would be a guess about
+    /// somebody else's filesystem.
+    ///
+    /// Shape only. Whether the file at the other end exists, is a regular file and can be executed
+    /// is a question about a machine, and it is asked inside the environment rather than here.
+    /// </summary>
+    public required IReadOnlyDictionary<string, string> VerificationExecutables { get; init; }
+
+    /// <summary>
     /// Reads a profile, or says exactly what is wrong with it.
     ///
     /// Everything here is a statement the configuration makes about itself, so it can all be
@@ -119,6 +137,11 @@ public sealed record HardIsolationProfile
             return false;
         }
 
+        if (!TryReadExecutables(config.VerificationExecutables, out var executables, out problem))
+        {
+            return false;
+        }
+
         profile = new HardIsolationProfile
         {
             Backend = backend,
@@ -129,8 +152,86 @@ public sealed record HardIsolationProfile
             EvidenceRoot = evidenceRoot!,
             ProcessLimit = config.ProcessLimit,
             MemoryLimitBytes = config.MemoryLimitBytes,
+            VerificationExecutables = executables!,
         };
 
+        return true;
+    }
+
+    /// <summary>
+    /// Reads the verification executable map, refusing anything that is not a path at all.
+    ///
+    /// Everything checked here is a statement the configuration makes about itself, so it can be
+    /// decided without a machine: an absolute Linux path, one path and not a command line, and
+    /// nothing that could carry a second instruction through an argument vector. A value that
+    /// passes has not been shown to exist - that is measured inside the environment, where the
+    /// filesystem is.
+    ///
+    /// Names are compared case-insensitively, matching how the host allowlist compares its own, so
+    /// a profile naming "Dotnet" resolves the same way on both sides.
+    /// </summary>
+    private static bool TryReadExecutables(
+        Dictionary<string, string>? configured,
+        out IReadOnlyDictionary<string, string>? executables,
+        out string? problem)
+    {
+        executables = null;
+        problem = null;
+
+        var accepted = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var (name, path) in configured ?? [])
+        {
+            var logical = (name ?? string.Empty).Trim();
+            var target = (path ?? string.Empty).Trim();
+
+            if (logical.Length == 0)
+            {
+                problem = "a hardIsolation.verificationExecutables entry has an empty logical name.";
+                return false;
+            }
+
+            if (target.Length == 0)
+            {
+                problem = $"hardIsolation.verificationExecutables['{logical}'] maps to an empty path.";
+                return false;
+            }
+
+            if (!target.StartsWith('/'))
+            {
+                problem =
+                    $"hardIsolation.verificationExecutables['{logical}'] must be an absolute Linux path; "
+                    + $"'{target}' is not.";
+                return false;
+            }
+
+            if (target.Contains('\\', StringComparison.Ordinal) || target.Contains(':', StringComparison.Ordinal))
+            {
+                problem =
+                    $"hardIsolation.verificationExecutables['{logical}'] looks like a Windows path; a hard "
+                    + "organization runs its verification inside its own environment and never on the host.";
+                return false;
+            }
+
+            // One path, not a command line. The value becomes argv[0] of an isolated workload, so a
+            // space, a redirection or a newline here would either be a filename nobody meant or an
+            // attempt to smuggle a second instruction past the argument vector.
+            if (target.Any(char.IsControl) || target.Any(char.IsWhiteSpace))
+            {
+                problem =
+                    $"hardIsolation.verificationExecutables['{logical}'] must name one executable and carry "
+                    + "no arguments, whitespace or control characters.";
+                return false;
+            }
+
+            if (!accepted.TryAdd(logical, target))
+            {
+                problem = $"hardIsolation.verificationExecutables names '{logical}' more than once.";
+                return false;
+            }
+        }
+
+        executables = accepted;
         return true;
     }
 

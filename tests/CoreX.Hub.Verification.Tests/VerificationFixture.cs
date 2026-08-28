@@ -64,7 +64,7 @@ public sealed class VerificationFixture : IDisposable
     }
 
     public VerificationEngine CreateEngine(ExecutableAllowlist? allowlist = null) =>
-        new(Executor, Files, Sink, allowlist ?? DefaultAllowlist);
+        new(Executor, Files, Sink, new HostVerificationExecutableResolver(allowlist ?? DefaultAllowlist));
 
     public VerificationRequest Request(bool collectEvidence = true) => new()
     {
@@ -85,7 +85,10 @@ public sealed class VerificationFixture : IDisposable
         Directory.CreateDirectory(root);
 
         var engine = new VerificationEngine(
-            new ProcessVerificationCommandExecutor(root), Files, Sink, DefaultAllowlist);
+            new ProcessVerificationCommandExecutor(root),
+            Files,
+            Sink,
+            new HostVerificationExecutableResolver(DefaultAllowlist));
 
         var request = new VerificationRequest
         {

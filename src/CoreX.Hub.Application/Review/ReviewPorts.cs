@@ -24,7 +24,16 @@ public sealed record ReviewSnapshotIntegrity(string HeadSha, string TreeSha, boo
 /// </summary>
 public interface IReviewWorkspace
 {
+    /// <param name="executionId">
+    /// The execution whose result is being reviewed, already durable when this is called.
+    ///
+    /// Carried rather than derived from the snapshot name. An isolated organization resolves the
+    /// boundary its review tree and reviewer belong in from this identity, and re-deriving it by
+    /// parsing a string the Hub composed for a directory would make a filesystem name into resource
+    /// authority. Execution vocabulary only - no isolation concept crosses this contract.
+    /// </param>
     Task<ReviewSnapshot?> PrepareAsync(
+        Guid executionId,
         Guid repositoryId,
         string commitSha,
         string snapshotId,
@@ -56,6 +65,16 @@ public sealed record ReviewRuntimeRequest
 
     /// <summary>Deterministic, derived from the execution, and never the implementer's.</summary>
     public required string SessionId { get; init; }
+
+    /// <summary>
+    /// The execution being reviewed.
+    ///
+    /// The session identity is derived from it and is not a substitute for it: one is a string a
+    /// provider is told, the other is what an isolated reviewer's boundary is resolved from, and a
+    /// gateway that parsed the first back into the second would be accepting correlation text as
+    /// resource authority.
+    /// </summary>
+    public required Guid ExecutionId { get; init; }
 }
 
 /// <summary>Machine truth about one reviewer invocation, provider neutral.</summary>

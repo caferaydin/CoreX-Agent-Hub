@@ -77,12 +77,28 @@ public static class IsolationComposition
             new ConfiguredHardIsolationProfiles(config),
             WslReadinessProbe.Create(dataDirectory),
 
-            // Still the production truth after Phase 10C-2. A contained process can now be run
-            // inside the environment (see CreateProcessExecutor below), but a whole task cannot,
-            // and admitting one because part of it could be contained is how work ends up half
-            // outside the boundary.
-            new UnavailableHardExecutionPlane());
+            // The real plane. Every stage of a hard workflow now has an implementation that runs
+            // inside the boundary rather than beside it - workspace, agent, verification, review
+            // and evidence - so reporting no plane would be reporting something untrue.
+            //
+            // It says only that this machine could run a hard execution. Whether this organization's
+            // environment is really established, and whether the runtime this execution selected can
+            // be placed inside it, are separate questions asked elsewhere; folding them in here would
+            // let an available machine imply an admissible execution.
+            CreatePlane(dataDirectory));
     }
+
+    /// <summary>
+    /// Whether this machine can run a whole task inside a boundary.
+    ///
+    /// Shared by admission and by routing so the gate and the composition cannot disagree about the
+    /// same machine. A platform that is not Windows has no hard plane at all, which is a refusal for
+    /// a hard organization rather than a reason to run it anywhere weaker.
+    /// </summary>
+    public static IHardExecutionPlane CreatePlane(string dataDirectory) =>
+        OperatingSystem.IsWindows()
+            ? HardExecutionPlane.Create(dataDirectory)
+            : new UnavailableHardExecutionPlane();
 
     /// <summary>
     /// Builds the hard process primitive.
@@ -112,10 +128,11 @@ public static class IsolationComposition
     /// provider, not a task, not a request. There is deliberately no argument here through which
     /// a caller could name a different root.
     /// </summary>
-    public static HardEvidence.HardEvidenceGateway CreateEvidence(
+    internal static HardEvidence.HardEvidenceGateway CreateEvidence(
         HardIsolationProfile profile,
-        string dataDirectory) =>
-        HardEvidence.HardEvidenceGateway.Create(profile, dataDirectory);
+        string dataDirectory,
+        IHardExecutionBinding binding) =>
+        HardEvidence.HardEvidenceGateway.Create(profile, dataDirectory, binding);
 
     /// <summary>Resolves where a hard isolated agent's own state may live.</summary>
     public static HardEvidence.HardAgentHome CreateAgentHome(
@@ -123,12 +140,13 @@ public static class IsolationComposition
         string dataDirectory) =>
         HardEvidence.HardAgentHome.Create(profile, dataDirectory);
 
-    public static HardWorkspace.HardWorkspaceGateway CreateWorkspace(
+    internal static HardWorkspace.HardWorkspaceGateway CreateWorkspace(
         CoreX.Hub.Workspace.WorkspaceManager windows,
         Func<Guid, Orchestration.RepositoryLocation> locate,
         CoreX.Hub.Workspace.Abstractions.IGitCommandExecutor hostGit,
         HardIsolationProfile profile,
-        string dataDirectory) =>
+        string dataDirectory,
+        IHardExecutionBinding binding) =>
         HardWorkspace.HardWorkspaceGateway.Create(
-            windows, locate, hostGit, profile, dataDirectory, dataDirectory);
+            windows, locate, hostGit, profile, dataDirectory, dataDirectory, binding);
 }

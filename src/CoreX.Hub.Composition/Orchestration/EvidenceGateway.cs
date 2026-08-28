@@ -19,6 +19,7 @@ public sealed class EvidenceGateway : IExecutionEvidenceWriter
         _store = store ?? throw new ArgumentNullException(nameof(store));
 
     public async Task<StoredEvidence?> WriteAsync(
+        Guid executionId,
         string text,
         EvidenceKind kind,
         string mediaType,

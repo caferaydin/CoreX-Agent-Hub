@@ -21,6 +21,9 @@ namespace CoreX.Hub.Application.Tests;
 [SupportedOSPlatform("windows")]
 public sealed class OrchestrationCancellationTests
 {
+    /// <summary>The execution being verified.</summary>
+    private static readonly Guid ExecutionIdentity = Guid.Parse("0195b1c0-0000-7000-8000-0000000015ec");
+
     [Fact]
     public async Task Cancelling_before_the_result_commit_leaves_evidence_and_no_commit()
     {
@@ -134,6 +137,7 @@ public sealed class OrchestrationCancellationTests
                 : hub.CreateVerificationEngine(root));
 
         var outcome = await gateway.VerifyAsync(
+            ExecutionIdentity,
             hub.RepositoryId, x, committed.CommitSha, cancellation.Token);
 
         Assert.Equal(1, interrupted.Invocations);
@@ -172,6 +176,7 @@ public sealed class OrchestrationCancellationTests
                 : hub.CreateVerificationEngine(root));
 
         var outcome = await gateway.VerifyAsync(
+            ExecutionIdentity,
             hub.RepositoryId, x, committed.CommitSha, cancellation.Token);
 
         Assert.NotNull(outcome.Result);

@@ -1,3 +1,4 @@
+using CoreX.Hub.Composition.Isolation;
 using System.Globalization;
 using System.Runtime.Versioning;
 using CoreX.Hub.Application.Configuration;
@@ -141,14 +142,23 @@ internal sealed class HardEvidenceFixture : IAsyncLifetime
 
     public HardIsolationProfile ProfileB() => Profile(ServiceB, AgentB, EvidenceRootB);
 
-    public HardEvidenceGateway GatewayA() => HardEvidenceGateway.Create(ProfileA(), _hostRoot);
+    /// <summary>
+    /// What each gateway these tests build claims to be writing for.
+    ///
+    /// A real binding rather than an absent one: the production writer refuses an execution it
+    /// cannot name, and a fixture that handed it nothing would be exercising a shape the product
+    /// does not accept.
+    /// </summary>
+    public RecordedHardExecutionBinding Binding { get; } = new();
 
-    public HardEvidenceGateway GatewayB() => HardEvidenceGateway.Create(ProfileB(), _hostRoot);
+    public HardEvidenceGateway GatewayA() => HardEvidenceGateway.Create(ProfileA(), _hostRoot, Binding);
+
+    public HardEvidenceGateway GatewayB() => HardEvidenceGateway.Create(ProfileB(), _hostRoot, Binding);
 
     /// <summary>A gateway whose redactor a test supplies, for the failure paths.</summary>
     public HardEvidenceGateway GatewayWithRedactor(
         HardIsolationProfile profile, CoreX.Hub.Infrastructure.Evidence.EvidenceRedactor redactor) =>
-        new(HardEvidenceStore.Create(profile, _hostRoot), redactor);
+        new(HardEvidenceStore.Create(profile, _hostRoot), Binding, redactor);
 
     public HardEvidenceStore StoreA() => HardEvidenceStore.Create(ProfileA(), _hostRoot);
 

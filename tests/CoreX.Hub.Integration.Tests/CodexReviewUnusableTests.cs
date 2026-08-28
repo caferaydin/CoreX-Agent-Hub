@@ -307,7 +307,7 @@ public sealed class CodexReviewUnusableTests
 
         private sealed class SnapshotWorkspace(string root) : IReviewWorkspace
         {
-            public Task<ReviewSnapshot?> PrepareAsync(Guid repositoryId, string commitSha, string snapshotId, CancellationToken ct)
+            public Task<ReviewSnapshot?> PrepareAsync(Guid executionId, Guid repositoryId, string commitSha, string snapshotId, CancellationToken ct)
             {
                 var path = Path.Combine(root, snapshotId);
                 Directory.CreateDirectory(path);

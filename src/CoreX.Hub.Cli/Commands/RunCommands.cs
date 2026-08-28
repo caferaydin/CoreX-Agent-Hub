@@ -69,7 +69,12 @@ public static class RunCommands
 
         var task = planned.Task;
         var profile = planned.AgentProfile;
-        var composition = planned.Composition;
+
+        // Structural ownership rather than a convention. The composition can hold this execution's
+        // isolation resources, and they have to be released however the run ends - passed, failed,
+        // cancelled or thrown - so the scope releases them rather than a cleanup line somebody has
+        // to remember to reach.
+        await using var composition = planned.Composition;
 
         // M5: an earlier attempt that produced no commit still owns its worktree, and this
         // says so once. It is not a reason to refuse - the work can be attempted again - and
@@ -225,7 +230,11 @@ public static class RunCommands
                 var reviewer = await ExecutionLaunchPlanner.ResolveReviewerAsync(
                     session, config, organization, repository, ct);
 
-                var composition = ExecutionComposition.Create(
+                // Recovery measures an existing commit and never runs an agent, so it acquires
+                // no isolation resources and this disposes to nothing. It is still owned: a path
+                // that creates a composition without owning it is a leak waiting for the next
+                // change to that path.
+                await using var composition = ExecutionComposition.Create(
                     session, config, organization, repository, verificationProfile, null, reviewer,
                     TimeProvider.System);
 

@@ -221,6 +221,21 @@ public sealed class ExecutionLauncher : IHostedService, IAsyncDisposable
         finally
         {
             listening?.Dispose();
+
+            // The composition can hold this execution's isolation resources, and this is the scope
+            // that owned the run - so it is the scope that releases them, however the run ended.
+            // Disposal records rather than throws, so it cannot replace a failure already logged
+            // above with the reason its cleanup went wrong.
+            await planned.Composition.DisposeAsync();
+
+            if (planned.Composition.DisposalResidual is { Length: > 0 } residual)
+            {
+                _log.LogWarning(
+                    "execution for task {TaskKey} left isolation resources behind: {Residual}",
+                    planned.Task.TaskKey.Value,
+                    residual);
+            }
+
             slot.Dispose();
             await session.DisposeAsync();
         }

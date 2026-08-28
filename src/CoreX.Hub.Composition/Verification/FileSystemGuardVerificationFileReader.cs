@@ -22,7 +22,19 @@ public sealed class FileSystemGuardVerificationFileReader : IVerificationFileRea
     private readonly ConcurrentDictionary<string, FileSystemGuard?> _guards =
         new(StringComparer.OrdinalIgnoreCase);
 
-    public VerificationPathDecision ResolveUnderRoot(string trustRoot, string relativePath, bool mustExist)
+    public Task<VerificationPathDecision> ResolveUnderRootAsync(
+        string trustRoot,
+        string relativePath,
+        bool mustExist,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+
+        return Task.FromResult(Resolve(trustRoot, relativePath, mustExist));
+    }
+
+    /// <summary>The same decision this reader has always made, now behind the asynchronous port.</summary>
+    private VerificationPathDecision Resolve(string trustRoot, string relativePath, bool mustExist)
     {
         var guard = _guards.GetOrAdd(trustRoot, root =>
         {

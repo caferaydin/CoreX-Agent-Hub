@@ -26,6 +26,15 @@ namespace CoreX.Hub.Integration.Tests;
 public sealed class HardEvidenceParityTests : IAsyncLifetime
 {
     /// <summary>
+    /// The execution these writes belong to.
+    ///
+    /// A real identity rather than a placeholder: the evidence contract requires one, production
+    /// refuses Guid.Empty, and a test that passed an empty id would be asserting on a shape the
+    /// product does not accept.
+    /// </summary>
+    private static readonly Guid ExecutionIdentity = Guid.Parse("0195b1c0-0000-7000-8000-00000000e57a");
+
+    /// <summary>
     /// Past the ceiling the hard store used to impose, so the parity claim is not vacuous.
     /// </summary>
     private const int PastTheOldHardCeiling = (16 * 1024 * 1024) + 4096;
@@ -106,10 +115,10 @@ public sealed class HardEvidenceParityTests : IAsyncLifetime
         var text = TextOf(PastTheOldHardCeiling);
 
         var logical = await new EvidenceGateway(new EvidenceBlobStore(_logicalRoot))
-            .WriteAsync(text, EvidenceKind.AgentStdout, "text/plain", CancellationToken.None);
+            .WriteAsync(ExecutionIdentity, text, EvidenceKind.AgentStdout, "text/plain", CancellationToken.None);
 
         var hard = await _fixture.GatewayA()
-            .WriteAsync(text, EvidenceKind.AgentStdout, "text/plain", CancellationToken.None);
+            .WriteAsync(ExecutionIdentity, text, EvidenceKind.AgentStdout, "text/plain", CancellationToken.None);
 
         Assert.NotNull(logical);
         Assert.NotNull(hard);
@@ -145,10 +154,10 @@ public sealed class HardEvidenceParityTests : IAsyncLifetime
         }
 
         var logical = await new EvidenceGateway(new EvidenceBlobStore(_logicalRoot))
-            .WriteAsync(string.Empty, EvidenceKind.AgentStdout, "text/plain", CancellationToken.None);
+            .WriteAsync(ExecutionIdentity, string.Empty, EvidenceKind.AgentStdout, "text/plain", CancellationToken.None);
 
         var hard = await _fixture.GatewayA()
-            .WriteAsync(string.Empty, EvidenceKind.AgentStdout, "text/plain", CancellationToken.None);
+            .WriteAsync(ExecutionIdentity, string.Empty, EvidenceKind.AgentStdout, "text/plain", CancellationToken.None);
 
         Assert.Null(logical);
         Assert.Null(hard);
@@ -181,7 +190,7 @@ public sealed class HardEvidenceParityTests : IAsyncLifetime
         var text = Jwt + "\n" + filler + "\n" + Token + "\n" + filler + "\n" + Key;
 
         var hard = await _fixture.GatewayA()
-            .WriteAsync(text, EvidenceKind.AgentStdout, "text/plain", CancellationToken.None);
+            .WriteAsync(ExecutionIdentity, text, EvidenceKind.AgentStdout, "text/plain", CancellationToken.None);
 
         Assert.NotNull(hard);
         Assert.Equal(3, hard.RedactionCount);
@@ -237,7 +246,7 @@ public sealed class HardEvidenceParityTests : IAsyncLifetime
         var gateway = _fixture.GatewayWithRedactor(_fixture.ProfileA(), new EvidenceRedactor([runaway]));
 
         await Assert.ThrowsAsync<System.Text.RegularExpressions.RegexMatchTimeoutException>(
-            () => gateway.WriteAsync(text, EvidenceKind.CommandStdout, "text/plain", CancellationToken.None));
+            () => gateway.WriteAsync(ExecutionIdentity, text, EvidenceKind.CommandStdout, "text/plain", CancellationToken.None));
 
         // Nothing reached the environment, and above all not the value the redaction failed to
         // remove: the blob root holds no shard at all.

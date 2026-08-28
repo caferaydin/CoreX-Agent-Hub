@@ -294,10 +294,20 @@ Hard bir organizasyon ayrıca `hardIsolation` bloğu ister:
       evidenceRoot: /srv/corex/evidence # agent okuyamamalı
       processLimit: 64
       memoryLimitBytes: 4294967296
+      verificationExecutables:          # doğrulama araçları, ortam ICINDEKI mutlak yollar
+        dotnet: /usr/bin/dotnet
+        node: /usr/bin/node
 ```
 
 Bu blok veritabanına **yazılmaz**: katalog gerçeği değil, bu makinenin operasyonel
 yapılandırmasıdır.
+
+`verificationExecutables` anahtarları, doğrulama profilinin zaten kullandığı mantıksal araç
+adlarıdır; değerleri o organizasyonun **kendi ortamındaki** mutlak Linux yollarıdır. Hard bir
+organizasyon host'taki `verification.executables` haritasına **asla** düşmez: oradaki değerler
+Windows yollarıdır, ortamın içinde hiçbir anlam taşımazlar ve ikisi arasında bir çeviri Hub'ın
+tahmin yürütmesi olurdu. Bir aracın gerçekten var olup olmadığı host'ta değil, ortamın içinde
+güvenilen servis kimliğiyle ölçülür.
 
 Ne eksik olduğunu görmek için:
 

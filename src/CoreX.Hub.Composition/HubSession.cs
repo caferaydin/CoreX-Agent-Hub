@@ -1,3 +1,5 @@
+using CoreX.Hub.Composition.HardNetwork;
+using CoreX.Hub.Composition.Isolation;
 using CoreX.Hub.Application.Abstractions;
 using CoreX.Hub.Application.Acceptance;
 using CoreX.Hub.Application.Catalog;
@@ -146,7 +148,62 @@ public sealed class HubSession : IAsyncDisposable
 
         session.PendingRecovery = reconciled.RecoveryRequired;
 
+        // Straight after, and deliberately in this order. A hard execution that died holding a
+        // claim on its organization's network attachment has just been settled as Interrupted
+        // above, so judging claims now is judging them against a decided state - where doing it
+        // first could drop a claim belonging to an execution still legitimately running.
+        //
+        // Costs nothing when there is nothing to do: with no claims recorded it never reaches the
+        // environment, so an ordinary command that opens a session does not touch WSL.
+        if (OperatingSystem.IsWindows())
+        {
+            var network = await ReconcileHardNetworkAsync(store, configPath, dataDirectory, ct);
+
+            if (!network.MadeNoChanges || network.Preserved.Count > 0)
+            {
+                await diagnostics.WriteLineAsync("reconcile: network: " + network.Describe());
+            }
+        }
+
         return session;
+    }
+
+    /// <summary>
+    /// Reconciles durable hard network claims against the executions that just settled.
+    ///
+    /// Separate from the caller so the dependencies it needs - the configured profiles and the
+    /// physical fabric - are built only when there is something to reconcile.
+    /// </summary>
+    [System.Runtime.Versioning.SupportedOSPlatform("windows")]
+    private static async Task<HardNetworkReconciliation> ReconcileHardNetworkAsync(
+        IHubStore store, string configPath, string dataDirectory, CancellationToken ct)
+    {
+        try
+        {
+            var config = File.Exists(configPath)
+                ? new YamlHubConfigReader().Read(configPath)
+                : null;
+
+            if (config is null)
+            {
+                return new HardNetworkReconciliation(0, 0, [], []);
+            }
+
+            var fabric = WslHardNetworkFabric.Create(dataDirectory);
+
+            return await HardNetworkConsumerReconciler.Over(
+                store,
+                new HardNetworkConsumers(fabric, dataDirectory),
+                new ConfiguredHardIsolationProfiles(config),
+                fabric).ReconcileAsync(ct);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // Reconciliation is housekeeping. A session that cannot read its own state directory
+            // has a bigger problem, and failing to open the session over it would make every
+            // command unusable rather than one piece of cleanup late.
+            return new HardNetworkReconciliation(0, 0, [], [ex.Message]);
+        }
     }
 
     public async ValueTask DisposeAsync()

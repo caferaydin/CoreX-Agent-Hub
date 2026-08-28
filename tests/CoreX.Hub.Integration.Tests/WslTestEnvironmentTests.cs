@@ -12,16 +12,8 @@ namespace CoreX.Hub.Integration.Tests;
 /// Every test here runs on any machine and starts no distribution.
 /// </summary>
 [SupportedOSPlatform("windows")]
-public sealed class WslTestEnvironmentTests : IDisposable
+public sealed class WslTestEnvironmentTests
 {
-    private readonly string? _original = Environment.GetEnvironmentVariable(WslTestEnvironment.Variable);
-
-    public void Dispose() =>
-        Environment.SetEnvironmentVariable(WslTestEnvironment.Variable, _original);
-
-    private static void Set(string? value) =>
-        Environment.SetEnvironmentVariable(WslTestEnvironment.Variable, value);
-
     // -- no opt-in -------------------------------------------------------------------------------
 
     /// <summary>
@@ -32,12 +24,8 @@ public sealed class WslTestEnvironmentTests : IDisposable
     [InlineData("")]
     [InlineData("   ")]
     [InlineData("\t")]
-    public void Without_an_explicit_environment_nothing_is_selected(string? value)
-    {
-        Set(value);
-
-        Assert.Null(WslTestEnvironment.Selected());
-    }
+    public void Without_an_explicit_environment_nothing_is_selected(string? value) =>
+        Assert.Null(WslTestEnvironment.SelectedFrom(value));
 
     // -- the fallbacks that used to exist --------------------------------------------------------
 
@@ -58,18 +46,14 @@ public sealed class WslTestEnvironmentTests : IDisposable
     [InlineData("docker-desktop")]
     public void A_registered_distribution_is_never_selected_by_its_name(string registered)
     {
-        Set(null);
-
         // Nothing is selected, whatever the machine happens to have registered.
-        Assert.Null(WslTestEnvironment.Selected());
+        Assert.Null(WslTestEnvironment.SelectedFrom(null));
 
         // And the name being present in a listing is not what makes it selectable either: the only
-        // thing that selects it is somebody setting the variable to exactly it.
+        // thing that selects it is somebody naming exactly it.
         Assert.True(WslTestEnvironment.IsRegistered([registered], registered));
 
-        Set(registered);
-
-        Assert.Equal(registered, WslTestEnvironment.Selected());
+        Assert.Equal(registered, WslTestEnvironment.SelectedFrom(registered));
     }
 
     /// <summary>
@@ -81,9 +65,7 @@ public sealed class WslTestEnvironmentTests : IDisposable
     [Fact]
     public void Being_first_or_default_does_not_select_a_distribution()
     {
-        Set(null);
-
-        Assert.Null(WslTestEnvironment.Selected());
+        Assert.Null(WslTestEnvironment.SelectedFrom(null));
 
         // A listing is only ever used to confirm what was named, never to choose.
         string[] listing = ["Ubuntu", "docker-desktop", "corex-disposable"];
@@ -99,12 +81,8 @@ public sealed class WslTestEnvironmentTests : IDisposable
     [InlineData("corex-disposable")]
     [InlineData("corexfs-a")]
     [InlineData("Test_Env.1")]
-    public void An_explicitly_named_environment_is_selected_exactly(string named)
-    {
-        Set(named);
-
-        Assert.Equal(named, WslTestEnvironment.Selected());
-    }
+    public void An_explicitly_named_environment_is_selected_exactly(string named) =>
+        Assert.Equal(named, WslTestEnvironment.SelectedFrom(named));
 
     /// <summary>
     /// A name that is not registered is not quietly replaced by one that is.
@@ -184,11 +162,43 @@ public sealed class WslTestEnvironmentTests : IDisposable
     [Fact]
     public void A_malformed_value_is_not_read_as_no_opt_in()
     {
-        Set("-d");
-
-        var failure = Record.Exception(WslTestEnvironment.Selected);
+        var failure = Record.Exception(() => WslTestEnvironment.SelectedFrom("-d"));
 
         Assert.NotNull(failure);
         Assert.Contains(WslTestEnvironment.Variable, failure.Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Nothing here touches the real variable, and that is a safety property rather than tidiness.
+    ///
+    /// Process environment is shared by every test running at the same moment, and xUnit runs test
+    /// classes in parallel. A test that set this variable to prove a rule would, for as long as it
+    /// held it, be telling every fixture starting alongside it that an operator had opted in - and
+    /// one of the values these tests care about is the name of the developer's own distribution.
+    ///
+    /// It was found as intermittent failures in unrelated WSL-backed suites, roughly one run in
+    /// three, with a different victim each time. That is exactly how it would have gone unnoticed,
+    /// and why the rule is now guarded rather than remembered.
+    /// </summary>
+    [Fact]
+    public void These_tests_never_touch_the_real_variable() =>
+        Assert.DoesNotContain(
+            // Split so this guard does not match its own text.
+            "Set" + "EnvironmentVariable",
+            File.ReadAllText(
+                Path.Combine(
+                    RepoRoot(), "tests", "CoreX.Hub.Integration.Tests", "WslTestEnvironmentTests.cs")),
+            StringComparison.Ordinal);
+
+    private static string RepoRoot()
+    {
+        var directory = new DirectoryInfo(AppContext.BaseDirectory);
+
+        while (directory is not null && !File.Exists(Path.Combine(directory.FullName, "CoreX.Hub.slnx")))
+        {
+            directory = directory.Parent;
+        }
+
+        return directory?.FullName ?? throw new InvalidOperationException("repository root not found");
     }
 }

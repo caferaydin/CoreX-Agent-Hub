@@ -22,20 +22,29 @@ public sealed class VerificationEngine
     private readonly IVerificationCommandExecutor _executor;
     private readonly IVerificationFileReader _files;
     private readonly IVerificationEvidenceSink _evidence;
-    private readonly ExecutableAllowlist _allowlist;
+    private readonly IVerificationExecutableResolver _executables;
     private readonly TimeProvider _clock;
 
+    /// <summary>
+    /// One engine, whichever environment it runs in.
+    ///
+    /// What differs between a logical run and a hard one is where commands are launched, how a name
+    /// becomes a path and how a report is read - three ports, all supplied here. What a verification
+    /// run means is the same either way, and that is deliberate: a second engine would be a second
+    /// place for fail-fast ordering, report parsing and status mapping to drift, and two
+    /// organizations would then be answering different questions while reporting the same verdict.
+    /// </summary>
     public VerificationEngine(
         IVerificationCommandExecutor executor,
         IVerificationFileReader files,
         IVerificationEvidenceSink evidence,
-        ExecutableAllowlist allowlist,
+        IVerificationExecutableResolver executables,
         TimeProvider? clock = null)
     {
         _executor = executor ?? throw new ArgumentNullException(nameof(executor));
         _files = files ?? throw new ArgumentNullException(nameof(files));
         _evidence = evidence ?? throw new ArgumentNullException(nameof(evidence));
-        _allowlist = allowlist ?? throw new ArgumentNullException(nameof(allowlist));
+        _executables = executables ?? throw new ArgumentNullException(nameof(executables));
         _clock = clock ?? TimeProvider.System;
     }
 
@@ -51,8 +60,8 @@ public sealed class VerificationEngine
         var profileHash = ProfileHasher.Compute(profile);
         var results = new List<VerificationStepResult>(profile.Steps.Count);
 
-        var workingDirectory = _files.ResolveUnderRoot(
-            request.WorkspaceRoot, profile.WorkingDirectory, mustExist: true);
+        var workingDirectory = await _files.ResolveUnderRootAsync(
+            request.WorkspaceRoot, profile.WorkingDirectory, mustExist: true, cancellationToken);
 
         // A rejected working directory is a property of the run, not of one step, so every
         // step reports the same StartFailed rather than the first one swallowing it.
@@ -111,7 +120,7 @@ public sealed class VerificationEngine
         VerificationRequest request,
         CancellationToken cancellationToken)
     {
-        var executable = _allowlist.Resolve(step.Executable);
+        var executable = await _executables.ResolveAsync(step.Executable, cancellationToken);
         if (!executable.IsAllowed)
         {
             // Fail closed before anything is launched.
@@ -129,7 +138,8 @@ public sealed class VerificationEngine
         string? reportPath = null;
         if (step.ResultParser != VerificationResultParser.None)
         {
-            var resolved = _files.ResolveUnderRoot(workingDirectory, step.ResultPath!, mustExist: false);
+            var resolved = await _files.ResolveUnderRootAsync(
+                workingDirectory, step.ResultPath!, mustExist: false, cancellationToken);
             if (!resolved.IsAllowed)
             {
                 return new VerificationStepResult
@@ -175,7 +185,8 @@ public sealed class VerificationEngine
         if (step.ResultParser != VerificationResultParser.None
             && status is not VerificationStepStatus.StartFailed and not VerificationStepStatus.Cancelled)
         {
-            var parsed = await ParseReportAsync(step, reportPath!, request, cancellationToken);
+            var parsed = await ParseReportAsync(
+                step, workingDirectory, reportPath!, request, cancellationToken);
             summary = parsed.Summary;
             report = parsed.Evidence;
 
@@ -222,14 +233,23 @@ public sealed class VerificationEngine
     /// </summary>
     private async Task<(TestSummary? Summary, EvidenceRef? Evidence, string? Diagnostic)> ParseReportAsync(
         VerificationStep step,
+        string workingDirectory,
         string reportPath,
         VerificationRequest request,
         CancellationToken cancellationToken)
     {
         // Revalidated as an existing path: the build just created it, and it could have
         // been created as a link pointing somewhere else.
-        var directory = Path.GetDirectoryName(reportPath) ?? reportPath;
-        var existing = _files.ResolveUnderRoot(directory, Path.GetFileName(reportPath), mustExist: true);
+        //
+        // Against the working directory rather than against the report's own parent, because the
+        // parent is a string derived from the path being checked and deciding containment against
+        // it would be asking the candidate to vouch for itself. The working directory is the root
+        // the run was admitted under, and it is also the only one of the two whose separators this
+        // process is entitled to reason about - a hard organization's report lives on a filesystem
+        // with its own conventions, and splitting its path here would be this machine guessing at
+        // another machine's shape.
+        var existing = await _files.ResolveUnderRootAsync(
+            workingDirectory, reportPath, mustExist: true, cancellationToken);
 
         if (!existing.IsAllowed)
         {

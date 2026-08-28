@@ -250,8 +250,9 @@ public sealed class OrchestrationHarness : IAsyncDisposable
             new ProcessVerificationCommandExecutor(root),
             new FileSystemGuardVerificationFileReader(),
             new BlobEvidenceSink(EvidenceStore),
-            ExecutableAllowlist.Create(
-                new Dictionary<string, string> { ["fixture"] = FixtureExecutable }, out _),
+            new HostVerificationExecutableResolver(
+                ExecutableAllowlist.Create(
+                    new Dictionary<string, string> { ["fixture"] = FixtureExecutable }, out _)),
             Clock);
 
     /// <summary>An engine whose commands come from the caller, for cancellation scenarios.</summary>
@@ -260,8 +261,9 @@ public sealed class OrchestrationHarness : IAsyncDisposable
             executor,
             new FileSystemGuardVerificationFileReader(),
             new BlobEvidenceSink(EvidenceStore),
-            ExecutableAllowlist.Create(
-                new Dictionary<string, string> { ["fixture"] = FixtureExecutable }, out _),
+            new HostVerificationExecutableResolver(
+                ExecutableAllowlist.Create(
+                    new Dictionary<string, string> { ["fixture"] = FixtureExecutable }, out _)),
             Clock);
 
     /// <summary>

@@ -93,7 +93,19 @@ public interface IExecutionWorkspace
     /// The default branch is not resolved again: if it moved in between, it is no longer
     /// the authority - the captured commit is.
     /// </summary>
+    /// <param name="executionId">
+    /// The execution this workspace belongs to, already durable when this is called.
+    ///
+    /// Carried explicitly rather than inferred from call order. An isolated organization binds its
+    /// environment - and the durable claim on its organization's network attachment - to this
+    /// identity, and the alternative was for the first port invoked to bind anonymously and adopt
+    /// an identity later. That leaves a window where a claim exists under no execution, which is
+    /// exactly the state crash reconciliation cannot classify.
+    ///
+    /// It is execution vocabulary and nothing more. No isolation concept crosses this contract.
+    /// </param>
     Task<PreparedExecutionWorkspace?> PrepareAsync(
+        Guid executionId,
         Guid repositoryId,
         IExecutionWorkspacePreflight preflight,
         string taskKey,
@@ -225,7 +237,17 @@ public sealed record VerificationOutcomeView(
 /// </summary>
 public interface IExecutionVerifier
 {
+    /// <param name="executionId">
+    /// The execution being verified.
+    ///
+    /// Needed in its own right rather than inherited from whoever prepared a workspace, because
+    /// recovery re-measures a commit for an execution this process never ran: there was no
+    /// workspace preparation in that invocation to have bound anything. Verification runs
+    /// repository-controlled commands, so it must be able to resolve its own execution's boundary
+    /// without depending on a side effect of an earlier step.
+    /// </param>
     Task<VerificationOutcomeView> VerifyAsync(
+        Guid executionId,
         Guid repositoryId,
         string baseCommitSha,
         string resultCommitSha,
@@ -243,7 +265,14 @@ public sealed record StoredEvidence(string Sha256, long SizeBytes, string MediaT
 /// </summary>
 public interface IExecutionEvidenceWriter
 {
-    Task<StoredEvidence?> WriteAsync(string text, EvidenceKind kind, string mediaType, CancellationToken ct);
+    /// <param name="executionId">
+    /// Whose evidence this is. Every write in one execution reaches one store, and the identity is
+    /// what makes that checkable rather than conventional - an execution whose agent transcript
+    /// went to one backend and whose verification output went to another would be an execution
+    /// nobody could account for.
+    /// </param>
+    Task<StoredEvidence?> WriteAsync(
+        Guid executionId, string text, EvidenceKind kind, string mediaType, CancellationToken ct);
 }
 
 /// <summary>Whether the process that claimed an execution is still running.</summary>

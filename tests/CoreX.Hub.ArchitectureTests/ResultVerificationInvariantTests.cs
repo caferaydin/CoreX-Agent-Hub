@@ -20,13 +20,28 @@ public sealed class ResultVerificationInvariantTests
     [Fact]
     public void The_verifier_is_never_told_where_the_worktree_is()
     {
-        // The strongest form of "verification does not run in the execution worktree": the
-        // port carries two commit ids and no path, so there is nothing to measure it with.
+        // The strongest form of "verification does not run in the execution worktree": the port
+        // carries identities and commits, and no path at all, so there is nothing to measure a
+        // worktree with.
+        //
+        // The execution identity joined this list deliberately. It is lifecycle vocabulary - which
+        // run this is - and it is what an isolated organization resolves its boundary from; it names
+        // no directory, and a verifier holding it still cannot be pointed at a tree. What the guard
+        // exists to catch is the parameter that would arrive next, so the second assertion says the
+        // rule rather than relying on the exact list to imply it.
         var verify = typeof(IExecutionVerifier).GetMethod(nameof(IExecutionVerifier.VerifyAsync))!;
 
-        var parameters = verify.GetParameters().Select(p => p.Name).ToList();
+        var parameters = verify.GetParameters().Select(p => p.Name!).ToList();
 
-        Assert.Equal(["repositoryId", "baseCommitSha", "resultCommitSha", "ct"], parameters);
+        Assert.Equal(["executionId", "repositoryId", "baseCommitSha", "resultCommitSha", "ct"], parameters);
+
+        string[] pathish = ["path", "directory", "root", "worktree", "workspace", "tree", "folder"];
+
+        var located = parameters
+            .Where(p => pathish.Any(w => p.Contains(w, StringComparison.OrdinalIgnoreCase)))
+            .ToList();
+
+        Assert.Empty(located);
     }
 
     [Fact]

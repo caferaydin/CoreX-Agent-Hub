@@ -36,6 +36,7 @@ public sealed class WorkspaceGateway : IExecutionWorkspace
     }
 
     public async Task<PreparedExecutionWorkspace?> PrepareAsync(
+        Guid executionId,
         Guid repositoryId,
         IExecutionWorkspacePreflight preflight,
         string taskKey,

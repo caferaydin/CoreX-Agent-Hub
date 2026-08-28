@@ -49,6 +49,7 @@ public sealed class VerificationGateway : IExecutionVerifier
     }
 
     public async Task<VerificationOutcomeView> VerifyAsync(
+        Guid executionId,
         Guid repositoryId,
         string baseCommitSha,
         string resultCommitSha,

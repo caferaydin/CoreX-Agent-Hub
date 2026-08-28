@@ -54,6 +54,7 @@ public sealed class FakeReviewWorkspace : IReviewWorkspace
     }
 
     public Task<ReviewSnapshot?> PrepareAsync(
+        Guid executionId,
         Guid repositoryId,
         string commitSha,
         string snapshotId,

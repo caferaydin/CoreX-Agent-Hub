@@ -105,6 +105,7 @@ public sealed partial class ExecutionOrchestrator
         // this execution already claims to be based on. The branch is free to move in this
         // window; it simply stops being the authority the moment the commit was captured.
         var workspace = await _workspace.PrepareAsync(
+            execution.Id,
             start.RepositoryId, preflight, task.TaskKey.Value, execution.AttemptNo, ct);
 
         if (workspace is null)

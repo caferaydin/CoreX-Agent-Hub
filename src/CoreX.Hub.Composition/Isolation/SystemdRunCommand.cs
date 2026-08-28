@@ -54,10 +54,26 @@ public static class SystemdRunCommand
     /// door: the primitive is callable directly, and a caller that reached it with a zero limit
     /// must not get an uncontained run out of it.
     /// </summary>
+    /// <summary>
+    /// The trusted preparation form, for work the Hub does on its own behalf.
+    ///
+    /// No placement, because nothing repository-controlled runs through it. It still carries the
+    /// full filesystem boundary - a trusted command has no more business reading the shared WSL
+    /// surfaces than an untrusted one does.
+    /// </summary>
     public static bool TryBuild(
         HardIsolationProfile profile,
         HardProcessRequest request,
         string unitName,
+        out IReadOnlyList<string> arguments,
+        out string? problem) =>
+        TryBuild(profile, request, unitName, null, out arguments, out problem);
+
+    public static bool TryBuild(
+        HardIsolationProfile profile,
+        HardProcessRequest request,
+        string unitName,
+        HardWorkloadPlacement? placement,
         out IReadOnlyList<string> arguments,
         out string? problem)
     {
@@ -157,11 +173,18 @@ public static class SystemdRunCommand
             "--property=RuntimeMaxSec=" + RuntimeSeconds(request.HardTimeout).ToString(CultureInfo.InvariantCulture),
         };
 
-        // The shared WSL filesystem surfaces, closed before the workload starts rather than after.
-        // Unconditional and not derived from the request: there is one policy, Composition owns it,
-        // and nothing a caller can spell reaches it.
+        // Both boundaries, from the one launch policy, before the workload starts rather than
+        // after. Unconditional and not derived from the request: Composition owns them, and nothing
+        // a caller can spell reaches either.
+        //
+        // A placement is required for repository-controlled work and absent only for the trusted
+        // preparation this Hub does on its own behalf - which is why an absent one still gets the
+        // filesystem boundary and never gets a weaker one.
         built.AddRange(
-            HardMountSandbox.Properties(HardFilesystemPolicy.Phase10).Select(p => "--property=" + p));
+            (placement is null
+                ? HardMountSandbox.Properties(HardFilesystemPolicy.Phase10)
+                : HardWorkloadLaunch.Properties(placement))
+            .Select(p => "--property=" + p));
 
         // Ordered, so the same request always produces the same vector and a test can compare
         // one against a literal rather than against a set.
@@ -182,6 +205,12 @@ public static class SystemdRunCommand
         if (!HardMountSandbox.IsFullyApplied(built, HardFilesystemPolicy.Phase10))
         {
             problem = "the shared filesystem boundary is not fully expressed in the launch command.";
+            return false;
+        }
+
+        if (placement is not null && !HardWorkloadLaunch.IsFullyApplied(built, placement))
+        {
+            problem = "the hard workload boundary is not fully expressed in the launch command.";
             return false;
         }
 

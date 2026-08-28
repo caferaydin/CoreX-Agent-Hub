@@ -75,10 +75,35 @@ public static class ExecutionLaunchPlanner
         var verificationProfile = await session.Store.FindDefaultVerificationProfileAsync(repository.Id, ct);
         var reviewer = await ResolveReviewerAsync(session, config, organization, repository, ct);
 
-        var composition = ExecutionComposition.Create(
-            session, config, organization, repository, verificationProfile, profile, reviewer, TimeProvider.System);
+        // Owned here until it is handed over, and not a moment longer.
+        //
+        // A composition can hold an execution's isolation resources, so it needs an owner from the
+        // instant it exists. Between creating one and returning it there is a window where this
+        // method is that owner: if anything here fails, the caller never receives the object and
+        // could not release it, so it is released here instead. After a successful return the
+        // caller owns it and this method must not touch it again - releasing it twice would tear
+        // down an execution that is about to start.
+        ExecutionComposition? composition = null;
 
-        return new PlannedExecution(task, organization, repository, profile, composition);
+        try
+        {
+            composition = ExecutionComposition.Create(
+                session, config, organization, repository, verificationProfile, profile, reviewer,
+                TimeProvider.System);
+
+            var planned = new PlannedExecution(task, organization, repository, profile, composition);
+
+            composition = null;
+
+            return planned;
+        }
+        finally
+        {
+            if (composition is not null)
+            {
+                await composition.DisposeAsync();
+            }
+        }
     }
 
     public static async Task<HubTask> ResolveTaskAsync(

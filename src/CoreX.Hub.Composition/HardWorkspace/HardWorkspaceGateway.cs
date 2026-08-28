@@ -37,18 +37,21 @@ public sealed class HardWorkspaceGateway : IExecutionWorkspace
     private readonly Func<Guid, RepositoryLocation> _locate;
     private readonly HardWorkspaceControl _control;
     private readonly PinnedTransfer _transfer;
+    private readonly Isolation.IHardExecutionBinding _binding;
     private readonly Dictionary<string, HardWorkspaceHandle> _prepared = new(StringComparer.Ordinal);
 
     internal HardWorkspaceGateway(
         WorkspaceManager windows,
         Func<Guid, RepositoryLocation> locate,
         HardWorkspaceControl control,
-        PinnedTransfer transfer)
+        PinnedTransfer transfer,
+        Isolation.IHardExecutionBinding binding)
     {
         _windows = windows ?? throw new ArgumentNullException(nameof(windows));
         _locate = locate ?? throw new ArgumentNullException(nameof(locate));
         _control = control ?? throw new ArgumentNullException(nameof(control));
         _transfer = transfer ?? throw new ArgumentNullException(nameof(transfer));
+        _binding = binding ?? throw new ArgumentNullException(nameof(binding));
     }
 
     /// <summary>
@@ -57,13 +60,14 @@ public sealed class HardWorkspaceGateway : IExecutionWorkspace
     /// <paramref name="hostStagingRoot"/> is the Hub's own data directory. Transfer artefacts are
     /// written there for as long as one takes to encode, and nowhere near a worktree.
     /// </summary>
-    public static HardWorkspaceGateway Create(
+    internal static HardWorkspaceGateway Create(
         WorkspaceManager windows,
         Func<Guid, RepositoryLocation> locate,
         IGitCommandExecutor hostGit,
         HardIsolationProfile profile,
         string hostStagingRoot,
-        string hostWorkingDirectory)
+        string hostWorkingDirectory,
+        Isolation.IHardExecutionBinding binding)
     {
         ArgumentNullException.ThrowIfNull(windows);
         ArgumentNullException.ThrowIfNull(profile);
@@ -84,7 +88,8 @@ public sealed class HardWorkspaceGateway : IExecutionWorkspace
                 hostGit,
                 Path.Combine(hostStagingRoot, "hard-transfer"),
                 windows.Hooks.EmptyGlobalConfigPath,
-                windows.Hooks.HooksDirectory));
+                windows.Hooks.HooksDirectory),
+            binding);
     }
 
     /// <summary>A gateway over a scripted environment, for this assembly's tests.</summary>
@@ -93,12 +98,14 @@ public sealed class HardWorkspaceGateway : IExecutionWorkspace
         Func<Guid, RepositoryLocation> locate,
         IWslExecutionGateway gateway,
         HardIsolationProfile profile,
-        PinnedTransfer transfer) =>
+        PinnedTransfer transfer,
+        Isolation.IHardExecutionBinding? binding = null) =>
         new(
             windows,
             locate,
             new HardWorkspaceControl(gateway, profile, HardWorkspaceLayout.For(profile.ExecutionRoot)),
-            transfer);
+            transfer,
+            binding ?? new Isolation.RecordedHardExecutionBinding());
 
     /// <summary>
     /// The existing repository inspection, on the host, unchanged.
@@ -118,6 +125,7 @@ public sealed class HardWorkspaceGateway : IExecutionWorkspace
     }
 
     public async Task<PreparedExecutionWorkspace?> PrepareAsync(
+        Guid executionId,
         Guid repositoryId,
         IExecutionWorkspacePreflight preflight,
         string taskKey,
@@ -125,6 +133,11 @@ public sealed class HardWorkspaceGateway : IExecutionWorkspace
         CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(preflight);
+
+        // Which execution this workspace belongs to, settled before a byte moves. Preparation is the
+        // first hard port an execution reaches, so this is normally where the composition adopts its
+        // durable identity - and it happens after admission, never during construction.
+        _binding.BindTo(executionId);
 
         if (preflight is not HardPinnedPreflight pinned)
         {
@@ -296,25 +309,20 @@ public sealed class HardWorkspaceGateway : IExecutionWorkspace
     /// repository that names its own hooks path gets to execute code during checkout, and
     /// "harden after checking out" would be hardening after the thing it was meant to prevent.
     /// </summary>
-    private async Task<bool> CreateWorktreeAsync(
+    /// <summary>
+    /// Builds the agent's tree through the one authority that makes them.
+    ///
+    /// The git command itself lives there rather than here, so that the execution workspace and a
+    /// review snapshot cannot end up with two implementations of the same operation - which is
+    /// exactly how one of them quietly stops reading HEAD back or stops running hardened.
+    /// </summary>
+    private Task<bool> CreateWorktreeAsync(
         string bare,
         string worktree,
         string branch,
         string baseCommit,
-        CancellationToken ct)
-    {
-        var added = await _control.GitAsync(
-            ct, "--git-dir=" + bare, "worktree", "add", "-b", branch, worktree, baseCommit);
-
-        if (!added.Ok)
-        {
-            return false;
-        }
-
-        var head = HardWorkspaceControl.FirstLine(await _control.GitAsync(ct, "-C", worktree, "rev-parse", "HEAD"));
-
-        return string.Equals(head, baseCommit, StringComparison.OrdinalIgnoreCase);
-    }
+        CancellationToken ct) =>
+        new HardWorktreeAuthority(_control).AddBranchedAsync(bare, worktree, branch, baseCommit, ct);
 
     /// <summary>
     /// The ownership model, which is where the boundary actually lives.
@@ -525,14 +533,15 @@ public sealed class HardWorkspaceGateway : IExecutionWorkspace
 
         var handle = Handle(workspace);
 
-        var removed = await _control.GitAsync(
-            ct, "--git-dir=" + handle.BareRepositoryPath, "worktree", "remove", handle.WorktreePath);
+        // Through the one authority that owns worktree operations, so removal cannot drift apart
+        // from creation. Reported, never forced: a worktree that will not come away cleanly is a
+        // thing an operator should look at, and "remove it harder" is how evidence disappears.
+        var removed = await new HardWorktreeAuthority(_control)
+            .RemoveAsync(handle.BareRepositoryPath, handle.WorktreePath, ct);
 
         if (!removed.Ok)
         {
-            // Reported, never forced. A worktree that will not come away cleanly is a thing an
-            // operator should look at, and "remove it harder" is how evidence disappears.
-            return new HardWorkspaceReleaseOutcome(false, handle.WorktreePath, removed.Stderr.Trim());
+            return new HardWorkspaceReleaseOutcome(false, handle.WorktreePath, removed.Detail);
         }
 
         _prepared.Remove(handle.WorktreePath);

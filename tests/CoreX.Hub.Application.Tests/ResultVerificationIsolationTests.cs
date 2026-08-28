@@ -189,11 +189,12 @@ public sealed class ResultVerificationIsolationTests
     private sealed class UnmeasurableVerifier(IExecutionVerifier inner) : IExecutionVerifier
     {
         public Task<VerificationOutcomeView> VerifyAsync(
+            Guid executionId,
             Guid repositoryId,
             string baseCommitSha,
             string resultCommitSha,
             CancellationToken ct) =>
-            inner.VerifyAsync(repositoryId, baseCommitSha, new string('e', 40), ct);
+            inner.VerifyAsync(executionId, repositoryId, baseCommitSha, new string('e', 40), ct);
     }
 
     [Fact]

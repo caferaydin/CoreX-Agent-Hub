@@ -75,6 +75,7 @@ public sealed class ReviewEngine : IExecutionReviewer
         }
 
         var snapshot = await _workspace.PrepareAsync(
+            request.ExecutionId,
             request.RepositoryId,
             request.ResultCommitSha,
             SnapshotId(request.ExecutionId),
@@ -137,6 +138,7 @@ public sealed class ReviewEngine : IExecutionReviewer
                     UserPrompt = prompt,
                     StructuredOutputSchema = ReviewSchema.Json,
                     SessionId = sessionId,
+                    ExecutionId = request.ExecutionId,
                 },
                 ct);
 

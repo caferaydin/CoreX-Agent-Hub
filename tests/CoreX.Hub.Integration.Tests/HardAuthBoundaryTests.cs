@@ -301,13 +301,29 @@ public sealed class HardAuthBoundaryTests : IAsyncLifetime
     [Fact]
     public void The_isolation_profile_carries_no_provider_session()
     {
-        var fields = typeof(HardIsolationProfile).GetProperties().Select(p => p.Name).ToList();
+        var fields = typeof(HardIsolationProfile)
+            .GetProperties()
+            .Select(p => p.Name)
+            .Order(StringComparer.Ordinal)
+            .ToList();
 
+        // VerificationExecutables was added in Phase 10C-4 and is the shape this rule permits: keys
+        // are the logical tool names a verification profile already declares, and values are paths
+        // inside the organization's own environment. Neither half can name a provider, which is why
+        // the rule below is asserted rather than left implied by the list.
         Assert.Equal(
             [
                 "AgentUser", "Backend", "EnvironmentId", "EvidenceRoot", "ExecutionRoot",
-                "MemoryLimitBytes", "ProcessLimit", "ServiceUser",
+                "MemoryLimitBytes", "ProcessLimit", "ServiceUser", "VerificationExecutables",
             ],
-            fields.Order(StringComparer.Ordinal));
+            fields);
+
+        string[] providerShaped = ["claude", "codex", "anthropic", "openai", "home", "session", "auth"];
+
+        var offenders = fields
+            .Where(f => providerShaped.Any(v => f.Contains(v, StringComparison.OrdinalIgnoreCase)))
+            .ToList();
+
+        Assert.Empty(offenders);
     }
 }

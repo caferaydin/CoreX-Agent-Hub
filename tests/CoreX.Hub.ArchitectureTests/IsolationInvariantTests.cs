@@ -28,6 +28,15 @@ public sealed class IsolationInvariantTests
     private const string GatewayFileName = "WslExecutionGateway.cs";
     private const string HardCommandsFileName = "HardGitCommands.cs";
     private const string HardWorkspaceFileName = "HardWorkspaceGateway.cs";
+
+    /// <summary>
+    /// The one hard-side file allowed to build a worktree command.
+    ///
+    /// Extracted from the gateway when review needed a tree of its own: a second implementation of
+    /// the same operation is how one of them stops reading HEAD back, so the operation moved rather
+    /// than being copied.
+    /// </summary>
+    private const string HardWorktreeFileName = "HardWorktreeAuthority.cs";
     private const string HardEvidenceStoreFileName = "HardEvidenceStore.cs";
     private const string HardEvidenceLayoutFileName = "HardEvidenceLayout.cs";
     private const string HardEvidenceCommandsFileName = "HardEvidenceCommands.cs";
@@ -670,26 +679,61 @@ public sealed class IsolationInvariantTests
     }
 
     /// <summary>
-    /// The executor provisions nothing either.
+    /// The environment itself is never provisioned from here.
     ///
-    /// The same rule the probe has, for the same reason: a component that creates the directory
-    /// it was asked to work in, or the account it was asked to run as, is reporting on its own
-    /// work rather than on the machine - and is doing it with root.
+    /// The rule the probe has, for the reason it has it: a component that creates the distribution,
+    /// the account or the system configuration it was asked to work with is reporting on its own
+    /// work rather than on the machine - and is doing it with root. An operator builds the
+    /// environment; the Hub measures it and runs inside it.
+    ///
+    /// These verbs are the ones that would change what the environment *is*. Creating a directory
+    /// the Hub already owns is a different act and is governed separately, below.
     /// </summary>
     [Theory]
-    [InlineData("mkdir")]
-    [InlineData("chown")]
-    [InlineData("chmod")]
     [InlineData("useradd")]
     [InlineData("usermod")]
     [InlineData("groupadd")]
     [InlineData("wsl.conf")]
+    [InlineData("apt-get")]
+    [InlineData("apt install")]
+    [InlineData("dpkg")]
     [InlineData("--import")]
     [InlineData("--install")]
     [InlineData("--unregister")]
     public void The_hard_executor_never_provisions_anything(string verb)
     {
         var offenders = IsolationSourceFiles()
+            .Where(f => CodeOnly(File.ReadAllText(f)).Contains(verb, StringComparison.Ordinal))
+            .Select(RepoLayout.Relative)
+            .ToList();
+
+        Assert.Empty(offenders);
+    }
+
+    /// <summary>
+    /// Filesystem preparation happens in one reviewed place, and it is not scattered.
+    ///
+    /// An execution genuinely has to create directories inside the environment and give the files it
+    /// places there to the right identity - a context pack the workload can read and cannot write
+    /// does not appear on its own. Forbidding that outright was the Phase 10C-2 shape, when nothing
+    /// but a process primitive had moved inside; it stopped describing the system once whole
+    /// workflows did.
+    ///
+    /// What replaces it is narrower and stronger: exactly one file in this folder may compose a path
+    /// and change its ownership, and it is the trusted transfer, whose destinations are built from a
+    /// Hub owned root and a single leaf name and are resolved physically before anything is written.
+    /// Any second place these verbs appear is a second path authority, which is the thing worth
+    /// catching.
+    /// </summary>
+    [Theory]
+    [InlineData("mkdir")]
+    [InlineData("chown")]
+    [InlineData("chmod")]
+    public void Only_the_trusted_transfer_prepares_the_filesystem(string verb)
+    {
+        var offenders = IsolationSourceFiles()
+            .Where(f => !string.Equals(
+                Path.GetFileName(f), "TrustedGuestFileTransfer.cs", StringComparison.Ordinal))
             .Where(f => CodeOnly(File.ReadAllText(f)).Contains(verb, StringComparison.Ordinal))
             .Select(RepoLayout.Relative)
             .ToList();
@@ -937,18 +981,23 @@ public sealed class IsolationInvariantTests
     [Fact]
     public void The_worktree_is_created_from_the_pinned_commit()
     {
-        var gateway = CodeOnly(SourceOf(HardWorkspaceFileName));
+        var authority = CodeOnly(SourceOf(HardWorktreeFileName));
 
-        var add = Regex.Match(
-            gateway, @"""worktree"",\s*""add""(?<rest>[^;]*);", RegexOptions.Singleline);
+        var adds = Regex.Matches(
+            authority, @"""worktree"",\s*""add""(?<rest>[^;]*);", RegexOptions.Singleline);
 
-        Assert.True(add.Success, "the worktree is not created here any more");
+        // Both shapes: the agent's branched tree and the detached one a result is examined at.
+        Assert.Equal(2, adds.Count);
 
-        var arguments = add.Groups["rest"].Value;
-
-        Assert.Contains("baseCommit", arguments, StringComparison.Ordinal);
-        Assert.DoesNotContain("refs/heads", arguments, StringComparison.Ordinal);
-        Assert.DoesNotContain("DefaultBranch", arguments, StringComparison.Ordinal);
+        foreach (var arguments in adds.Select(m => m.Groups["rest"].Value))
+        {
+            // The commit the caller pinned, used as given. Resolving a branch or a remote ref here
+            // would be a tree at whatever moved since, which is the bug this seam exists to stop.
+            Assert.Contains("commitSha", arguments, StringComparison.Ordinal);
+            Assert.DoesNotContain("refs/heads", arguments, StringComparison.Ordinal);
+            Assert.DoesNotContain("DefaultBranch", arguments, StringComparison.Ordinal);
+            Assert.DoesNotContain("origin/", arguments, StringComparison.Ordinal);
+        }
     }
 
     /// <summary>
@@ -1302,15 +1351,30 @@ public sealed class IsolationInvariantTests
     [Fact]
     public void The_isolation_profile_stays_provider_neutral()
     {
+        var properties = typeof(HardIsolationProfile)
+            .GetProperties()
+            .Select(p => p.Name)
+            .Order(StringComparer.Ordinal)
+            .ToList();
+
+        // The verification executable map joined this list in Phase 10C-4. It is provider neutral by
+        // construction: its keys are the logical tool names a verification profile already declares,
+        // and neither half of an entry can name a provider - which is why the rule below is asserted
+        // as a rule rather than left implied by the list.
         Assert.Equal(
             [
                 "AgentUser", "Backend", "EnvironmentId", "EvidenceRoot", "ExecutionRoot",
-                "MemoryLimitBytes", "ProcessLimit", "ServiceUser",
+                "MemoryLimitBytes", "ProcessLimit", "ServiceUser", "VerificationExecutables",
             ],
-            typeof(HardIsolationProfile)
-                .GetProperties()
-                .Select(p => p.Name)
-                .Order(StringComparer.Ordinal));
+            properties);
+
+        string[] providers = ["Claude", "Codex", "Anthropic", "OpenAI", "Scripted", "Provider"];
+
+        var named = properties
+            .Where(p => providers.Any(v => p.Contains(v, StringComparison.OrdinalIgnoreCase)))
+            .ToList();
+
+        Assert.Empty(named);
     }
 
     /// <summary>
@@ -1824,28 +1888,62 @@ public sealed class IsolationInvariantTests
     }
 
     /// <summary>
-    /// A workflow surface that belongs to a later slice has not been pulled forward.
+    /// Every stage of a hard workflow has an implementation that runs inside the boundary.
     ///
-    /// The process primitive is deliberately the only thing that moved. Repository placement,
-    /// context, evidence routing, provider authentication and control plane isolation are all
-    /// still on the host, and a half-migrated one of them would be the most dangerous possible
-    /// state: some of the work inside the boundary and some outside, with nothing saying which.
+    /// This replaces the Phase 10C-2 scope freeze, which asserted the opposite: that nothing but the
+    /// process primitive had moved inside. That was the right rule while it was true, because a
+    /// half-migrated workflow - some work inside the boundary, some outside, nothing saying which -
+    /// is the most dangerous state this design has. It stopped being true by design in Phase 10C-4,
+    /// and a guard that still demanded the old shape would have been demanding the dangerous one.
+    ///
+    /// So the rule is inverted rather than deleted. What used to be forbidden is now required, and
+    /// the failure it catches is the same failure from the other side: a stage with no isolated
+    /// implementation is a stage that would have to run on the host.
     /// </summary>
     [Theory]
-    [InlineData("Worktree")]
-    [InlineData("ContextPack")]
-    [InlineData("EvidenceBlobStore")]
-    [InlineData("IAgentRuntime")]
-    [InlineData("VerificationProfile")]
-    [InlineData("ReviewEngine")]
-    public void No_later_workflow_surface_was_pulled_forward(string concept)
+    [InlineData("HardWorkspaceGateway")]
+    [InlineData("HardEvidenceGateway")]
+    [InlineData("HardAgentGateway")]
+    [InlineData("HardVerificationGateway")]
+    [InlineData("HardReviewWorkspace")]
+    [InlineData("HardReviewRuntimeGateway")]
+    public void Every_workflow_stage_has_an_isolated_implementation(string surface)
     {
-        var offenders = IsolationSourceFiles()
-            .Where(f => CodeOnly(File.ReadAllText(f)).Contains(concept, StringComparison.Ordinal))
-            .Select(RepoLayout.Relative)
+        var declared = RepoLayout.ProductionSourceFiles
+            .Where(f => CodeOnly(File.ReadAllText(f))
+                .Contains("class " + surface, StringComparison.Ordinal))
             .ToList();
 
-        Assert.Empty(offenders);
+        Assert.NotEmpty(declared);
+    }
+
+    /// <summary>
+    /// The five execution ports are chosen together, and a mixed set cannot be expressed.
+    ///
+    /// The positive half of the same rule. Routing a hard organization is five decisions, and any
+    /// one of them left on the host is a hole the other four do not close - an agent perfectly
+    /// contained whose verification runs on Windows has moved the problem to the step that executes
+    /// the repository's own test suite.
+    ///
+    /// So the type system carries it: two factories, each taking all five, and no public constructor
+    /// to assemble anything else with.
+    /// </summary>
+    [Fact]
+    public void A_mixed_execution_port_set_cannot_be_constructed()
+    {
+        var set = typeof(CoreX.Hub.Composition.Orchestration.ExecutionPortSet);
+
+        Assert.Empty(set.GetConstructors());
+
+        var factories = set
+            .GetMethods(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static)
+            .Where(m => m.ReturnType == set)
+            .ToList();
+
+        Assert.Equal(["Hard", "Logical"], factories.Select(m => m.Name).Order(StringComparer.Ordinal));
+
+        // All five, in both, with no overload that takes fewer.
+        Assert.All(factories, m => Assert.Equal(5, m.GetParameters().Length));
     }
 
     /// <summary>
@@ -1920,10 +2018,12 @@ public sealed class IsolationInvariantTests
     }
 
     /// <summary>
-    /// The execution plane is honestly described as absent.
+    /// The Application layer still ships only the honest "no plane" answer.
     ///
-    /// Phase 10C-1 can measure a hard environment and cannot run a task inside one. The type
-    /// that says so ships in the Application layer, so nothing downstream can assume otherwise.
+    /// The real plane is a fact about a machine and a platform, so it lives in the composition layer
+    /// where the machine is reachable. What ships above it is the refusal, which is what an
+    /// unsupported platform, a test and an explicitly unavailable composition all get - so nothing
+    /// downstream can assume a plane exists because a type for one is in scope.
     /// </summary>
     [Fact]
     public void This_build_declares_no_hard_execution_plane()
@@ -1940,6 +2040,266 @@ public sealed class IsolationInvariantTests
 
         Assert.Equal([nameof(UnavailableHardExecutionPlane)], implementations);
     }
+
+    // -- phase 10C-4 routing -----------------------------------------------------------------
+
+    /// <summary>
+    /// An execution's network claim goes through the ownership layer, never round it.
+    ///
+    /// This is a defect that already existed and was found by wiring: the lease prepared and
+    /// released the physical fabric itself, which is correct for exactly one execution of an
+    /// organization and wrong for two. An attachment is per organization, so the first of two peers
+    /// to finish would have torn the namespace out from under the second - failing closed for it,
+    /// and breaking it just the same.
+    ///
+    /// The durable ownership layer exists to make that decision instead, from claims that survive a
+    /// crash. So the lease may not name the fabric at all: a lease that could would be one edit away
+    /// from bypassing the layer again, and the symptom would only appear when two executions of one
+    /// organization overlapped.
+    /// </summary>
+    [Fact]
+    public void An_execution_never_reaches_the_network_fabric_directly()
+    {
+        var lease = CodeOnly(SourceOf("HardExecutionLease.cs"));
+
+        Assert.DoesNotContain(nameof(IHardNetworkFabric), lease, StringComparison.Ordinal);
+        Assert.DoesNotContain("_fabric", lease, StringComparison.Ordinal);
+
+        // What it does instead, named explicitly so this cannot pass by the lease simply not
+        // touching the network at all.
+        Assert.Contains("HardNetworkConsumers", lease, StringComparison.Ordinal);
+        Assert.Contains("consumers.AcquireAsync(", lease, StringComparison.Ordinal);
+        Assert.Contains("consumers.ReleaseAsync(", lease, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The wrapped runtime's own run method is never reached on the isolated path.
+    ///
+    /// The single most dangerous line this design could contain. A vendor CLI adapter launches its
+    /// own host process inside RunAsync; calling it from the isolation decorator would run
+    /// repository-controlled work on the developer's machine with every boundary switched off, while
+    /// every log line still said the execution was hard isolated - a failure that is invisible in
+    /// exactly the place people would look for it.
+    ///
+    /// So the decorator holds the seam and uses it: it asks the runtime what it would execute, puts
+    /// that inside the boundary itself, and hands the result back for the runtime to interpret.
+    /// </summary>
+    [Fact]
+    public void The_isolated_agent_never_calls_the_wrapped_runtimes_own_run()
+    {
+        var runtime = CodeOnly(SourceOf("HardAgentRuntime.cs"));
+
+        Assert.DoesNotContain("_inner.RunAsync(", runtime, StringComparison.Ordinal);
+        Assert.DoesNotContain("inner.RunAsync(", runtime, StringComparison.Ordinal);
+
+        // What it does instead, both halves. Naming only one would let the other quietly become a
+        // second implementation of the runtime's own rules.
+        Assert.Contains("_capable.DescribeCommand(request)", runtime, StringComparison.Ordinal);
+        Assert.Contains("_capable.Interpret(", runtime, StringComparison.Ordinal);
+
+        // And the only thing that does launch anything is the placed executor.
+        Assert.Contains("lease.Executor.RunAsync(", runtime, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A hard organization's verification never reaches a Windows authority.
+    ///
+    /// Verification is the step most obviously running repository-controlled code - a test suite is a
+    /// program the repository wrote, executed minutes after an agent was free to edit it. Every part
+    /// of it that touches that content is inside the boundary, and the three Windows types below are
+    /// the ones it would have reached for if it were not.
+    /// </summary>
+    [Theory]
+    [InlineData("ProcessVerificationCommandExecutor")]
+    [InlineData("FileSystemGuardVerificationFileReader")]
+    [InlineData("ExecutableAllowlist")]
+    public void Hard_verification_never_uses_a_host_authority(string construct)
+    {
+        var offenders = new[]
+            {
+                "HardVerificationGateway.cs", "HardVerificationCommandExecutor.cs",
+                "HardVerificationFileReader.cs", "HardVerificationExecutableResolver.cs",
+                "HardVerificationSnapshots.cs",
+            }
+            .Where(name => CodeOnly(SourceOf(name)).Contains(construct, StringComparison.Ordinal))
+            .ToList();
+
+        Assert.Empty(offenders);
+    }
+
+    /// <summary>
+    /// What a tool name means inside the boundary is decided inside the boundary.
+    ///
+    /// The host answer is wrong in both directions and dangerously so: it refuses a real Linux binary
+    /// because Windows cannot see it, and accepts a Windows path that a Linux workload would then be
+    /// handed to execute. So existence is measured where the file is, and the host filesystem is not
+    /// consulted at all.
+    /// </summary>
+    [Fact]
+    public void A_hard_verification_tool_is_measured_inside_the_environment()
+    {
+        var resolver = CodeOnly(SourceOf("HardVerificationExecutableResolver.cs"));
+
+        Assert.DoesNotContain("File.Exists", resolver, StringComparison.Ordinal);
+        Assert.DoesNotContain("Directory.Exists", resolver, StringComparison.Ordinal);
+        Assert.DoesNotContain("wsl$", resolver, StringComparison.Ordinal);
+        Assert.DoesNotContain("wsl.localhost", resolver, StringComparison.Ordinal);
+
+        // The map is the organization's own, and a missing key is a refusal rather than a reason to
+        // read the host's.
+        Assert.Contains("VerificationExecutables", resolver, StringComparison.Ordinal);
+        Assert.Contains("DescribeAsync(", resolver, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A tool the workload could have written is never the tool that measures it.
+    ///
+    /// The check is containment rather than permissions, which is what makes it a rule instead of a
+    /// judgement: the execution root and the evidence root are named by the same trusted profile that
+    /// names the tool, and the physically resolved path is what gets judged - so a symlink from a
+    /// respectable directory into the workspace is refused rather than followed.
+    /// </summary>
+    [Fact]
+    public void A_hard_verification_tool_cannot_come_from_a_writable_surface()
+    {
+        var resolver = CodeOnly(SourceOf("HardVerificationExecutableResolver.cs"));
+
+        Assert.Contains("_profile.ExecutionRoot", resolver, StringComparison.Ordinal);
+        Assert.Contains("_profile.EvidenceRoot", resolver, StringComparison.Ordinal);
+        Assert.Contains("facts.PhysicalPath", resolver, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A hard organization's review runs inside the boundary on both halves.
+    ///
+    /// A reviewer contained in a namespace while its tree was checked out on the host would leave the
+    /// checkout - itself a classic place repository-controlled code runs - exactly where it was.
+    /// </summary>
+    [Theory]
+    [InlineData("ReviewWorkspaceGateway")]
+    [InlineData("ReviewRuntimeGateway")]
+    public void Hard_review_never_uses_a_host_gateway(string construct)
+    {
+        var offenders = new[] { "HardReviewWorkspace.cs", "HardReviewRuntimeGateway.cs" }
+            .Where(name => CodeOnly(SourceOf(name))
+                .Contains("new " + construct + "(", StringComparison.Ordinal))
+            .ToList();
+
+        Assert.Empty(offenders);
+    }
+
+    /// <summary>
+    /// The routing decision is taken once, for the whole execution.
+    ///
+    /// Five ports each reading the organization's declared level for itself would let a configuration
+    /// change between two of those reads produce an execution whose agent was contained and whose
+    /// verifier was not - and every log line would still say it was isolated. So exactly one place
+    /// consults the level, and the ports are handed the answer.
+    /// </summary>
+    [Fact]
+    public void The_isolation_level_is_read_in_exactly_one_place()
+    {
+        var readers = RepoLayout.ProductionSourceFiles
+            .Where(f => f.Contains(
+                $"{Path.DirectorySeparatorChar}CoreX.Hub.Composition{Path.DirectorySeparatorChar}",
+                StringComparison.Ordinal))
+            .Where(f => CodeOnly(File.ReadAllText(f))
+                .Contains("IsolationLevel.Hard", StringComparison.Ordinal))
+            .Select(f => Path.GetFileName(f))
+            .Order(StringComparer.Ordinal)
+            .ToList();
+
+        // Three, and not one of them is a port. The rule itself; the composition that applies it
+        // once per execution; and the reconciler, which has to know which organizations could be
+        // holding a claim at all. A workspace, an agent, a verifier or a reviewer appearing in this
+        // list would be a port deciding its own routing.
+        Assert.Equal(
+            [
+                "ExecutionComposition.cs", "ExecutionIsolationRouting.cs",
+                "HardNetworkConsumerReconciler.cs",
+            ],
+            readers);
+    }
+
+    /// <summary>
+    /// No hard surface falls back to a logical one.
+    ///
+    /// An organization declared hard is an operator saying the work must be contained. Running it
+    /// uncontained because containment was unavailable answers a question nobody asked, so every
+    /// unavailable boundary below ends in a refusal.
+    /// </summary>
+    [Theory]
+    [InlineData("HardAgentGateway.cs")]
+    [InlineData("HardVerificationCommandExecutor.cs")]
+    [InlineData("HardReviewRuntimeGateway.cs")]
+    public void An_unavailable_boundary_is_a_refusal_and_never_a_host_run(string fileName)
+    {
+        var source = CodeOnly(SourceOf(fileName));
+
+        Assert.Contains("lease is null", source, StringComparison.Ordinal);
+
+        // Constructed, rather than merely named: every one of these types is a host implementation,
+        // and building one here is the only way a hard surface could end up running on the host.
+        foreach (var fallback in new[]
+                 {
+                     "new ProcessRunner(", "new ProcessVerificationCommandExecutor(", "new AgentGateway(",
+                     "new WorkspaceGateway(", "new EvidenceGateway(",
+                 })
+        {
+            Assert.DoesNotContain(fallback, source, StringComparison.Ordinal);
+        }
+    }
+
+    /// <summary>
+    /// Adapters borrow the environment and never end it.
+    ///
+    /// A verifier that released what it had finished with would tear the boundary down before review
+    /// ran, and review is the last untrusted thing an execution does. Lifetime belongs to whoever
+    /// owns the execution, which is the composition.
+    /// </summary>
+    [Theory]
+    [InlineData("HardAgentRuntime.cs")]
+    [InlineData("HardVerificationCommandExecutor.cs")]
+    [InlineData("HardReviewRuntimeGateway.cs")]
+    [InlineData("HardAgentGateway.cs")]
+    public void No_adapter_disposes_the_execution_environment(string fileName)
+    {
+        var source = CodeOnly(SourceOf(fileName));
+
+        Assert.DoesNotContain("DisposeAsync()", source, StringComparison.Ordinal);
+        Assert.DoesNotContain("IAsyncDisposable", source, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The composition owns the environment's lifetime, and says what it could not release.
+    ///
+    /// A residual left on a property is a residual only whoever remembers to read one ever sees.
+    /// Every ownership path disposes; not every ownership path inspects.
+    /// </summary>
+    [Fact]
+    public void The_composition_owns_the_boundary_lifetime()
+    {
+        var composition = CodeOnly(SourceOf("ExecutionComposition.cs"));
+
+        Assert.Contains("IAsyncDisposable", composition, StringComparison.Ordinal);
+        Assert.Contains("_hard.DisposeAsync()", composition, StringComparison.Ordinal);
+        Assert.Contains("IsolationResidual", composition, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Nothing composes a boundary for an execution that has no identity.
+    ///
+    /// Guid.Empty is not a default, an unknown or a way to say "logical". It is a caller that does
+    /// not know which execution it is acting for, and a live claim held under one would be exactly
+    /// the state crash reconciliation cannot classify.
+    /// </summary>
+    [Theory]
+    [InlineData("HardExecutionEnvironmentResolver.cs")]
+    [InlineData("HardExecutionEnvironment.cs")]
+    [InlineData("HardExecutionLease.cs")]
+    public void An_empty_execution_identity_is_refused(string fileName) =>
+        Assert.Contains(
+            "ThrowIfEqual(executionId, Guid.Empty)", CodeOnly(SourceOf(fileName)), StringComparison.Ordinal);
 
     // -- the shared filesystem boundary ------------------------------------------------------
 
@@ -2233,6 +2593,118 @@ public sealed class IsolationInvariantTests
 
             Assert.Empty(offenders);
         }
+    }
+
+    /// <summary>
+    /// No test turns a real-machine opt-in on while the suite is running.
+    ///
+    /// Found the hard way. A test proving that "Ubuntu" is never implicitly selected did so by
+    /// setting the opt-in variable to "Ubuntu" and restoring it afterwards - and process
+    /// environment is shared by every test executing at that moment, which for xUnit means every
+    /// other class running in parallel. Real WSL fixtures initialising in that window read the
+    /// value, concluded an operator had opted in, and failed against a distribution that was not
+    /// registered. It showed up as roughly one intermittent failure in three, in a different
+    /// unrelated suite each time.
+    ///
+    /// The near miss is the reason this is guarded rather than remembered: had the timing lined up
+    /// with a fixture that could use the name, the test enforcing the safety rule would have caused
+    /// the exact violation the rule exists to prevent.
+    ///
+    /// A try/finally restore does not fix it. The window is the problem, not the cleanup.
+    ///
+    /// Reading these variables is fine and is how the acceptance harnesses work: an operator sets
+    /// them before the process starts. Writing them from inside a test is what is banned.
+    /// </summary>
+    [Fact]
+    public void No_test_switches_on_a_real_machine_opt_in()
+    {
+        // Split so this guard does not match its own search text.
+        var mutation = "Set" + "EnvironmentVariable";
+
+        string[] optIns =
+        [
+            "COREX_HARD_TEST_ENV",
+            "COREX_FABRIC_A",
+            "COREX_FABRIC_B",
+            "COREX_FILESYSTEM_A",
+            "COREX_FILESYSTEM_B",
+        ];
+
+        var offenders = HarnessSourceFiles()
+            .Where(f => CodeOnly(File.ReadAllText(f)) is var code
+                        && code.Contains(mutation, StringComparison.Ordinal)
+                        && optIns.Any(v => code.Contains(v, StringComparison.Ordinal)))
+            .Select(RepoLayout.Relative)
+            .ToList();
+
+        Assert.Empty(offenders);
+    }
+
+    // -- who still needs a network ---------------------------------------------------------------
+
+    /// <summary>
+    /// Network claims are reconciled after the executions that own them, and never before.
+    ///
+    /// The order is the whole safety property. A hard execution that died holding a claim on its
+    /// organization's attachment is settled as Interrupted by the execution reconciler; judging
+    /// claims after that means judging them against a decided state. Judging them first would mean
+    /// deciding an execution was finished before the lifecycle had said so - and releasing a
+    /// namespace an execution is still legitimately working inside.
+    ///
+    /// Asserted on the source rather than left to reading order, because the two calls are far
+    /// enough apart that an edit could reorder them without anybody noticing what it cost.
+    /// </summary>
+    [Fact]
+    public void Network_claims_are_reconciled_after_the_executions_that_own_them()
+    {
+        var session = CodeOnly(SourceOf("HubSession.cs"));
+
+        var executions = session.IndexOf("reconciler.ReconcileAsync", StringComparison.Ordinal);
+        var network = session.IndexOf("ReconcileHardNetworkAsync", StringComparison.Ordinal);
+
+        Assert.True(executions >= 0, "executions are no longer reconciled at session open");
+        Assert.True(network >= 0, "network claims are no longer reconciled at session open");
+        Assert.True(executions < network, "network claims must be reconciled after execution state");
+    }
+
+    /// <summary>
+    /// The consumer reconciler is production wired rather than a thing only tests call.
+    ///
+    /// A reconciler nobody runs is a crash recovery story that does not happen. This proves the
+    /// session that every command opens is the thing that runs it.
+    /// </summary>
+    [Fact]
+    public void Network_consumer_reconciliation_runs_from_the_session()
+    {
+        var session = CodeOnly(SourceOf("HubSession.cs"));
+
+        Assert.Contains("HardNetworkConsumerReconciler.Over(", session, StringComparison.Ordinal);
+        Assert.Contains("HardNetworkConsumers(", session, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Ownership is durable, never a count held in memory.
+    ///
+    /// A process that died holding a count would come back believing nobody was using an
+    /// attachment that live workloads were sitting inside. The Hub runs as a CLI beside an API, so
+    /// this is ordinary operation rather than an edge case.
+    /// </summary>
+    [Fact]
+    public void Network_ownership_is_never_an_in_memory_count()
+    {
+        var consumers = CodeOnly(SourceOf("HardNetworkConsumers.cs"));
+
+        foreach (var inMemory in new[]
+                 {
+                     "ConcurrentDictionary", "Dictionary<string, int>", "Interlocked", "static int",
+                 })
+        {
+            Assert.DoesNotContain(inMemory, consumers, StringComparison.Ordinal);
+        }
+
+        // The claim is a file, and the transition is guarded machine wide rather than in process.
+        Assert.Contains(".lease", consumers, StringComparison.Ordinal);
+        Assert.Contains("MutationLock.Acquire", consumers, StringComparison.Ordinal);
     }
 
     // -- which distribution the tests are allowed to touch ---------------------------------------

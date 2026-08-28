@@ -28,16 +28,30 @@ public sealed class HardEvidenceGateway : IExecutionEvidenceWriter
 {
     private readonly HardEvidenceStore _store;
     private readonly EvidenceRedactor _redactor;
+    private readonly Isolation.IHardExecutionBinding _binding;
 
-    internal HardEvidenceGateway(HardEvidenceStore store, EvidenceRedactor? redactor = null)
+    internal HardEvidenceGateway(
+        HardEvidenceStore store,
+        Isolation.IHardExecutionBinding binding,
+        EvidenceRedactor? redactor = null)
     {
         _store = store ?? throw new ArgumentNullException(nameof(store));
+        _binding = binding ?? throw new ArgumentNullException(nameof(binding));
         _redactor = redactor ?? new EvidenceRedactor();
     }
 
-    /// <summary>Builds the writer for one organization's environment.</summary>
-    public static HardEvidenceGateway Create(HardIsolationProfile profile, string hostWorkingDirectory) =>
-        new(HardEvidenceStore.Create(profile, hostWorkingDirectory));
+    /// <summary>
+    /// Builds the writer for one organization's environment, bound to one execution's routing.
+    ///
+    /// The binding is required rather than optional. One hard execution writes to one hard evidence
+    /// backend, and an evidence writer that could not say which execution it served would be the
+    /// thing that made "artifact by artifact" routing possible.
+    /// </summary>
+    internal static HardEvidenceGateway Create(
+        HardIsolationProfile profile,
+        string hostWorkingDirectory,
+        Isolation.IHardExecutionBinding binding) =>
+        new(HardEvidenceStore.Create(profile, hostWorkingDirectory), binding);
 
     /// <summary>Creates and closes the store. Idempotent; safe to call before every execution.</summary>
     public Task<bool> EnsureAsync(CancellationToken ct) => _store.EnsureAsync(ct);
@@ -47,11 +61,18 @@ public sealed class HardEvidenceGateway : IExecutionEvidenceWriter
         _store.ReadTextAsync(sha256, ct);
 
     public async Task<StoredEvidence?> WriteAsync(
+        Guid executionId,
         string text,
         EvidenceKind kind,
         string mediaType,
         CancellationToken ct)
     {
+        // Whose evidence this is, checked against everything else this composition has routed. No
+        // live boundary is taken: the isolated store is reached through the trusted service identity
+        // and has never needed a network namespace, so acquiring one here would be spending a real
+        // resource to satisfy a bookkeeping rule.
+        _binding.BindTo(executionId);
+
         if (string.IsNullOrEmpty(text))
         {
             // An empty blob is not evidence of anything, and the Windows writer agrees.

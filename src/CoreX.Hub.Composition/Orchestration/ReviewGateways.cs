@@ -35,6 +35,7 @@ public sealed class ReviewWorkspaceGateway : IReviewWorkspace
     }
 
     public async Task<ReviewSnapshot?> PrepareAsync(
+        Guid executionId,
         Guid repositoryId,
         string commitSha,
         string snapshotId,

@@ -245,8 +245,10 @@ public sealed class PostCommitRecoveryService
         ExecutionStep verify,
         CancellationToken ct)
     {
+        // The execution being re-measured, which this invocation never ran. Its identity comes
+        // from the durable row rather than from anything this process did.
         var verification = await _verifier.VerifyAsync(
-            task.RepositoryId, execution.BaseCommitSha, resultCommit, ct);
+            execution.Id, task.RepositoryId, execution.BaseCommitSha, resultCommit, ct);
 
         var now = _clock.GetUtcNow();
         var passed = verification.Result?.RequiredPassed == true;

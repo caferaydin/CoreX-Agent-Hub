@@ -232,6 +232,7 @@ public sealed class ReviewRecoveryTests
     private sealed class RefusingVerifier : IExecutionVerifier
     {
         public Task<VerificationOutcomeView> VerifyAsync(
+            Guid executionId,
             Guid repositoryId,
             string baseCommitSha,
             string resultCommitSha,

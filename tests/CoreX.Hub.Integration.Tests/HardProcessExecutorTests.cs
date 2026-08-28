@@ -24,6 +24,14 @@ internal sealed class ScriptedExecutionEnvironment : IWslExecutionGateway
     /// <summary>The Linux identity each call entered as, in order.</summary>
     public List<string> Identities { get; } = [];
 
+    /// <summary>
+    /// What the last call carried on standard input.
+    ///
+    /// Kept so a transfer's bytes can be compared against what actually crossed the channel rather
+    /// than against what the caller believed it sent.
+    /// </summary>
+    public string? LastStdin { get; private set; }
+
     /// <summary>An environment where every precondition holds and the workload exits 0.</summary>
     public static ScriptedExecutionEnvironment Correct()
     {
@@ -65,6 +73,11 @@ internal sealed class ScriptedExecutionEnvironment : IWslExecutionGateway
     {
         Calls.Add(call.Arguments);
         Identities.Add(call.LinuxUser);
+
+        if (call.StdinPayload is not null)
+        {
+            LastStdin = call.StdinPayload;
+        }
 
         var signature = string.Join(' ', call.Arguments);
 

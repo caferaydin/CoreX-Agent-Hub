@@ -22,6 +22,15 @@ namespace CoreX.Hub.Integration.Tests;
 [SupportedOSPlatform("windows")]
 public sealed class HardEvidenceChannelTests
 {
+    /// <summary>
+    /// The execution these writes belong to.
+    ///
+    /// A real identity rather than a placeholder: the evidence contract requires one, production
+    /// refuses Guid.Empty, and a test that passed an empty id would be asserting on a shape the
+    /// product does not accept.
+    /// </summary>
+    private static readonly Guid ExecutionIdentity = Guid.Parse("0195b1c0-0000-7000-8000-00000000e57a");
+
     private const string EvidenceRoot = "/srv/corex/evidence";
 
     private static readonly byte[] Payload = Encoding.UTF8.GetBytes("hard evidence over a channel");

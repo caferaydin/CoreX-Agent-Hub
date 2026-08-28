@@ -234,6 +234,26 @@ public sealed class HardIsolationConfig
 
     /// <summary>Finite ceiling on memory. Maps to MemoryMax in Phase 10C-2.</summary>
     public long MemoryLimitBytes { get; set; }
+
+    /// <summary>
+    /// Logical verification executable name to absolute path inside this organization's environment.
+    ///
+    /// The same logical names a verification profile already declares, mapped to where those tools
+    /// actually live in this environment. It is per organization rather than global because that is
+    /// what it describes: two hard organizations may run different distributions, different
+    /// toolchain versions and different installation prefixes, and one map claiming to speak for
+    /// both would be wrong about at least one of them.
+    ///
+    /// Trusted operator configuration. Nothing here comes from a repository, a task, a prompt, an
+    /// agent or a verification step's arguments - a step may choose only the logical name, and this
+    /// is the only thing that says what that name means.
+    ///
+    /// There is deliberately no relationship to the host map. A hard organization never falls back
+    /// to <see cref="HubVerificationConfig.Executables"/>: those are Windows paths, they mean
+    /// nothing inside the environment, and a translation between them would be the Hub guessing.
+    /// </summary>
+    public Dictionary<string, string> VerificationExecutables { get; set; } =
+        new(StringComparer.OrdinalIgnoreCase);
 }
 
 public sealed class AgentProfileConfig

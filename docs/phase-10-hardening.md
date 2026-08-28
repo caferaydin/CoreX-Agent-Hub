@@ -471,6 +471,9 @@ organizations:
       evidenceRoot: /srv/corex/evidence # agent okuyamamalı
       processLimit: 64
       memoryLimitBytes: 4294967296
+      verificationExecutables:          # doğrulama araçları, ortam ICINDEKI mutlak yollar
+        dotnet: /usr/bin/dotnet
+        node: /usr/bin/node
 ```
 
 Şema değişikliği **yoktur**, migration **yoktur**. Bunların hiçbiri katalog gerçeği değildir;
@@ -481,6 +484,45 @@ olduğu tam olarak o hatadır. Bir guard `HardIsolationConfig`/`HardIsolationPro
 
 `agentUser` ile `serviceUser` aynı olamaz: gözlemlenen tarafın kendi kanıtını yazıp
 düzenleyebildiği bir düzenek kanıt değildir.
+
+#### `verificationExecutables` — neden organizasyon başına
+
+Host'taki `ExecutableAllowlist` iki işi birden yapıyordu: mantıksal adı bir yola çevirmek, ve o
+yolun **host** dosya sisteminde var olup olmadığını sormak. İkincisi bir makine hakkında bir
+sorudur; hard bir organizasyonda komutu çalıştıran makine ise soruyu soran makine değildir. Bu
+yüzden birleşik cevap her iki yönde de yanlıştı: Windows göremediği için gerçek bir Linux
+ikilisi reddedilir, ve bir Windows yolu kabul edilip Linux iş yüküne çalıştırılmak üzere
+verilirdi.
+
+Ayrım:
+
+| | Logical | Hard |
+|---|---|---|
+| Kaynak | `verification.executables` (global) | `hardIsolation.verificationExecutables` (org başına) |
+| Değer | Windows mutlak yolu | Ortam içi mutlak Linux yolu |
+| Varlık ölçümü | `File.Exists` (host) | ortam içinde, güvenilen servis kimliğiyle `realpath` + `stat` |
+| Yürütücü | `ProcessVerificationCommandExecutor` | `HardVerificationCommandExecutor` |
+| Rapor okuma | `FileSystemGuardVerificationFileReader` | `HardVerificationFileReader` (8 MiB tavan) |
+
+Kurallar:
+
+- Anahtarlar, doğrulama profilinin bildirdiği mantıksal adlarla **aynıdır**.
+- Değerler mutlak Linux yollarıdır; argüman, boşluk veya kontrol karakteri taşıyamaz.
+- Harita **operatör** yapılandırmasıdır. Repository, task, prompt, agent veya doğrulama adımı
+  argümanları bu haritaya katkıda bulunamaz; bir adım yalnızca mantıksal adı seçebilir.
+- Eksik anahtar **kapalı biter**. Host haritasına düşüş yoktur, Windows yolundan Linux yoluna
+  çeviri yoktur.
+- Çözülen yol fiziksel olarak (`realpath`) doğrulanır ve `executionRoot`, `evidenceRoot`,
+  `/tmp`, `/var/tmp`, `/run/user` altına **düşemez**: agent'ın yazabildiği bir ikili, agent'ı
+  ölçen ikili olamaz.
+- Profil bir aracı adlandırıyor ve harita onu karşılamıyorsa, yürütme satırı **oluşmadan**
+  reddedilir. Bu kontrol hiçbir WSL çağrısı gerektirmez.
+
+Doğrulama raporu da ortamın içinden okunur: yol önce metinsel, sonra fiziksel olarak workspace
+kökü altında kapsanır (symlink kaçışı reddedilir), ve donmuş 8 MiB geri-okuma tavanına uyar.
+Tavanın üstü **kesme değil, açık hatadır** — yarım bir JUnit belgesi hataya değil, daha küçük
+bir test sayısına ayrışır, ve sessizce daha az test saymış bir doğrulama tam olarak bu tavanın
+engellemek için var olduğu hatadır.
 
 ### 10.11 `hub doctor isolation`
 

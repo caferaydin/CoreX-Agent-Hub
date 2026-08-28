@@ -17,7 +17,7 @@ namespace CoreX.Hub.Agents.Scripted;
 /// crashes in the harness instead of turning this runtime into a workspace manager
 /// (E.1 #5).
 /// </summary>
-public sealed class ScriptedAgentRuntime : IAgentRuntime
+public sealed class ScriptedAgentRuntime : IAgentRuntime, IHardCapableAgentRuntime
 {
     private const string AgentVerb = "agent";
 
@@ -79,19 +79,13 @@ public sealed class ScriptedAgentRuntime : IAgentRuntime
 
         sink.Report(AgentEvent.Started($"scripted runtime, mode {_options.Mode}"));
 
-        var arguments = new List<string> { AgentVerb, ModeArgument(_options.Mode) };
-
-        if (!string.IsNullOrWhiteSpace(request.StructuredOutputPath))
-        {
-            arguments.Add("--structured-output");
-            arguments.Add(request.StructuredOutputPath!);
-        }
+        var command = DescribeCommand(request);
 
         var process = await _processes.RunAsync(
             new AgentProcessRequest
             {
-                Executable = _options.FixtureExecutablePath,
-                Arguments = arguments,
+                Executable = command.Executable,
+                Arguments = command.Arguments,
                 WorkingDirectory = request.WorkingDirectory,
                 EnvironmentAllowlist = request.EnvironmentAllowlist,
                 SoftTimeout = request.SoftTimeout,
@@ -106,46 +100,103 @@ public sealed class ScriptedAgentRuntime : IAgentRuntime
         }
 
         var structured = await ReadStructuredOutputAsync(request, sink, cancellationToken);
-        var outcome = MapOutcome(process);
 
-        sink.Report(AgentEvent.Completed(outcome.ToString()));
+        var result = Interpret(
+            request,
+            new HardAgentProcessResult
+            {
+                Termination = process.Termination,
+                ExitCode = process.ExitCode,
+                Stdout = process.Stdout,
+                Stderr = process.Stderr,
+                Duration = process.Duration,
+                StartFailureMessage = process.StartFailureMessage,
+                StructuredOutput = structured,
+            });
+
+        sink.Report(AgentEvent.Completed(result.Outcome.ToString()));
+
+        return result;
+    }
+
+    /// <summary>
+    /// The command this runtime would run, wherever it is run.
+    ///
+    /// The ordinary path calls this too, which is the only reason an isolated run and a host run
+    /// are the same run. Two code paths that agreed today would be two code paths that could stop
+    /// agreeing, and nothing would notice until a hard organization behaved differently from the
+    /// tests that proved the pipeline.
+    /// </summary>
+    public HardAgentCommand DescribeCommand(AgentRunRequest request)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+
+        var arguments = new List<string> { AgentVerb, ModeArgument(_options.Mode) };
+
+        if (!string.IsNullOrWhiteSpace(request.StructuredOutputPath))
+        {
+            arguments.Add("--structured-output");
+            arguments.Add(request.StructuredOutputPath!);
+        }
+
+        return new HardAgentCommand
+        {
+            Executable = _options.FixtureExecutablePath,
+            Arguments = arguments,
+            StructuredOutputPath = request.StructuredOutputPath,
+        };
+    }
+
+    /// <summary>
+    /// This runtime's own reading of a process it may not have launched.
+    ///
+    /// Shared with the ordinary path for the same reason the command is: outcome mapping and the
+    /// diagnostic wording are this runtime's rules, and a caller that re-derived them would be a
+    /// second runtime wearing the first one's name.
+    /// </summary>
+    public AgentRunResult Interpret(AgentRunRequest request, HardAgentProcessResult process)
+    {
+        ArgumentNullException.ThrowIfNull(process);
+
+        var outcome = MapOutcome(process.Termination, process.ExitCode);
 
         return new AgentRunResult
         {
             Outcome = outcome,
             ExitCode = process.ExitCode,
-            StructuredOutput = structured,
+            StructuredOutput = process.StructuredOutput,
             Stdout = process.Stdout,
             Stderr = process.Stderr,
             Duration = process.Duration,
-            Diagnostic = process.StartFailureMessage ?? Explain(outcome, process),
+            Diagnostic = process.StartFailureMessage ?? Explain(outcome, process.ExitCode),
         };
     }
 
-    private string? Explain(AgentRunOutcome outcome, AgentProcessResult process) =>
+    private string? Explain(AgentRunOutcome outcome, int? exitCode) =>
         outcome == AgentRunOutcome.Completed
             ? null
             : string.Create(
                 CultureInfo.InvariantCulture,
-                $"{_options.Mode} ended as {outcome} with exit code {process.ExitCode}");
+                $"{_options.Mode} ended as {outcome} with exit code {exitCode}");
 
     /// <summary>
     /// A process that exited tells us its code; anything else is the runner's machine
     /// truth. A negative exit code means the child died rather than exiting, which is a
     /// crash and not merely a failure.
     /// </summary>
-    private static AgentRunOutcome MapOutcome(AgentProcessResult process) => process.Termination switch
-    {
-        AgentProcessTermination.StartFailed => AgentRunOutcome.Crashed,
-        AgentProcessTermination.Cancelled => AgentRunOutcome.Cancelled,
-        AgentProcessTermination.TimedOut => AgentRunOutcome.TimedOut,
-        _ => process.ExitCode switch
+    private static AgentRunOutcome MapOutcome(AgentProcessTermination termination, int? exitCode) =>
+        termination switch
         {
-            0 => AgentRunOutcome.Completed,
-            < 0 => AgentRunOutcome.Crashed,
-            _ => AgentRunOutcome.Failed,
-        },
-    };
+            AgentProcessTermination.StartFailed => AgentRunOutcome.Crashed,
+            AgentProcessTermination.Cancelled => AgentRunOutcome.Cancelled,
+            AgentProcessTermination.TimedOut => AgentRunOutcome.TimedOut,
+            _ => exitCode switch
+            {
+                0 => AgentRunOutcome.Completed,
+                < 0 => AgentRunOutcome.Crashed,
+                _ => AgentRunOutcome.Failed,
+            },
+        };
 
     private static async Task<string?> ReadStructuredOutputAsync(
         AgentRunRequest request,

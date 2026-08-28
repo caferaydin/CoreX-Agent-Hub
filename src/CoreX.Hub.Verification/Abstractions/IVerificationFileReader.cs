@@ -40,8 +40,17 @@ public interface IVerificationFileReader
     /// Resolves <paramref name="relativePath"/> under <paramref name="trustRoot"/>. A path
     /// that leaves the root, or that traverses a reparse point pointing outside it, is
     /// rejected rather than normalised.
+    ///
+    /// Asynchronous because containment is a fact about a filesystem, and the filesystem holding a
+    /// hard organization's workspace is not the one this process can see. Deciding it there rather
+    /// than approximating it here is what keeps a symlink out of a peer's workspace from reading as
+    /// contained.
     /// </summary>
-    VerificationPathDecision ResolveUnderRoot(string trustRoot, string relativePath, bool mustExist);
+    Task<VerificationPathDecision> ResolveUnderRootAsync(
+        string trustRoot,
+        string relativePath,
+        bool mustExist,
+        CancellationToken cancellationToken);
 
     /// <summary>
     /// Reads an already validated absolute path, refusing anything larger than

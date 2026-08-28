@@ -26,6 +26,9 @@ namespace CoreX.Hub.Integration.Tests;
 [SupportedOSPlatform("windows")]
 public sealed class HardWorkspaceTests : IAsyncLifetime
 {
+    /// <summary>The execution these workspace operations belong to.</summary>
+    private static readonly Guid ExecutionIdentity = Guid.Parse("0195b1c0-0000-7000-8000-00000000w5pc".Replace('w', 'a').Replace('p', 'b'));
+
     private readonly HardWorkspaceFixture _fixture = new();
 
     private HardWorkspaceGateway _gateway = null!;
@@ -49,6 +52,7 @@ public sealed class HardWorkspaceTests : IAsyncLifetime
         Assert.Equal(_fixture.BaseCommitSha, preflight.BaseCommitSha);
 
         var prepared = await _gateway.PrepareAsync(
+            ExecutionIdentity,
             _fixture.RepositoryId, preflight, taskKey, attempt, CancellationToken.None);
 
         Assert.NotNull(prepared);
@@ -221,6 +225,7 @@ public sealed class HardWorkspaceTests : IAsyncLifetime
         Assert.NotEqual(_fixture.BaseCommitSha, await _fixture.SourceGitAsync("rev-parse", "main"));
 
         var prepared = await _gateway.PrepareAsync(
+            ExecutionIdentity,
             _fixture.RepositoryId, preflight, "HARD-MOVED", 1, CancellationToken.None);
 
         Assert.Null(prepared);

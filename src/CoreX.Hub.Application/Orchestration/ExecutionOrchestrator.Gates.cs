@@ -136,6 +136,7 @@ public sealed partial class ExecutionOrchestrator
         await AdvanceAsync(execution, ExecutionState.Verifying, ExecutionStepKind.Verify, record);
 
         var verification = await _verifier.VerifyAsync(
+            execution.Id,
             repositoryId, execution.BaseCommitSha, commit.CommitSha, ct);
 
         await RecordEventAsync(execution, "Verification", verification.Detail, record);

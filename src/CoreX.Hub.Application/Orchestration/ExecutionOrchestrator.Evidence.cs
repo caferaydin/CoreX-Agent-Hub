@@ -76,7 +76,7 @@ public sealed partial class ExecutionOrchestrator
         CancellationToken ct,
         Guid? stepId = null)
     {
-        var stored = await _evidence.WriteAsync(text, kind, mediaType, ct);
+        var stored = await _evidence.WriteAsync(execution.Id, text, kind, mediaType, ct);
         if (stored is null)
         {
             return null;

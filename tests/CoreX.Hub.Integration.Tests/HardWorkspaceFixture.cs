@@ -158,8 +158,12 @@ internal sealed class HardWorkspaceFixture : IAsyncLifetime
             new ProcessGitCommandExecutor(git, [_hostRoot]),
             Profile(),
             _hostRoot,
-            _hostRoot);
+            _hostRoot,
+            Binding);
     }
+
+    /// <summary>Which execution the workspace under test claimed to be preparing for.</summary>
+    public RecordedHardExecutionBinding Binding { get; } = new();
 
     /// <summary>Runs a command in the environment as root, the way the tests inspect it.</summary>
     public async Task<(int? ExitCode, string Stdout, string Stderr)> ControlAsync(

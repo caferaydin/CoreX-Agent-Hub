@@ -66,6 +66,7 @@ internal sealed class ScriptedWorkspace(IExecutionWorkspace inner) : IExecutionW
     }
 
     public async Task<PreparedExecutionWorkspace?> PrepareAsync(
+        Guid executionId,
         Guid repositoryId,
         IExecutionWorkspacePreflight preflight,
         string taskKey,
@@ -85,7 +86,7 @@ internal sealed class ScriptedWorkspace(IExecutionWorkspace inner) : IExecutionW
             return null;
         }
 
-        var prepared = await inner.PrepareAsync(repositoryId, preflight, taskKey, attemptNo, ct);
+        var prepared = await inner.PrepareAsync(executionId, repositoryId, preflight, taskKey, attemptNo, ct);
 
         return prepared is null || ReportPreparedBaseAs is null
             ? prepared
@@ -138,6 +139,7 @@ internal sealed class ScriptedVerifier(IExecutionVerifier inner) : IExecutionVer
     public string? ResultCommitSha { get; private set; }
 
     public Task<VerificationOutcomeView> VerifyAsync(
+        Guid executionId,
         Guid repositoryId,
         string baseCommitSha,
         string resultCommitSha,
@@ -149,7 +151,7 @@ internal sealed class ScriptedVerifier(IExecutionVerifier inner) : IExecutionVer
         BeforeVerify?.Invoke();
         VerifySawCancellation = ct.IsCancellationRequested;
 
-        var outcome = inner.VerifyAsync(repositoryId, baseCommitSha, resultCommitSha, ct);
+        var outcome = inner.VerifyAsync(executionId, repositoryId, baseCommitSha, resultCommitSha, ct);
 
         AfterVerify?.Invoke();
 

@@ -42,10 +42,22 @@ public sealed class WslHardProcessExecutor : IHardProcessExecutor
     private readonly IWslExecutionGateway? _gateway;
     private readonly string? _unavailable;
 
-    private WslHardProcessExecutor(IWslExecutionGateway? gateway, string? unavailable)
+    /// <summary>
+    /// Where this executor's workloads are placed, when it is executing untrusted work.
+    ///
+    /// Held per executor instance rather than per request, and that is the point: an execution's
+    /// lease builds one executor bound to the namespace it prepared, so every workload that
+    /// instance launches lands in that namespace and there is no argument for a caller to get
+    /// wrong. Null belongs to the Hub's own trusted preparation, which runs no repository code.
+    /// </summary>
+    private readonly HardWorkloadPlacement? _placement;
+
+    private WslHardProcessExecutor(
+        IWslExecutionGateway? gateway, string? unavailable, HardWorkloadPlacement? placement)
     {
         _gateway = gateway;
         _unavailable = unavailable;
+        _placement = placement;
     }
 
     /// <summary>
@@ -60,12 +72,36 @@ public sealed class WslHardProcessExecutor : IHardProcessExecutor
         ArgumentException.ThrowIfNullOrWhiteSpace(dataDirectory);
 
         return WslExecutionGateway.TryCreate(dataDirectory, out var gateway, out var problem)
-            ? new WslHardProcessExecutor(gateway, null)
-            : new WslHardProcessExecutor(null, problem);
+            ? new WslHardProcessExecutor(gateway, null, null)
+            : new WslHardProcessExecutor(null, problem, null);
     }
 
+    /// <summary>
+    /// An executor whose workloads run inside one execution's own network namespace.
+    ///
+    /// This is how repository-controlled work is launched. Everything this instance runs carries
+    /// both boundaries, so an execution cannot end up with an isolated agent and a verifier in the
+    /// machine's shared namespace.
+    /// </summary>
+    public static WslHardProcessExecutor CreatePlaced(string dataDirectory, HardWorkloadPlacement placement)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(dataDirectory);
+        ArgumentNullException.ThrowIfNull(placement);
+
+        return WslExecutionGateway.TryCreate(dataDirectory, out var gateway, out var problem)
+            ? new WslHardProcessExecutor(gateway, null, placement)
+            : new WslHardProcessExecutor(null, problem, placement);
+    }
+
+    /// <summary>Whether this executor places its workloads in an execution's own namespace.</summary>
+    public bool IsPlaced => _placement is not null;
+
     /// <summary>An executor over a scripted gateway, for this assembly's tests.</summary>
-    internal static WslHardProcessExecutor Scripted(IWslExecutionGateway gateway) => new(gateway, null);
+    internal static WslHardProcessExecutor Scripted(IWslExecutionGateway gateway) => new(gateway, null, null);
+
+    /// <summary>A scripted executor that also places its workloads, for this assembly's tests.</summary>
+    internal static WslHardProcessExecutor Scripted(
+        IWslExecutionGateway gateway, HardWorkloadPlacement placement) => new(gateway, null, placement);
 
     public async Task<HardProcessResult> RunAsync(
         HardIsolationProfile profile,
@@ -98,7 +134,7 @@ public sealed class WslHardProcessExecutor : IHardProcessExecutor
             return Refused(startedAt, string.Empty, ex.Message);
         }
 
-        if (!SystemdRunCommand.TryBuild(profile, request, unitName, out var arguments, out var problem))
+        if (!SystemdRunCommand.TryBuild(profile, request, unitName, _placement, out var arguments, out var problem))
         {
             return Refused(startedAt, unitName, problem!);
         }

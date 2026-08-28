@@ -38,10 +38,20 @@ internal static class WslTestEnvironment
     /// Nothing means nothing. There is no default distribution, no first registered distribution
     /// and no preferred family - the absence of an answer is the answer.
     /// </summary>
-    public static string? Selected()
-    {
-        var value = Environment.GetEnvironmentVariable(Variable);
+    public static string? Selected() => SelectedFrom(Environment.GetEnvironmentVariable(Variable));
 
+    /// <summary>
+    /// The same decision, over a value the caller supplies.
+    ///
+    /// Exists so the rule can be tested without touching the real variable. Process environment is
+    /// shared by every test running at the same time, and xUnit runs classes in parallel - a test
+    /// that set this one to prove a point would be telling every fixture initialising alongside it
+    /// that an operator had opted in. That is not a hypothetical: a test proving "Ubuntu is never
+    /// selected implicitly" would, for as long as it held the variable, be an explicit instruction
+    /// to run inside the developer's Ubuntu.
+    /// </summary>
+    public static string? SelectedFrom(string? value)
+    {
         if (value is null || value.Trim().Length == 0)
         {
             return null;
