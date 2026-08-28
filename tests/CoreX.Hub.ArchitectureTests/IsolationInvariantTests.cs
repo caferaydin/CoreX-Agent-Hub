@@ -2235,6 +2235,103 @@ public sealed class IsolationInvariantTests
         }
     }
 
+    // -- which distribution the tests are allowed to touch ---------------------------------------
+
+    /// <summary>
+    /// Test sources that can actually reach a machine.
+    ///
+    /// These guards are excluded from their own scan. They necessarily spell out the idiom they
+    /// forbid in order to look for it, and a rule that failed because it can describe itself would
+    /// have to be written in a way nobody could read.
+    /// </summary>
+    private static IEnumerable<string> HarnessSourceFiles() =>
+        RepoLayout.TestSourceFiles.Where(
+            f => !f.Contains(
+                $"{Path.DirectorySeparatorChar}CoreX.Hub.ArchitectureTests{Path.DirectorySeparatorChar}",
+                StringComparison.Ordinal));
+
+
+    /// <summary>
+    /// No test chooses a real WSL distribution by guessing at its name.
+    ///
+    /// Three fixtures and one test class used to list the machine, take the first name containing
+    /// "ubuntu" or "debian", and fall back to whichever came first. On a developer laptop that
+    /// resolved to the operator's own working Ubuntu, so an ordinary <c>dotnet test</c> created
+    /// accounts and directories in it and executed workloads there - and after the shared
+    /// filesystem boundary landed, readiness started transient systemd units in it too.
+    ///
+    /// Nothing about a distro family name is consent, and nothing about being first in a listing
+    /// is either. Permission is given through one environment variable or it is not given.
+    ///
+    /// Scoped to the selection idiom rather than to the words: a fixture may still contain the
+    /// name of a synthetic distribution, and prose explaining any of this is not a selection
+    /// algorithm.
+    /// </summary>
+    [Theory]
+    [InlineData("ubuntu")]
+    [InlineData("debian")]
+    public void No_test_picks_a_real_distribution_by_family_name(string family)
+    {
+        var offenders = HarnessSourceFiles()
+            .Where(f => CodeOnly(File.ReadAllText(f)) is var code
+                        && (code.Contains($"Contains(\"{family}\"", StringComparison.OrdinalIgnoreCase)
+                            || code.Contains($"StartsWith(\"{family}\"", StringComparison.OrdinalIgnoreCase)
+                            || code.Contains($"EndsWith(\"{family}\"", StringComparison.OrdinalIgnoreCase)))
+            .Select(RepoLayout.Relative)
+            .ToList();
+
+        Assert.Empty(offenders);
+    }
+
+    /// <summary>
+    /// A listing of the machine's distributions is never turned into a choice.
+    ///
+    /// The other half of the same rule. <c>wsl --list</c> is still how a fixture confirms that the
+    /// environment an operator named is really registered - which is what turns a typo into a
+    /// clear failure - but taking the head of that list, or the default, would be reading an
+    /// operator's convenience setting as permission.
+    /// </summary>
+    [Fact]
+    public void A_distribution_listing_is_confirmed_against_but_never_chosen_from()
+    {
+        var offenders = HarnessSourceFiles()
+            .Where(f => CodeOnly(File.ReadAllText(f)) is var code
+                        && code.Contains("--list", StringComparison.Ordinal)
+                        && (code.Contains("names.FirstOrDefault()", StringComparison.Ordinal)
+                            || code.Contains("environments.FirstOrDefault()", StringComparison.Ordinal)
+                            || code.Contains("registered.FirstOrDefault()", StringComparison.Ordinal)))
+            .Select(RepoLayout.Relative)
+            .ToList();
+
+        Assert.Empty(offenders);
+    }
+
+    /// <summary>
+    /// Every real WSL fixture asks the same authority for permission.
+    ///
+    /// One place to read, so there is one place to reason about and one variable to forget rather
+    /// than four. A fixture that grew its own <c>GetEnvironmentVariable</c> call would be a fixture
+    /// whose safety nobody had checked.
+    /// </summary>
+    [Fact]
+    public void Every_real_wsl_fixture_reads_one_authority()
+    {
+        var fixtures = HarnessSourceFiles()
+            .Where(f => Path.GetFileName(f) is "WslHardProcessFixture.cs" or "HardEvidenceFixture.cs"
+                        or "HardWorkspaceFixture.cs" or "WslReadinessProbeTests.cs")
+            .ToList();
+
+        Assert.Equal(4, fixtures.Count);
+
+        foreach (var fixture in fixtures)
+        {
+            var code = CodeOnly(File.ReadAllText(fixture));
+
+            Assert.Contains("WslTestEnvironment.Selected()", code, StringComparison.Ordinal);
+            Assert.DoesNotContain("GetEnvironmentVariable", code, StringComparison.Ordinal);
+        }
+    }
+
     private static readonly Regex WslWord = new(@"\bWSL\b|\bWsl", RegexOptions.CultureInvariant);
 
     /// <summary>An absolute path to a program the probe runs inside the environment.</summary>

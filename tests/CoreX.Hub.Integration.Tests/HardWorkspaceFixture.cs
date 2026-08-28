@@ -250,6 +250,14 @@ internal sealed class HardWorkspaceFixture : IAsyncLifetime
 
     private async Task<string> FindEnvironmentAsync()
     {
+        // Explicit permission first, before this fixture asks the machine anything at all.
+        var selected = WslTestEnvironment.Selected();
+
+        if (selected is null)
+        {
+            return string.Empty;
+        }
+
         var executable = Path.Combine(Environment.SystemDirectory, "wsl.exe");
 
         if (!File.Exists(executable))
@@ -277,16 +285,21 @@ internal sealed class HardWorkspaceFixture : IAsyncLifetime
             return string.Empty;
         }
 
-        var names = result.NormalizedStdout
+        var registered = result.NormalizedStdout
             .Split('\n')
             .Select(l => l.Trim())
             .Where(l => l.Length > 0)
             .ToList();
 
-        return names.FirstOrDefault(n =>
-                   n.Contains("ubuntu", StringComparison.OrdinalIgnoreCase)
-                   || n.Contains("debian", StringComparison.OrdinalIgnoreCase))
-               ?? names.FirstOrDefault()
-               ?? string.Empty;
+        // The operator named it, so a name that is not there is a typo in the variable rather than
+        // an absent machine, and it fails as one. There is deliberately nothing to fall back to.
+        if (!WslTestEnvironment.IsRegistered(registered, selected))
+        {
+            Assert.Fail(
+                $"{WslTestEnvironment.Variable} names '{selected}', which is not a registered WSL "
+                + "distribution on this machine.");
+        }
+
+        return selected;
     }
 }

@@ -18,6 +18,21 @@ internal static class RepoLayout
             .Where(f => !f.Contains($"{Path.DirectorySeparatorChar}Migrations{Path.DirectorySeparatorChar}", StringComparison.Ordinal))
             .Order(StringComparer.Ordinal)];
 
+    public static string TestRoot => Path.Combine(Root, "tests");
+
+    /// <summary>
+    /// Test source files, for the few invariants whose subject is the harness itself.
+    ///
+    /// A test suite can be unsafe in ways production cannot: it is the part of the repository
+    /// allowed to touch a real machine, so which machine it is allowed to touch is a property worth
+    /// guarding in the same way everything else here is.
+    /// </summary>
+    public static IReadOnlyList<string> TestSourceFiles { get; } =
+        [.. Directory.EnumerateFiles(TestRoot, "*.cs", SearchOption.AllDirectories)
+            .Where(f => !f.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}", StringComparison.Ordinal))
+            .Where(f => !f.Contains($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}", StringComparison.Ordinal))
+            .Order(StringComparer.Ordinal)];
+
     public static string Relative(string path) => Path.GetRelativePath(Root, path);
 
     private static string FindRoot()

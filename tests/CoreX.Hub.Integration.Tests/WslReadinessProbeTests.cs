@@ -2,8 +2,6 @@ using System.Runtime.Versioning;
 using CoreX.Hub.Application.Configuration;
 using CoreX.Hub.Application.Isolation;
 using CoreX.Hub.Composition.Isolation;
-using CoreX.Hub.Execution.FileSystem;
-using CoreX.Hub.Execution.Processes;
 
 namespace CoreX.Hub.Integration.Tests;
 
@@ -40,10 +38,19 @@ public sealed class WslReadinessProbeTests
     /// <summary>Present on every Debian derived distribution and owns nothing interesting.</summary>
     private const string ServiceUser = "daemon";
 
+    /// <summary>
+    /// A name no distribution can be registered under, used when no environment was named.
+    ///
+    /// Not a placeholder for a real machine. Pointing the probe at a name that cannot exist is how
+    /// these tests keep exercising the whole answer path - every command fails to start, every
+    /// check reports Unknown - without touching a distribution nobody offered.
+    /// </summary>
+    private const string UnregistrableEnvironment = "corex-no-such-environment";
+
     [Fact]
     public async Task An_ordinary_wsl_environment_is_never_ready()
     {
-        var readiness = await ProbeFirstEnvironmentAsync();
+        var readiness = await ProbeSelectedEnvironmentAsync();
 
         Assert.False(readiness.IsReady);
         Assert.NotEmpty(readiness.UnmetCheckIds);
@@ -52,7 +59,7 @@ public sealed class WslReadinessProbeTests
     [Fact]
     public async Task Every_declared_check_is_answered_in_the_canonical_order()
     {
-        var readiness = await ProbeFirstEnvironmentAsync();
+        var readiness = await ProbeSelectedEnvironmentAsync();
 
         Assert.Equal(HardIsolationChecks.Required, readiness.Checks.Select(c => c.Id));
     }
@@ -71,7 +78,7 @@ public sealed class WslReadinessProbeTests
     [Fact]
     public async Task A_registered_environment_can_actually_be_entered()
     {
-        var readiness = await ProbeFirstEnvironmentAsync();
+        var readiness = await ProbeSelectedEnvironmentAsync();
 
         if (Status(readiness, HardIsolationChecks.EnvironmentExists) != ReadinessStatus.Pass)
         {
@@ -92,7 +99,7 @@ public sealed class WslReadinessProbeTests
     [Fact]
     public async Task A_root_agent_fails_both_privilege_checks()
     {
-        var readiness = await ProbeFirstEnvironmentAsync();
+        var readiness = await ProbeSelectedEnvironmentAsync();
 
         if (Status(readiness, HardIsolationChecks.AgentUserExists) != ReadinessStatus.Pass)
         {
@@ -117,7 +124,7 @@ public sealed class WslReadinessProbeTests
     [Fact]
     public async Task A_reachable_environment_leaves_nothing_else_unknown()
     {
-        var readiness = await ProbeFirstEnvironmentAsync();
+        var readiness = await ProbeSelectedEnvironmentAsync();
 
         if (Status(readiness, HardIsolationChecks.EnvironmentExists) != ReadinessStatus.Pass
             || Status(readiness, HardIsolationChecks.AgentUserExists) != ReadinessStatus.Pass)
@@ -150,7 +157,7 @@ public sealed class WslReadinessProbeTests
     [Fact]
     public async Task The_control_plane_check_never_passes_without_a_network_probe()
     {
-        var readiness = await ProbeFirstEnvironmentAsync();
+        var readiness = await ProbeSelectedEnvironmentAsync();
 
         Assert.NotEqual(
             ReadinessStatus.Pass, Status(readiness, HardIsolationChecks.ControlPlaneUnreachable));
@@ -167,7 +174,7 @@ public sealed class WslReadinessProbeTests
     [Fact]
     public async Task Reachability_findings_are_consistent_with_the_mount_table()
     {
-        var readiness = await ProbeFirstEnvironmentAsync();
+        var readiness = await ProbeSelectedEnvironmentAsync();
 
         var drives = Status(readiness, HardIsolationChecks.HostDrivesNotMounted);
 
@@ -188,7 +195,7 @@ public sealed class WslReadinessProbeTests
     [Fact]
     public async Task Nothing_the_probe_reports_is_worth_stealing()
     {
-        var readiness = await ProbeFirstEnvironmentAsync();
+        var readiness = await ProbeSelectedEnvironmentAsync();
 
         var reported = string.Join(Environment.NewLine, readiness.Checks.Select(c => c.Detail));
         var profile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
@@ -219,63 +226,32 @@ public sealed class WslReadinessProbeTests
         readiness.Checks.Single(c => c.Id == id).Status;
 
     /// <summary>
-    /// Probes whatever this machine has, or reports that it has nothing.
+    /// Probes the environment an operator named, or a name no machine has.
     ///
-    /// A Debian derived distribution is preferred when one is registered, because the service
-    /// account the profile names is a Debian convention. Anything else still produces a valid
-    /// result - a probe that cannot run <c>id</c> reports Unknown, which is not ready.
+    /// It used to probe whichever distribution looked Debian derived, preferring that family
+    /// because the service account the profile names is a Debian convention. That reasoning was
+    /// about which environment would produce an interesting answer; it was not permission, and on
+    /// an ordinary laptop it selected the operator's own working Ubuntu.
+    ///
+    /// It matters more here than it looks. Since the shared filesystem boundary landed, readiness
+    /// does not only read files - it starts a transient systemd unit under the agent account to
+    /// find out what a workload can actually reach. That is a real unit in a real distribution, and
+    /// it is not something to do to somebody's development machine because the name matched.
+    ///
+    /// Without an explicit environment the probe is pointed at a name nothing can be registered
+    /// under, which is the case these tests were always about: everything unanswerable, nothing
+    /// ready. The assertions hold either way, which is why they are written as they are.
     /// </summary>
-    private static async Task<HardIsolationReadiness> ProbeFirstEnvironmentAsync()
+    private static async Task<HardIsolationReadiness> ProbeSelectedEnvironmentAsync()
     {
         using var temp = new TempDirectory();
 
-        var environments = await ListEnvironmentsAsync(temp.Path);
-
-        var chosen = environments.FirstOrDefault(
-                         name => name.Contains("ubuntu", StringComparison.OrdinalIgnoreCase)
-                                 || name.Contains("debian", StringComparison.OrdinalIgnoreCase))
-                     ?? environments.FirstOrDefault()
-                     ?? "corex-no-environment-registered";
+        var chosen = WslTestEnvironment.Selected() ?? UnregistrableEnvironment;
 
         return await WslReadinessProbe.Create(temp.Path).ProbeAsync(
             "fixture", Profile(chosen), CancellationToken.None);
     }
 
-    /// <summary>
-    /// Which environments exist, asked the same way production asks: through ProcessRunner.
-    ///
-    /// The test deliberately does not reach for Process.Start to find this out. There is one
-    /// process boundary in this system and a test that went around it would be proving
-    /// something about a path that does not ship.
-    /// </summary>
-    private static async Task<IReadOnlyList<string>> ListEnvironmentsAsync(string workingDirectory)
-    {
-        var executable = Path.Combine(Environment.SystemDirectory, "wsl.exe");
-
-        if (!File.Exists(executable))
-        {
-            return [];
-        }
-
-        var result = await new ProcessRunner(FileSystemGuard.Create(workingDirectory)).RunAsync(
-            new ProcessRequest
-            {
-                Executable = executable,
-                Arguments = ["--list", "--quiet"],
-                WorkingDirectory = workingDirectory,
-                EnvironmentAllowlist = ["SystemRoot"],
-                AdditionalEnvironment = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
-                {
-                    ["WSL_UTF8"] = "1",
-                },
-                HardTimeout = TimeSpan.FromSeconds(60),
-            },
-            CancellationToken.None);
-
-        return result.ExitCode == 0
-            ? [.. result.NormalizedStdout.Split('\n').Select(l => l.Trim()).Where(l => l.Length > 0)]
-            : [];
-    }
 
     private static HardIsolationProfile Profile(string environmentId)
     {
