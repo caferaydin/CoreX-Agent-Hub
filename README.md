@@ -53,6 +53,22 @@ yalnızca Kronos onboarding'ini bloklar.
 - Node.js + npm — yalnızca operatör arayüzünü derlemek için (Faz 9)
 - WSL2 — yalnızca `isolationLevel: Hard` bir organizasyon için (Faz 10C)
 
+## Başlatma (günlük kullanım)
+
+```
+scripts/corexhub.ps1            # Hub'ı başlatır, http://127.0.0.1:5177 tarayıcıda açılır
+scripts/corexhub.ps1 -Stop      # durdurur
+scripts/corexhub.ps1 -Rebuild   # Hub'ın kendi kodu değiştikten sonra yeniden yayımlar
+```
+
+İlk çalıştırmada arayüzü derler, `hub-api` ve `hub` CLI'yi `.artifacts/` altına yayımlar
+(commit edilmez). `hub-api` repository kökünden başlatılır; `hub.config.yaml` oradan
+bulunur. Hub küçültülmüş kendi penceresinde çalışır; pencere kapanınca Hub da durur, o an
+süren bir koşu bir sonraki açılışta `Interrupted` olarak kapanır.
+
+Görevler, koşular, kanıt ve kabul kararı arayüzden yürür. Terminal tercih edilirse
+`.artifacts/cli/hub.exe --config <repo>/hub.config.yaml ...` herhangi bir klasörden çalışır.
+
 ## Derleme
 
 ```
