@@ -232,7 +232,7 @@ public sealed class JobResourceLimitTests
         var run = workspace.Runner.RunAsync(request, cancellation.Token);
 
         var formed = await ProcessLifecycleTests.WaitUntilAsync(
-            () => File.ReadAllText(report).Contains("GRANDCHILD", StringComparison.Ordinal),
+            () => ReadWhileWritten(report).Contains("GRANDCHILD", StringComparison.Ordinal),
             TimeSpan.FromSeconds(30));
 
         Assert.True(formed, "the tree should have formed inside a job with room for it");
@@ -318,6 +318,27 @@ public sealed class JobResourceLimitTests
             .First(l => l.StartsWith("STOPPED", StringComparison.Ordinal));
 
         return int.Parse(line.Split(' ')[1], CultureInfo.InvariantCulture);
+    }
+
+    /// <summary>
+    /// Reads a report the tree is still appending to.
+    ///
+    /// The fixture writes with <see cref="FileShare.ReadWrite"/>; <see cref="File.ReadAllText(string)"/>
+    /// only shares reading, so it collides with a live writer and throws. While polling, a collision
+    /// means "not yet", not a failure.
+    /// </summary>
+    private static string ReadWhileWritten(string path)
+    {
+        try
+        {
+            using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+            using var reader = new StreamReader(stream);
+            return reader.ReadToEnd();
+        }
+        catch (IOException)
+        {
+            return string.Empty;
+        }
     }
 
     /// <summary>Every pid the fixture reported must be gone once the job closed.</summary>
