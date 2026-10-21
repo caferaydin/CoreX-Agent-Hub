@@ -44,6 +44,9 @@ export interface RepositoryDto {
   readonly verificationProfiles: readonly string[];
   readonly defaultVerificationProfile: string | null;
 
+  /** The default profile's step names, in order: what a Machine criterion may point at. */
+  readonly defaultVerificationSteps: readonly string[];
+
   /** Whether the checkout is present. The path itself is deliberately not on the wire. */
   readonly localPathExists: boolean;
 }

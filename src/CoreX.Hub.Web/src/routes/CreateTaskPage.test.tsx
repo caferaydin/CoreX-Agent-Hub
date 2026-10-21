@@ -142,6 +142,43 @@ describe('CreateTaskPage', () => {
     expect(screen.queryByLabelText('Criterion 1 verification step')).not.toBeInTheDocument();
   });
 
+  it('offers the repository’s own verification steps once a repository is chosen', async () => {
+    // The ready gate accepts only these names. A free text box let a Machine criterion be
+    // written that could never be made ready, and the operator learned that only afterwards.
+    const user = userEvent.setup();
+
+    stubFetch(
+      catalogue({
+        '/api/v1/repositories': {
+          body: [repository({ defaultVerificationSteps: ['restore', 'build', 'test'] })],
+        },
+      }),
+    );
+
+    show();
+
+    await user.selectOptions(await screen.findByLabelText('Repository'), [
+      '01a03a11-0000-7001-b175-8c2679d883a8',
+    ]);
+
+    const step = screen.getByLabelText('Criterion 1 verification step');
+
+    expect(step.tagName).toBe('SELECT');
+    expect(Array.from(step.querySelectorAll('option')).map((o) => o.textContent)).toEqual([
+      'Choose the step that proves it…',
+      'restore',
+      'build',
+      'test',
+    ]);
+
+    // Nothing is chosen for the operator.
+    expect(step).toHaveValue('');
+
+    await user.selectOptions(step, ['test']);
+
+    expect(step).toHaveValue('test');
+  });
+
   it('sends exactly the contract payload', async () => {
     const user = userEvent.setup();
     const sent: unknown[] = [];

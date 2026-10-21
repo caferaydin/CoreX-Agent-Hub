@@ -153,6 +153,7 @@ export function CreateTaskPage(): ReactNode {
 
                 <CriteriaField
                   value={criteria}
+                  steps={chosen?.repository.defaultVerificationSteps ?? []}
                   onChange={setCriteria}
                   problem={showProblems ? problems.get('criteria') : undefined}
                   disabled={create.submitting}
@@ -386,6 +387,66 @@ interface Draft {
 }
 
 /**
+ * The step a Machine criterion points at.
+ *
+ * A list once the repository is known, because the ready gate accepts only the names of its
+ * default profile's steps and a free text box let a criterion be written that could never be
+ * made ready - with the reason shown only after the task already existed. Before a repository
+ * is chosen there is nothing to list, so it stays a text box. A name the list does not have is
+ * kept and labelled rather than silently dropped, so switching repository never erases what
+ * someone typed.
+ */
+function StepPicker({
+  index,
+  value,
+  steps,
+  disabled,
+  onChange,
+}: {
+  index: number;
+  value: string;
+  steps: readonly string[];
+  disabled: boolean;
+  onChange: (value: string) => void;
+}): ReactNode {
+  const label = `Criterion ${index + 1} verification step`;
+
+  if (steps.length === 0) {
+    return (
+      <input
+        type="text"
+        className="mono"
+        value={value}
+        disabled={disabled}
+        placeholder="verification step, e.g. build"
+        aria-label={label}
+        onChange={(event) => onChange(event.target.value)}
+      />
+    );
+  }
+
+  const unknown = value.length > 0 && !steps.includes(value);
+
+  return (
+    <select
+      className="mono"
+      value={value}
+      disabled={disabled}
+      aria-label={label}
+      onChange={(event) => onChange(event.target.value)}
+    >
+      <option value="">Choose the step that proves it…</option>
+      {steps.map((step) => (
+        <option key={step} value={step}>
+          {step}
+        </option>
+      ))}
+      {unknown ? <option value={value}>{value} (not a step of this repository)</option> : null}
+    </select>
+  );
+}
+
+/**
  * What the task has to satisfy.
  *
  * Two kinds, because the Hub has two: a Machine criterion is answered from recorded
@@ -394,11 +455,13 @@ interface Draft {
  */
 function CriteriaField({
   value,
+  steps,
   onChange,
   problem,
   disabled,
 }: {
   value: readonly Draft[];
+  steps: readonly string[];
   onChange: (value: readonly Draft[]) => void;
   problem?: string;
   disabled: boolean;
@@ -441,14 +504,12 @@ function CriteriaField({
                 onChange={(event) => update(index, { text: event.target.value })}
               />
               {criterion.kind === 'Machine' ? (
-                <input
-                  type="text"
-                  className="mono"
+                <StepPicker
+                  index={index}
                   value={criterion.verificationRef}
+                  steps={steps}
                   disabled={disabled}
-                  placeholder="verification step, e.g. build"
-                  aria-label={`Criterion ${index + 1} verification step`}
-                  onChange={(event) => update(index, { verificationRef: event.target.value })}
+                  onChange={(verificationRef) => update(index, { verificationRef })}
                 />
               ) : null}
             </div>

@@ -36,6 +36,7 @@ public static class Dtos
             ReviewerProfile = reviewerProfile,
             VerificationProfiles = [.. profiles.Select(p => p.Name)],
             DefaultVerificationProfile = profiles.FirstOrDefault(p => p.IsDefault)?.Name,
+            DefaultVerificationSteps = profiles.FirstOrDefault(p => p.IsDefault)?.StepNames ?? [],
 
             // Whether, not where. The path is a local filesystem fact and stays local.
             LocalPathExists = !string.IsNullOrWhiteSpace(r.LocalPath) && Directory.Exists(r.LocalPath),

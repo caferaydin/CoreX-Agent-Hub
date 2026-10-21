@@ -75,6 +75,22 @@ public sealed class QueryEndpointTests
     }
 
     [Fact]
+    public async Task A_repository_names_the_steps_a_machine_criterion_may_point_at()
+    {
+        // The ready gate resolves a Machine criterion against the default profile's steps, so
+        // those are what the create form offers - in the profile's own order.
+        await using var hub = await HubApiFixture.CreateAsync();
+
+        var (_, repositories) = await hub.GetAsync("/api/v1/repositories");
+        var repository = repositories.EnumerateArray().Single();
+
+        Assert.Equal("fixture-verify", repository.GetProperty("defaultVerificationProfile").GetString());
+        Assert.Equal(
+            ["build"],
+            repository.GetProperty("defaultVerificationSteps").EnumerateArray().Select(s => s.GetString()));
+    }
+
+    [Fact]
     public async Task A_task_list_is_ordered_paged_and_carries_its_latest_attempt()
     {
         await using var hub = await HubApiFixture.CreateAsync();

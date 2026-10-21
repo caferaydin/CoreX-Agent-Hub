@@ -37,6 +37,12 @@ public sealed record RepositoryDto
     public string? DefaultVerificationProfile { get; init; }
 
     /// <summary>
+    /// The steps of the default verification profile, in order - the names a Machine criterion
+    /// may point at, because the ready gate resolves it against exactly this profile.
+    /// </summary>
+    public IReadOnlyList<string> DefaultVerificationSteps { get; init; } = [];
+
+    /// <summary>
     /// Whether the configured local path is present on this machine.
     ///
     /// A boolean rather than the path: the operator already knows where their repository is,

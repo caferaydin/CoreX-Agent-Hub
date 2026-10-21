@@ -226,6 +226,7 @@ export const repository = (over: Partial<RepositoryDto> = {}): RepositoryDto => 
   reviewerProfile: 'codex-reviewer',
   verificationProfiles: ['hub-release-full'],
   defaultVerificationProfile: 'hub-release-full',
+  defaultVerificationSteps: [],
   localPathExists: true,
   ...over,
 });
