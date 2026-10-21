@@ -173,6 +173,41 @@ public static class HardIsolationChecks
     /// </summary>
     public const string PeerNetworkUnreachable = "peer.network.unreachable";
 
+    /// <summary>
+    /// The live boundary this execution owns, measured only once it exists.
+    ///
+    /// These describe ephemeral state that an execution's own lease creates: the trusted plane's
+    /// table, the organization's namespace holder, and whether a workload really lands in it. They
+    /// were required before anything existed, which made the first hard execution impossible - the
+    /// fabric is built by <c>HardExecutionLease</c>, the lease is taken after admission, and
+    /// admission demanded the fabric. A gate cannot require the thing it gates the creation of.
+    ///
+    /// The answer is not to require less. It is to ask at the right time: nothing repository
+    /// controlled runs until every one of these has passed, measured from the placement the workload
+    /// will actually get.
+    /// </summary>
+    public static IReadOnlyList<string> PostAcquireRequired { get; } =
+    [
+        NetworkFabricReady,
+        OrgNetworkNamespaceReady,
+        OrgNetworkAttachmentReady,
+        HostLoopbackDisabled,
+        ControlPlaneUnreachable,
+    ];
+
+    /// <summary>
+    /// Checks whose applicability depends on something outside this organization.
+    ///
+    /// Peer separation is the only one. It cannot be measured with no peer to fail to reach, and
+    /// "there is no neighbour" is not the same statement as "the neighbour was reachable". Treating
+    /// the first as the second refused every single-organization installation for a property it had
+    /// no way to violate.
+    ///
+    /// It is conditional, not optional: the moment a co-resident hard environment exists, this is
+    /// required and is proved behaviourally.
+    /// </summary>
+    public static IReadOnlyList<string> ConditionalOnPeer { get; } = [PeerNetworkUnreachable];
+
     /// <summary>Every check that must pass. All of them; there are no optional ones.</summary>
     public static IReadOnlyList<string> Required { get; } =
     [
@@ -207,6 +242,20 @@ public static class HardIsolationChecks
         OrgNetworkAttachmentReady,
         PeerNetworkUnreachable,
     ];
+
+    /// <summary>
+    /// What must hold before the Hub may attempt to build this execution's boundary.
+    ///
+    /// Everything measurable without an execution-owned live fabric: the environment, the
+    /// identities, the roots, the kernel facilities, the host separation and the declared ceilings.
+    /// Passing says the Hub may safely try - not that a boundary exists.
+    /// </summary>
+    public static IReadOnlyList<string> PreAcquireRequired { get; } =
+    [
+        .. Required.Where(id =>
+            !PostAcquireRequired.Contains(id, StringComparer.Ordinal)
+            && !ConditionalOnPeer.Contains(id, StringComparer.Ordinal)),
+    ];
 }
 
 /// <summary>
@@ -235,7 +284,64 @@ public sealed record HardIsolationReadiness
     /// <summary>Every required check, in the canonical order, always complete.</summary>
     public IReadOnlyList<ReadinessCheck> Checks { get; }
 
-    public bool IsReady => Checks.All(c => c.Status == ReadinessStatus.Pass);
+    /// <summary>
+    /// Every question answered as required, including the live boundary.
+    ///
+    /// The complete picture, for a diagnostic that wants one. It is deliberately not what admission
+    /// asks: an idle organization has no live fabric, and demanding one before an execution exists is
+    /// the circular dependency that made hard execution unreachable.
+    /// </summary>
+    public bool IsReady => IsReadyFor(HardIsolationChecks.Required);
+
+    /// <summary>
+    /// Whether the Hub may attempt to build this execution's boundary.
+    ///
+    /// Says nothing whatever about the boundary being up. The name is the promise: eligible to try.
+    /// </summary>
+    public bool IsAdmissionEligible => IsReadyFor(HardIsolationChecks.PreAcquireRequired);
+
+    /// <summary>
+    /// Whether the live boundary this execution owns is established.
+    ///
+    /// Asked after the lease has built it and before anything repository controlled runs. The peer
+    /// question joins the required set only when a peer exists to be measured against - with none,
+    /// it is not applicable rather than unmet, and reporting it as unmet would refuse an
+    /// installation for a property it cannot violate.
+    /// </summary>
+    public bool IsLiveBoundaryReady(bool peerApplicable) =>
+        IsReadyFor(
+            peerApplicable
+                ? [.. HardIsolationChecks.PostAcquireRequired, .. HardIsolationChecks.ConditionalOnPeer]
+                : HardIsolationChecks.PostAcquireRequired);
+
+    /// <summary>
+    /// Whether every named check passed.
+    ///
+    /// Unknown is never a pass here either. A check nobody could perform has not established
+    /// anything, and a phase that treated "no probe" as "no problem" would be the one place this
+    /// design cannot afford optimism.
+    /// </summary>
+    public bool IsReadyFor(IReadOnlyList<string> required)
+    {
+        ArgumentNullException.ThrowIfNull(required);
+
+        return required.All(id =>
+            Checks.Any(c => string.Equals(c.Id, id, StringComparison.Ordinal)
+                            && c.Status == ReadinessStatus.Pass));
+    }
+
+    /// <summary>The unmet ids among a named set, for a message that names the phase it refused.</summary>
+    public IReadOnlyList<string> UnmetAmong(IReadOnlyList<string> required)
+    {
+        ArgumentNullException.ThrowIfNull(required);
+
+        return
+        [
+            .. Checks
+                .Where(c => required.Contains(c.Id, StringComparer.Ordinal) && c.Status != ReadinessStatus.Pass)
+                .Select(c => c.Id),
+        ];
+    }
 
     /// <summary>The ids worth showing an operator: everything that is not a pass.</summary>
     public IReadOnlyList<string> UnmetCheckIds =>

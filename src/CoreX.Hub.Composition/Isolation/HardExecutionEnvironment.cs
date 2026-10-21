@@ -27,6 +27,7 @@ public sealed class HardExecutionEnvironment : IAsyncDisposable
 {
     private readonly HardNetworkConsumers _consumers;
     private readonly IHardEnvironmentChannel _channel;
+    private readonly IHardBoundaryGate _boundary;
     private readonly HardIsolationProfile _profile;
     private readonly string _organizationSlug;
     private readonly Guid _executionId;
@@ -39,12 +40,14 @@ public sealed class HardExecutionEnvironment : IAsyncDisposable
     internal HardExecutionEnvironment(
         HardNetworkConsumers consumers,
         IHardEnvironmentChannel channel,
+        IHardBoundaryGate boundary,
         HardIsolationProfile profile,
         string organizationSlug,
         Guid executionId)
     {
         _consumers = consumers ?? throw new ArgumentNullException(nameof(consumers));
         _channel = channel ?? throw new ArgumentNullException(nameof(channel));
+        _boundary = boundary ?? throw new ArgumentNullException(nameof(boundary));
         _profile = profile ?? throw new ArgumentNullException(nameof(profile));
         _organizationSlug = organizationSlug ?? throw new ArgumentNullException(nameof(organizationSlug));
 
@@ -97,8 +100,31 @@ public sealed class HardExecutionEnvironment : IAsyncDisposable
             var (lease, refusal) = await HardExecutionLease.AcquireAsync(
                 _consumers, _channel, _profile, _organizationSlug, _executionId, ct);
 
+            if (lease is null)
+            {
+                _refusal = refusal;
+                return null;
+            }
+
+            // Gate B. The lease built a boundary; this establishes that the boundary is really there
+            // and really contains. Admission could not ask this - the state did not exist yet - and
+            // an execution that skipped it would be running repository-controlled work inside
+            // something nobody had measured.
+            //
+            // Before the lease is handed to anything, so every hard port inherits one invariant: a
+            // usable environment is a measured one.
+            if (await _boundary.MeasureAsync(lease, _profile, _organizationSlug, ct) is { } unsound)
+            {
+                // Released rather than kept. A boundary that did not hold is not something to leave
+                // running while an execution is refused.
+                await lease.DisposeAsync();
+
+                _refusal = new HardLeaseRefusal("boundary", unsound);
+
+                return null;
+            }
+
             _lease = lease;
-            _refusal = refusal;
 
             return _lease;
         }

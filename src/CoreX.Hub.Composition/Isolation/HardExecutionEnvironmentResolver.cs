@@ -21,6 +21,56 @@ internal interface IHardExecutionBinding
 {
     /// <summary>Binds this composition to an execution, or refuses if it is already another's.</summary>
     void BindTo(Guid executionId);
+
+    /// <summary>
+    /// Binds, establishes the live boundary, and measures it. Null when the execution may proceed.
+    ///
+    /// The one call a port makes before doing anything an execution's isolation is supposed to
+    /// contain. It exists so that no port has to remember the order - bind, acquire, measure - and
+    /// so that a port which forgot would not be the thing that ran work outside a boundary.
+    /// </summary>
+    Task<string?> EnsureBoundaryAsync(Guid executionId, CancellationToken ct);
+}
+
+/// <summary>
+/// Whether the boundary an execution just built is sound. Held apart so the environment can be
+/// measured without the environment knowing how.
+/// </summary>
+internal interface IHardBoundaryGate
+{
+    Task<string?> MeasureAsync(
+        HardExecutionLease lease,
+        HardIsolationProfile profile,
+        string organizationSlug,
+        CancellationToken ct);
+}
+
+/// <summary>
+/// The production gate: the trusted plane's own verification, plus a reach probe from the placement
+/// the workload will get.
+/// </summary>
+[SupportedOSPlatform("windows")]
+internal sealed class MeasuredHardBoundaryGate : IHardBoundaryGate
+{
+    private readonly IHardNetworkFabric _fabric;
+    private readonly WslHardNetworkProbe _probe;
+    private readonly Func<bool> _peerApplicable;
+
+    public MeasuredHardBoundaryGate(
+        IHardNetworkFabric fabric, WslHardNetworkProbe probe, Func<bool> peerApplicable)
+    {
+        _fabric = fabric;
+        _probe = probe;
+        _peerApplicable = peerApplicable;
+    }
+
+    public Task<string?> MeasureAsync(
+        HardExecutionLease lease,
+        HardIsolationProfile profile,
+        string organizationSlug,
+        CancellationToken ct) =>
+        PostAcquireHardBoundary.MeasureAsync(
+            _fabric, _probe, lease, profile, organizationSlug, _peerApplicable(), ct);
 }
 
 /// <summary>
@@ -43,6 +93,16 @@ internal sealed class RecordedHardExecutionBinding : IHardExecutionBinding
         ArgumentOutOfRangeException.ThrowIfEqual(executionId, Guid.Empty);
 
         _bound.Add(executionId);
+    }
+
+    /// <summary>What the boundary would have said. A focused test decides; nothing is acquired.</summary>
+    public string? Refusal { get; set; }
+
+    public Task<string?> EnsureBoundaryAsync(Guid executionId, CancellationToken ct)
+    {
+        BindTo(executionId);
+
+        return Task.FromResult(Refusal);
     }
 }
 
@@ -74,6 +134,7 @@ public sealed class HardExecutionEnvironmentResolver : IHardExecutionBinding, IA
 {
     private readonly HardNetworkConsumers _consumers;
     private readonly IHardEnvironmentChannel _channel;
+    private readonly IHardBoundaryGate _boundary;
     private readonly HardIsolationProfile _profile;
     private readonly string _organizationSlug;
     private readonly Lock _gate = new();
@@ -85,12 +146,14 @@ public sealed class HardExecutionEnvironmentResolver : IHardExecutionBinding, IA
     internal HardExecutionEnvironmentResolver(
         HardNetworkConsumers consumers,
         IHardEnvironmentChannel channel,
+        IHardBoundaryGate boundary,
         TrustedGuestFileTransfer guest,
         HardIsolationProfile profile,
         string organizationSlug)
     {
         _consumers = consumers ?? throw new ArgumentNullException(nameof(consumers));
         _channel = channel ?? throw new ArgumentNullException(nameof(channel));
+        _boundary = boundary ?? throw new ArgumentNullException(nameof(boundary));
         Guest = guest ?? throw new ArgumentNullException(nameof(guest));
         _profile = profile ?? throw new ArgumentNullException(nameof(profile));
         _organizationSlug = organizationSlug ?? throw new ArgumentNullException(nameof(organizationSlug));
@@ -143,6 +206,8 @@ public sealed class HardExecutionEnvironmentResolver : IHardExecutionBinding, IA
     /// </summary>
     internal static bool TryCreate(
         HardNetworkConsumers consumers,
+        IHardNetworkFabric fabric,
+        Func<bool> peerApplicable,
         HardIsolationProfile profile,
         string organizationSlug,
         string hostWorkingDirectory,
@@ -150,6 +215,7 @@ public sealed class HardExecutionEnvironmentResolver : IHardExecutionBinding, IA
         out string? problem)
     {
         ArgumentNullException.ThrowIfNull(consumers);
+        ArgumentNullException.ThrowIfNull(fabric);
         ArgumentNullException.ThrowIfNull(profile);
 
         resolver = null;
@@ -162,7 +228,13 @@ public sealed class HardExecutionEnvironmentResolver : IHardExecutionBinding, IA
         }
 
         resolver = new HardExecutionEnvironmentResolver(
-            consumers, channel, new TrustedGuestFileTransfer(gateway, profile), profile, organizationSlug);
+            consumers,
+            channel,
+            new MeasuredHardBoundaryGate(
+                fabric, WslHardNetworkProbe.Create(hostWorkingDirectory), peerApplicable),
+            new TrustedGuestFileTransfer(gateway, profile),
+            profile,
+            organizationSlug);
 
         return true;
     }
@@ -175,6 +247,15 @@ public sealed class HardExecutionEnvironmentResolver : IHardExecutionBinding, IA
     /// arriving with a different one gets an exception rather than a second environment.
     /// </summary>
     public void BindTo(Guid executionId) => Bind(executionId);
+
+    public async Task<string?> EnsureBoundaryAsync(Guid executionId, CancellationToken ct)
+    {
+        var environment = Bind(executionId);
+
+        return await environment.LeaseAsync(ct) is null
+            ? environment.Refusal?.ToString() ?? "the hard isolation boundary could not be established."
+            : null;
+    }
 
     public HardExecutionEnvironment Bind(Guid executionId)
     {
@@ -203,7 +284,7 @@ public sealed class HardExecutionEnvironmentResolver : IHardExecutionBinding, IA
             _boundTo = executionId;
 
             _environment = new HardExecutionEnvironment(
-                _consumers, _channel, _profile, _organizationSlug, executionId);
+                _consumers, _channel, _boundary, _profile, _organizationSlug, executionId);
 
             return _environment;
         }

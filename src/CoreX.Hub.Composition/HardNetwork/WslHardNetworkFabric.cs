@@ -312,7 +312,15 @@ public sealed class WslHardNetworkFabric : IHardNetworkFabric
     private async Task<ReadinessCheck> FabricCheckAsync(
         HardIsolationProfile profile, HardNetworkTopology topology, CancellationToken ct)
     {
-        var active = await ServiceAsync(profile, HardNetworkCommands.ActivePolicy(), ct);
+        // Read as root, because reading the ruleset is a privileged operation: the kernel refuses a
+        // netlink cache to anything without CAP_NET_ADMIN, so an unprivileged identity gets
+        // "Operation not permitted" whether or not the table is there. Asking as the service user
+        // made this check unpassable on every machine - the plane could be perfectly built and the
+        // answer would still be that it could not be read.
+        //
+        // Every other read here stays with the service identity, which can genuinely answer them.
+        // This is the one question that cannot be asked from outside the capability it inspects.
+        var active = await RootAsync(profile, HardNetworkCommands.ActivePolicy(), ct);
 
         if (!active.Ok)
         {

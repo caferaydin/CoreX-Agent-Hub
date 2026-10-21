@@ -90,6 +90,21 @@ public sealed class ScriptedRuntimeConfig
     /// <summary>Absolute path to the fixture executable it drives. Never discovered on PATH.</summary>
     public string FixturePath { get; set; } = string.Empty;
 
+    /// <summary>
+    /// Which filesystem <see cref="FixturePath"/> is a path on: <c>Host</c> or <c>Isolated</c>.
+    ///
+    /// Stated rather than inferred, because the two cannot be told apart reliably and guessing wrong
+    /// is dangerous in both directions. A host path is validated against this machine and is what a
+    /// logical organization runs. An isolated path names a file inside a hard organization's own
+    /// environment, where this process cannot look - checking it here would resolve
+    /// <c>/opt/tool</c> against the current drive, find nothing, and refuse a runtime that exists;
+    /// and if something did happen to sit at that Windows path, the value handed to the isolated
+    /// workload would be a Windows path for it to execute.
+    ///
+    /// Host is the default because every declaration that existed before this field was one.
+    /// </summary>
+    public string FixtureLocation { get; set; } = "Host";
+
     /// <summary>Which deterministic scenario the fixture plays, by name.</summary>
     public string Mode { get; set; } = string.Empty;
 }

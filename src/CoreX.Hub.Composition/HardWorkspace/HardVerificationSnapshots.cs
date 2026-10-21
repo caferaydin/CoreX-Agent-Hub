@@ -61,9 +61,60 @@ internal sealed class HardVerificationSnapshots
         // it were this one. The name is Hub derived, so this can never name anything else.
         await _worktrees.DisposeAsync(bare, path, ct);
 
-        return await _worktrees.AddDetachedAsync(bare, path, commitSha, ct)
+        if (!await _worktrees.AddDetachedAsync(bare, path, commitSha, ct))
+        {
+            return (null, $"a tree at '{commitSha}' could not be created inside the environment");
+        }
+
+        return await ApplyOwnershipAsync(path, ct)
             ? (new HardPinnedSnapshot(path, commitSha, bare), null)
-            : (null, $"a tree at '{commitSha}' could not be created inside the environment");
+            : (null, $"the {purpose} tree could not be given to the account that runs the commands");
+    }
+
+    /// <summary>
+    /// Gives the tree to the account that runs the commands in it.
+    ///
+    /// The same ownership model the agent's own worktree has, for the same reason and with the same
+    /// care. Verification commands are repository-controlled work run as the agent, and they write:
+    /// build output, caches and the machine readable report the Hub reads back. A tree the service
+    /// user owned and the agent could only read would fail every step that produced a file, which is
+    /// most of them - and it would fail as a broken test suite rather than as a permissions mistake.
+    ///
+    /// What stays with the service is the part that decides what the repository is. The <c>.git</c>
+    /// pointer keeps the service as owner, and the sticky bit means the agent may remove what it
+    /// created and nothing else - so a verification run cannot detach the tree from the commit it is
+    /// supposed to be measuring.
+    /// </summary>
+    private async Task<bool> ApplyOwnershipAsync(string snapshot, CancellationToken ct)
+    {
+        var agent = _control.Profile.AgentUser.Trim();
+        var service = _control.Profile.ServiceUser.Trim();
+
+        var tree = await _control.OwnershipAsync([HardGitCommands.Chown, "-R", agent, snapshot], ct);
+
+        if (!tree.Ok)
+        {
+            return false;
+        }
+
+        var pointer = await _control.OwnershipAsync(
+            [HardGitCommands.Chown, service + ":" + agent, snapshot, snapshot + "/.git"], ct);
+
+        if (!pointer.Ok)
+        {
+            return false;
+        }
+
+        var mode = await _control.OwnershipAsync([HardGitCommands.Chmod, "0640", snapshot + "/.git"], ct);
+
+        if (!mode.Ok)
+        {
+            return false;
+        }
+
+        var sticky = await _control.OwnershipAsync([HardGitCommands.Chmod, "1770", snapshot], ct);
+
+        return sticky.Ok;
     }
 
     /// <summary>

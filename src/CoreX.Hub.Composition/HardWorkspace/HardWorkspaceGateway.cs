@@ -134,10 +134,18 @@ public sealed class HardWorkspaceGateway : IExecutionWorkspace
     {
         ArgumentNullException.ThrowIfNull(preflight);
 
-        // Which execution this workspace belongs to, settled before a byte moves. Preparation is the
-        // first hard port an execution reaches, so this is normally where the composition adopts its
-        // durable identity - and it happens after admission, never during construction.
-        _binding.BindTo(executionId);
+        // Which execution this workspace belongs to, and the boundary it belongs inside, settled
+        // before a byte moves.
+        //
+        // Preparation is the first hard port an execution reaches, so this is where the composition
+        // adopts its durable identity and where the live boundary is built and measured. Nothing
+        // repository controlled has run yet, which is the only safe moment for that to happen: a
+        // workspace materialised before the boundary was proved would be a tree waiting inside a
+        // container nobody had checked.
+        if (await _binding.EnsureBoundaryAsync(executionId, ct) is { } refused)
+        {
+            throw new CoreX.Hub.Application.Orchestration.ExecutionPolicyRefusedException(refused);
+        }
 
         if (preflight is not HardPinnedPreflight pinned)
         {

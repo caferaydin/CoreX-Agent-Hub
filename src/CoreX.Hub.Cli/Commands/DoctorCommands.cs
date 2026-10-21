@@ -78,16 +78,28 @@ public static class DoctorCommands
 
         output.WriteLine($"organization {organization.Slug} (hard isolation)");
 
+        // A live boundary check on an idle organization is not a fault. There is no execution, so
+        // there is no namespace, no attachment and nothing to have reached the Hub from - and
+        // printing FAIL against those would send an operator to build by hand the very thing the Hub
+        // builds for itself, for each execution, and tears down afterwards.
+        //
+        // They are still shown. Hiding a required check because it is not yet applicable would be
+        // the diagnostic deciding what an operator is allowed to know.
+        var live = HardIsolationChecks.PostAcquireRequired;
+
         var rows = assessment.Readiness.Checks.Select(c => new[]
         {
             c.Status switch
             {
                 ReadinessStatus.Pass => "pass",
+                _ when live.Contains(c.Id, StringComparer.Ordinal) => "inactive",
                 ReadinessStatus.Fail => "FAIL",
                 _ => "UNKNOWN",
             },
             c.Id,
-            c.Detail,
+            live.Contains(c.Id, StringComparer.Ordinal) && c.Status != ReadinessStatus.Pass
+                ? "Measured for each execution once its own boundary exists. " + c.Detail
+                : c.Detail,
         });
 
         Output.WriteTable(output, ["STATUS", "CHECK", "DETAIL"], rows);
@@ -100,12 +112,21 @@ public static class DoctorCommands
         // The readiness verdict and the admission verdict are separate lines on purpose. A
         // machine can be entirely correct and executions still be refused, and an operator who
         // was told only "not ready" would go looking for a fault that is not there.
-        var machineReady = assessment.Readiness.IsReady && assessment.Topology.IsReady;
+        var machineReady = assessment.Readiness.IsAdmissionEligible && assessment.Topology.IsReady;
+
+        var unmet = assessment.Readiness.UnmetAmong(HardIsolationChecks.PreAcquireRequired).Count;
 
         output.WriteLine(machineReady
             ? "environment: ready"
-            : $"environment: NOT READY ({assessment.Readiness.UnmetCheckIds.Count} check(s) unmet, "
+            : $"environment: NOT READY ({unmet} check(s) unmet, "
               + $"{assessment.Topology.Problems.Count} topology problem(s))");
+
+        // Said out loud, because the two questions are genuinely different and only one of them is
+        // answerable right now. An environment that is ready is an environment the Hub may build a
+        // boundary in; whether a boundary holds is measured per execution, against the placement
+        // that execution's own workload gets.
+        output.WriteLine(
+            "live execution boundary: inactive (built and measured per execution, then released)");
 
         output.WriteLine(assessment.Decision.IsAllowed
             ? "executions: allowed"

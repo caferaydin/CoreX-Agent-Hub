@@ -9,6 +9,24 @@ using CoreX.Hub.Composition.Isolation;
 namespace CoreX.Hub.Composition.HardNetwork;
 
 /// <summary>
+/// How the probe reaches the identity and the placement it is measuring from.
+///
+/// The seam exists because the same question gets asked twice about different places. Before an
+/// execution owns a boundary, the only thing there is to measure is the environment's baseline: the
+/// agent account in the distribution's shared namespace. Once a lease exists, the question that
+/// matters is about the placement the workload will really get - its own network namespace, behind
+/// its own attachment, under the mount sandbox.
+///
+/// Both are answered by the same reach logic deliberately. Two implementations of "can the agent
+/// reach the Hub" would be two chances to disagree, and the one that mattered would be the one
+/// nobody re-read.
+/// </summary>
+internal interface IHardProbePlacement
+{
+    Task<WslCallResult> RunAsAgentAsync(IReadOnlyList<string> arguments, CancellationToken ct);
+}
+
+/// <summary>
 /// What an environment's network really does, asked from the identity that matters.
 ///
 /// Every negative answer here is measured from the agent's own account, inside the target
@@ -38,6 +56,14 @@ public sealed class WslHardNetworkProbe : IHardNetworkProbe
 
     private readonly IWslExecutionGateway _gateway;
     private readonly string? _unavailable;
+
+    /// <summary>
+    /// Where the agent-side attempts are made from, when it is not the environment's baseline.
+    ///
+    /// Null means the distribution's shared namespace, which is all there is to measure before a
+    /// lease exists. Set means this execution's own placement, which is what the workload gets.
+    /// </summary>
+    private IHardProbePlacement? _placement;
 
     private WslHardNetworkProbe(IWslExecutionGateway gateway, string? unavailable)
     {
@@ -378,9 +404,62 @@ public sealed class WslHardNetworkProbe : IHardNetworkProbe
         HardIsolationProfile profile, IReadOnlyList<string> arguments, CancellationToken ct) =>
         RunAsync(profile, profile.ServiceUser.Trim(), arguments, ct);
 
+    /// <summary>
+    /// The agent's own attempt, from whichever placement this probe was pointed at.
+    ///
+    /// Every negative answer in this file goes through here, so pointing the probe at a real
+    /// execution placement changes where the whole measurement happens and nothing about what it
+    /// concludes.
+    /// </summary>
     private Task<WslCallResult> AgentAsync(
         HardIsolationProfile profile, IReadOnlyList<string> arguments, CancellationToken ct) =>
-        RunAsync(profile, profile.AgentUser.Trim(), arguments, ct);
+        _placement is { } placement
+            ? placement.RunAsAgentAsync(arguments, ct)
+            : RunAsync(profile, profile.AgentUser.Trim(), arguments, ct);
+
+    /// <summary>
+    /// The host-reachability answers, measured from one execution's live placement.
+    ///
+    /// The targets still come from the environment's baseline topology, because the addresses a
+    /// control plane would be reachable at - the host's own address on this subnet, and loopback -
+    /// are facts about the machine rather than about the namespace. What changes is where the
+    /// attempts are made from, which is the entire question: an isolated workload reaching the Hub
+    /// is a workload that can edit the record of its own run.
+    /// </summary>
+    internal async Task<IReadOnlyList<ReadinessCheck>> ProbePlacementAsync(
+        HardIsolationProfile profile,
+        IHardProbePlacement placement,
+        CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(profile);
+        ArgumentNullException.ThrowIfNull(placement);
+
+        if (_unavailable is { } problem)
+        {
+            return
+            [
+                ReadinessCheck.Unknown(HardIsolationChecks.HostLoopbackDisabled, problem),
+                ReadinessCheck.Unknown(HardIsolationChecks.ControlPlaneUnreachable, problem),
+            ];
+        }
+
+        // Read before the placement is attached: the addresses and routes wanted here are the
+        // environment's, which is where the host is reachable from at all.
+        var topology = await ReadTopologyAsync(profile, ct);
+
+        _placement = placement;
+
+        try
+        {
+            var reach = await ReachAsync(profile, topology, ct);
+
+            return [reach.HostLoopback, reach.ControlPlane];
+        }
+        finally
+        {
+            _placement = null;
+        }
+    }
 
     private Task<WslCallResult> RootAsync(
         HardIsolationProfile profile, IReadOnlyList<string> arguments, CancellationToken ct) =>

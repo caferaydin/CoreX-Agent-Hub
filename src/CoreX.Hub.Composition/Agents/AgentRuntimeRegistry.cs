@@ -78,6 +78,79 @@ public static class AgentRuntimeRegistry
             + $"installation does not declare (declared: {known}).");
     }
 
+    /// <summary>
+    /// Every scripted runtime key whose fixture lives inside an isolated environment.
+    ///
+    /// Asked by composition so that a runtime and an organization cannot be paired the wrong way
+    /// round. The two mistakes are symmetric and both fail late and confusingly without this: a hard
+    /// organization naming a host runtime would hand a Windows path to a Linux workload, and a
+    /// logical organization naming an isolated one would try to launch a path this machine has no
+    /// file at.
+    /// </summary>
+    public static IReadOnlySet<string> IsolatedRuntimeKeys(HubConfig config)
+    {
+        ArgumentNullException.ThrowIfNull(config);
+
+        return config.Agents.ScriptedRuntimes
+            .Where(r => IsIsolated(r.FixtureLocation))
+            .Select(r => r.Key)
+            .Where(k => !string.IsNullOrWhiteSpace(k))
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+    }
+
+    private static bool IsIsolated(string? location) =>
+        string.Equals((location ?? string.Empty).Trim(), "Isolated", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// The fixture path, checked against the filesystem the declaration says it is on.
+    ///
+    /// A host fixture is confirmed to exist, which is what stops an execution row being written for
+    /// a runtime that cannot start. An isolated fixture is checked for shape only - it is a path on
+    /// another machine, and the machine that has it answers for it when the workload is launched
+    /// there. Neither is normalised into the other: running the host's path resolution over a Linux
+    /// path is what produced <c>D:\opt\...</c> out of <c>/opt/...</c>.
+    /// </summary>
+    private static string ResolveFixturePath(ScriptedRuntimeConfig declared)
+    {
+        var path = (declared.FixturePath ?? string.Empty).Trim();
+        var location = (declared.FixtureLocation ?? string.Empty).Trim();
+
+        if (location.Length > 0
+            && !IsIsolated(location)
+            && !string.Equals(location, "Host", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new HubConfigurationException(
+                $"scripted runtime '{declared.Key}' declares fixtureLocation '{declared.FixtureLocation}', "
+                + "which is not one of: Host, Isolated.");
+        }
+
+        if (!IsIsolated(location))
+        {
+            var full = Path.GetFullPath(path);
+
+            if (!File.Exists(full))
+            {
+                throw new HubConfigurationException(
+                    $"scripted runtime '{declared.Key}' names a fixture executable that does not exist: {full}");
+            }
+
+            return full;
+        }
+
+        if (!path.StartsWith('/')
+            || path.Contains('\\', StringComparison.Ordinal)
+            || path.Contains(':', StringComparison.Ordinal)
+            || path.Any(char.IsWhiteSpace)
+            || path.Any(char.IsControl))
+        {
+            throw new HubConfigurationException(
+                $"scripted runtime '{declared.Key}' is declared Isolated, so its fixture path must be one "
+                + $"absolute path inside the environment carrying no arguments; '{declared.FixturePath}' is not.");
+        }
+
+        return path;
+    }
+
     private static void AddScripted(
         IDictionary<string, IAgentRuntime> runtimes,
         HubConfig config,
@@ -107,13 +180,7 @@ public static class AgentRuntimeRegistry
                     + string.Join(", ", Enum.GetNames<ScriptedAgentMode>()));
             }
 
-            var fixturePath = Path.GetFullPath(declared.FixturePath);
-
-            if (!File.Exists(fixturePath))
-            {
-                throw new HubConfigurationException(
-                    $"scripted runtime '{declared.Key}' names a fixture executable that does not exist: {fixturePath}");
-            }
+            var fixturePath = ResolveFixturePath(declared);
 
             runtimes[declared.Key] = new ScriptedAgentRuntime(
                 new ScriptedAgentOptions { FixtureExecutablePath = fixturePath, Mode = mode },

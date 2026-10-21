@@ -84,7 +84,15 @@ public sealed class HardIsolationAdmissionService : IIsolationAdmission
 
         var readiness = await _probe.ProbeAsync(slug, profile, ct);
 
-        if (!readiness.IsReady)
+        // Gate A, and only Gate A. What this can require is what is true of an idle organization:
+        // the environment, the identities, the roots, the kernel facilities, the host separation.
+        //
+        // It deliberately does not require the live boundary. That state is built by this
+        // execution's own lease, which is taken after admission, so requiring it here refused every
+        // first execution and left the fabric no one was ever admitted to create. The live checks
+        // are not waived - they are asked in Gate B, after the lease, before anything repository
+        // controlled runs.
+        if (!readiness.IsAdmissionEligible)
         {
             return new HardIsolationAssessment(
                 slug,
@@ -92,7 +100,8 @@ public sealed class HardIsolationAdmissionService : IIsolationAdmission
                 IsolationTopologyReadiness.For(slug, []),
                 IsolationAdmissionDecision.Refused(
                     IsolationRefusal.NotReady,
-                    $"the hard isolated environment is not established: {Describe(readiness)}."));
+                    "the hard isolated environment is not established: "
+                    + $"{Describe(readiness, HardIsolationChecks.PreAcquireRequired)}."));
         }
 
         var topology = await EvaluateTopologyAsync(slug, ct);
@@ -159,11 +168,24 @@ public sealed class HardIsolationAdmissionService : IIsolationAdmission
         return IsolationTopologyReadiness.For(subject, participants);
     }
 
-    private static string Describe(HardIsolationReadiness readiness)
+    /// <summary>
+    /// The unmet checks worth naming, from one phase's required set.
+    ///
+    /// Scoped to the phase deliberately. Listing a live boundary check as the reason an idle
+    /// organization was refused admission would send an operator to build something by hand that
+    /// the Hub builds for itself.
+    /// </summary>
+    private static string Describe(HardIsolationReadiness readiness, IReadOnlyList<string> required)
     {
-        var unmet = readiness.Checks.Where(c => c.Status != ReadinessStatus.Pass).Take(3).ToList();
+        var unmetIds = readiness.UnmetAmong(required);
+
+        var unmet = readiness.Checks
+            .Where(c => unmetIds.Contains(c.Id, StringComparer.Ordinal))
+            .Take(3)
+            .ToList();
+
         var summary = string.Join("; ", unmet.Select(c => $"{c.Id} ({c.Status.ToString().ToLowerInvariant()})"));
-        var remaining = readiness.UnmetCheckIds.Count - unmet.Count;
+        var remaining = unmetIds.Count - unmet.Count;
 
         return remaining > 0 ? $"{summary}; and {remaining} more" : summary;
     }

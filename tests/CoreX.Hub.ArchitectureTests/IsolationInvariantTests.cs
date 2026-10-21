@@ -1749,15 +1749,19 @@ public sealed class IsolationInvariantTests
         var probe = CodeOnly(SourceOf(NetworkProbeFileName));
 
         // The table is read as root; the agent is only ever asked to try to reach things.
-        // The loaded table is read by the fabric as the service identity; the probe never reads it.
+        // Reading a ruleset needs CAP_NET_ADMIN, so the fabric asks as root; the probe never reads it.
         Assert.DoesNotContain("ActivePolicy", probe, StringComparison.Ordinal);
 
-        Assert.Contains(
-            "ServiceAsync(profile, HardNetworkCommands.ActivePolicy()",
-            CodeOnly(SourceOf(FabricFileName)),
-            StringComparison.Ordinal);
+        var fabric = CodeOnly(SourceOf(FabricFileName));
+        Assert.Contains("RootAsync(profile, HardNetworkCommands.ActivePolicy()", fabric, StringComparison.Ordinal);
+        Assert.DoesNotContain("ServiceAsync(profile, HardNetworkCommands.ActivePolicy()", fabric, StringComparison.Ordinal);
 
-        foreach (Match agentCall in Regex.Matches(probe, @"AgentAsync\(\s*profile,\s*HardNetworkCommands\.(?<c>\\w+)"))
+        var agentCalls = Regex.Matches(probe, @"AgentAsync\(\s*profile,\s*HardNetworkCommands\.(?<c>\w+)");
+
+        // An empty match set would pass the loop below without having inspected anything.
+        Assert.NotEmpty(agentCalls);
+
+        foreach (Match agentCall in agentCalls)
         {
             Assert.Contains(agentCall.Groups["c"].Value, new[] { "Reach", "ProxyEnvironment" });
         }
@@ -2300,6 +2304,161 @@ public sealed class IsolationInvariantTests
     public void An_empty_execution_identity_is_refused(string fileName) =>
         Assert.Contains(
             "ThrowIfEqual(executionId, Guid.Empty)", CodeOnly(SourceOf(fileName)), StringComparison.Ordinal);
+
+    // -- the two hard gates ------------------------------------------------------------------
+
+    /// <summary>
+    /// Admission does not require the boundary it authorises the creation of.
+    ///
+    /// The defect the first real acceptance found, encoded as a shape. Every live fabric check is
+    /// built by an execution's own lease, the lease is taken after admission, so an admission that
+    /// required them could never be satisfied by any machine - the first execution was impossible
+    /// and would have stayed impossible however well an operator provisioned.
+    ///
+    /// The rule is a set relation rather than a comment, because the way this comes back is somebody
+    /// adding a live check to the pre-acquire list without noticing what builds it.
+    /// </summary>
+    [Fact]
+    public void Admission_never_requires_the_live_boundary()
+    {
+        Assert.Empty(
+            HardIsolationChecks.PreAcquireRequired
+                .Intersect(HardIsolationChecks.PostAcquireRequired, StringComparer.Ordinal));
+
+        var admission = CodeOnly(SourceOf(AdmissionFileName));
+
+        // The narrow question, asked by name. Calling the full picture here is the deadlock.
+        Assert.Contains("readiness.IsAdmissionEligible", admission, StringComparison.Ordinal);
+        Assert.DoesNotContain("readiness.IsReady", admission, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Every required check is classified exactly once.
+    ///
+    /// A check in no group would be a required property nobody ever asks; a check in two would be
+    /// one whose phase depends on which list a reader happened to open.
+    /// </summary>
+    [Fact]
+    public void Every_required_check_belongs_to_exactly_one_phase()
+    {
+        var classified = HardIsolationChecks.PreAcquireRequired
+            .Concat(HardIsolationChecks.PostAcquireRequired)
+            .Concat(HardIsolationChecks.ConditionalOnPeer)
+            .ToList();
+
+        Assert.Equal(classified.Count, classified.Distinct(StringComparer.Ordinal).Count());
+
+        Assert.Equal(
+            HardIsolationChecks.Required.Order(StringComparer.Ordinal),
+            classified.Order(StringComparer.Ordinal));
+    }
+
+    /// <summary>
+    /// The live boundary is measured after it is built and before anything untrusted runs.
+    ///
+    /// Placed in the one path every hard port already goes through, so no port has to remember the
+    /// order and a port that forgot could not be the thing that ran work outside a measured
+    /// boundary.
+    /// </summary>
+    [Fact]
+    public void The_live_boundary_is_measured_inside_the_acquisition_path()
+    {
+        var environment = CodeOnly(SourceOf("HardExecutionEnvironment.cs"));
+
+        var acquire = environment.IndexOf("HardExecutionLease.AcquireAsync(", StringComparison.Ordinal);
+        var measure = environment.IndexOf("_boundary.MeasureAsync(", StringComparison.Ordinal);
+        var assign = environment.IndexOf("_lease = lease;", StringComparison.Ordinal);
+
+        Assert.True(acquire > 0 && measure > acquire, "the boundary is measured after it is built");
+        Assert.True(assign > measure, "the lease becomes usable only after it has been measured");
+
+        // And a boundary that did not hold is released rather than left running.
+        Assert.Contains("await lease.DisposeAsync();", environment, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The post-acquire probe measures from the execution's own placement.
+    ///
+    /// Measuring the distribution's shared namespace would answer a question about somewhere the
+    /// workload is not, which is precisely what the pre-acquire measurement already does - and why
+    /// its answer cannot stand in for this one.
+    /// </summary>
+    [Fact]
+    public void The_live_probe_runs_from_the_executions_own_placement()
+    {
+        var boundary = CodeOnly(SourceOf("PostAcquireHardBoundary.cs"));
+
+        Assert.Contains("_lease.Executor.RunAsync(", boundary, StringComparison.Ordinal);
+        Assert.Contains("ProbePlacementAsync(", boundary, StringComparison.Ordinal);
+
+        // And it verifies what the plane claims to have built rather than believing it.
+        Assert.Contains("fabric.VerifyAsync(", boundary, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A live check that did not pass stops the execution, whichever way it did not pass.
+    ///
+    /// Unknown is the one an optimistic implementation gets wrong. A probe that could not answer has
+    /// established nothing, and "no probe" must never read as "no problem".
+    /// </summary>
+    [Fact]
+    public void An_unmeasured_live_check_is_never_ready()
+    {
+        var readiness = CodeOnly(SourceOf("IsolationReadiness.cs"));
+
+        // One implementation of "passed", used by every phase, comparing against Pass and nothing
+        // else - so no phase can acquire a softer definition of ready than the others.
+        Assert.Contains("c.Status == ReadinessStatus.Pass", readiness, StringComparison.Ordinal);
+        Assert.DoesNotContain("!= ReadinessStatus.Fail", readiness, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Having no peer is not a failed peer measurement.
+    ///
+    /// The conditional exists so a single-organization installation is not refused for a property it
+    /// has no way to violate. What it must never become is a rewrite of the probe's own answer:
+    /// applicability is the thing that changes, never the measurement.
+    /// </summary>
+    [Fact]
+    public void The_peer_check_is_conditional_and_never_fabricated()
+    {
+        Assert.Equal(
+            [HardIsolationChecks.PeerNetworkUnreachable],
+            HardIsolationChecks.ConditionalOnPeer);
+
+        // The probe still reports what it found. Nothing turns its unknown into a pass.
+        var probe = CodeOnly(SourceOf(NetworkProbeFileName));
+
+        Assert.Contains(
+            "ReadinessCheck.Unknown(" + nameof(HardIsolationChecks) + "." + nameof(HardIsolationChecks.PeerNetworkUnreachable),
+            probe,
+            StringComparison.Ordinal);
+
+        Assert.DoesNotContain(
+            "ReadinessCheck.Passed(" + nameof(HardIsolationChecks) + "." + nameof(HardIsolationChecks.PeerNetworkUnreachable),
+            probe,
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The orchestrator records a refused boundary without learning what a boundary is.
+    ///
+    /// The signal it catches is a generic execution policy refusal. A pipeline that knew about
+    /// namespaces would be a pipeline that had to be changed the next time containment did.
+    /// </summary>
+    [Fact]
+    public void The_pipeline_records_a_policy_refusal_without_isolation_vocabulary()
+    {
+        var pipeline = CodeOnly(SourceOf("ExecutionOrchestrator.Pipeline.cs"));
+
+        Assert.Contains("catch (ExecutionPolicyRefusedException", pipeline, StringComparison.Ordinal);
+        Assert.Contains("ExecutionOutcome.RuntimePolicyViolation", pipeline, StringComparison.Ordinal);
+
+        foreach (var vocabulary in new[] { "nft", "veth", "Wsl", "WSL", "netns", "HardExecutionLease", "namespace path" })
+        {
+            Assert.DoesNotContain(vocabulary, pipeline, StringComparison.Ordinal);
+        }
+    }
 
     // -- the shared filesystem boundary ------------------------------------------------------
 

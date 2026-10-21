@@ -252,6 +252,7 @@ public sealed class HardExecutionRoutingTests : IDisposable
         var resolver = new HardExecutionEnvironmentResolver(
             consumers,
             new ScriptedEnvironmentChannel(new ScriptedExecutionEnvironment()),
+            new SoundBoundaryGate(),
             new TrustedGuestFileTransfer(new ScriptedExecutionEnvironment(), Profile()),
             Profile(),
             "org-x");
@@ -281,6 +282,7 @@ public sealed class HardExecutionRoutingTests : IDisposable
             new HardExecutionEnvironment(
                 new HardNetworkConsumers(new ScriptedFabric(), _root),
                 new ScriptedEnvironmentChannel(new ScriptedExecutionEnvironment()),
+                new SoundBoundaryGate(),
                 Profile(),
                 "org-x",
                 Guid.Empty));
@@ -322,6 +324,7 @@ public sealed class HardExecutionRoutingTests : IDisposable
         new(
             new HardNetworkConsumers(new ScriptedFabric(), _root),
             new ScriptedEnvironmentChannel(new ScriptedExecutionEnvironment()),
+            new SoundBoundaryGate(),
             new TrustedGuestFileTransfer(new ScriptedExecutionEnvironment(), Profile()),
             Profile(),
             "org-x");

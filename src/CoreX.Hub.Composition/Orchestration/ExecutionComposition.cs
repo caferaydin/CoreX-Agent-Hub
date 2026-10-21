@@ -188,9 +188,11 @@ public sealed class ExecutionComposition : IAsyncDisposable
         // One decision for the whole execution, taken here and never revisited. Asking each port to
         // read the organization's level for itself would let a configuration change between two of
         // those reads produce an execution whose agent was contained and whose verifier was not.
+        var isolatedRuntimes = AgentRuntimeRegistry.IsolatedRuntimeKeys(config);
+
         var routing = RouteFor(
             session, config, organization, verificationProfile, agentProfile, runtimes,
-            out var hardProfile);
+            isolatedRuntimes, out var hardProfile);
 
         if (routing.IsRefused)
         {
@@ -228,9 +230,20 @@ public sealed class ExecutionComposition : IAsyncDisposable
 
         if (routing.IsHard)
         {
+            var fabric = WslHardNetworkFabric.Create(session.DataDirectory);
+
+            // Whether peer separation is a question this installation can even ask. With one hard
+            // organization there is no neighbour to fail to reach, and refusing an execution for a
+            // property it has no way to violate would be refusing it for arithmetic. The moment a
+            // second one exists the check becomes required, and is proved behaviourally.
+            var peers = config.Organizations
+                .Count(o => o.HardIsolation is not null
+                            && string.Equals(o.IsolationLevel, "Hard", StringComparison.OrdinalIgnoreCase));
+
             if (!HardExecutionEnvironmentResolver.TryCreate(
-                    new HardNetworkConsumers(
-                        WslHardNetworkFabric.Create(session.DataDirectory), session.DataDirectory),
+                    new HardNetworkConsumers(fabric, session.DataDirectory),
+                    fabric,
+                    () => peers > 1,
                     hardProfile!,
                     organization.Slug.Value,
                     session.DataDirectory,
@@ -250,7 +263,7 @@ public sealed class ExecutionComposition : IAsyncDisposable
         // ending as ReviewUnusable because of a typo in a file.
         var reviewEngine = BuildReviewer(
             session, config, organization, repository, reviewer, runtimes, workspaceManager, location,
-            evidenceStore, resolver);
+            evidenceStore, resolver, isolatedRuntimes);
 
         // The five ports, chosen together or not at all.
         //
@@ -335,13 +348,23 @@ public sealed class ExecutionComposition : IAsyncDisposable
         VerificationProfile? verificationProfile,
         Domain.Catalog.AgentProfile? agentProfile,
         IReadOnlyDictionary<string, IAgentRuntime> runtimes,
+        IReadOnlySet<string> isolatedRuntimes,
         out HardIsolationProfile? hardProfile)
     {
         hardProfile = null;
 
         if (organization.IsolationLevel != Domain.Catalog.IsolationLevel.Hard)
         {
-            return ExecutionIsolationRouting.Logical;
+            // The other half of the pairing rule. A runtime whose executable lives inside an
+            // isolated environment has nothing to run on this machine, and letting a logical
+            // organization name one would produce a launch failure at the agent step rather than a
+            // configuration refusal now.
+            return agentProfile is { } logicalProfile && isolatedRuntimes.Contains(logicalProfile.RuntimeKey)
+                ? ExecutionIsolationRouting.Refuse(
+                    $"agent profile '{logicalProfile.Name}' names runtime '{logicalProfile.RuntimeKey}', whose "
+                    + $"fixture lives inside an isolated environment, but organization "
+                    + $"'{organization.Slug}' is not hard isolated and has no such environment to run it in.")
+                : ExecutionIsolationRouting.Logical;
         }
 
         if (!new ConfiguredHardIsolationProfiles(config)
@@ -364,7 +387,26 @@ public sealed class ExecutionComposition : IAsyncDisposable
             runtimeKey.Length > 0 && runtimes.TryGetValue(runtimeKey, out var selected) ? selected : null,
             runtimeKey);
 
-        if (routing.IsRefused || verificationProfile is null)
+        if (routing.IsRefused)
+        {
+            return routing;
+        }
+
+        // Hard capable is not the same as hard placed. A runtime can implement the seam perfectly and
+        // still name an executable that only exists on this machine, and handing that path to an
+        // isolated workload would mean asking Linux to run a Windows path - which fails at exec time,
+        // long after an execution row exists, and reads like a broken boundary rather than a
+        // misconfigured runtime.
+        if (agentProfile is { } profile && !isolatedRuntimes.Contains(profile.RuntimeKey))
+        {
+            return ExecutionIsolationRouting.Refuse(
+                $"agent profile '{profile.Name}' names runtime '{profile.RuntimeKey}', whose executable is "
+                + $"declared on this machine rather than inside organization '{organization.Slug}''s "
+                + "environment. A hard organization runs what is in its own environment, and a host path "
+                + "means nothing there.");
+        }
+
+        if (verificationProfile is null)
         {
             return routing;
         }
@@ -563,7 +605,8 @@ public sealed class ExecutionComposition : IAsyncDisposable
         WorkspaceManager workspaceManager,
         RepositoryLocation location,
         EvidenceBlobStore evidenceStore,
-        HardExecutionEnvironmentResolver? hard)
+        HardExecutionEnvironmentResolver? hard,
+        IReadOnlySet<string> isolatedRuntimes)
     {
         if (reviewer.ProfileName is not { Length: > 0 } name)
         {
@@ -630,6 +673,16 @@ public sealed class ExecutionComposition : IAsyncDisposable
         {
             throw new HubConfigurationException(
                 HardReviewerCompatibility.Refusal(profile.RuntimeKey, profile.Name));
+        }
+
+        // And placed inside it, not merely able to be. The reviewer runs the same way the implementer
+        // does, so it is subject to the same pairing rule.
+        if (hard is not null && !isolatedRuntimes.Contains(profile.RuntimeKey))
+        {
+            throw new HubConfigurationException(
+                $"reviewer profile '{profile.Name}' names runtime '{profile.RuntimeKey}', whose executable is "
+                + $"declared on this machine rather than inside organization '{organization.Slug}''s "
+                + "environment; a hard organization's review runs inside the boundary or not at all.");
         }
 
         var reviewRoot = Path.Combine(session.DataDirectory, "review");

@@ -104,9 +104,25 @@ public sealed partial class ExecutionOrchestrator
         // The same pinned commit is handed back, so the worktree is materialised from what
         // this execution already claims to be based on. The branch is free to move in this
         // window; it simply stops being the authority the moment the commit was captured.
-        var workspace = await _workspace.PrepareAsync(
-            execution.Id,
-            start.RepositoryId, preflight, task.TaskKey.Value, execution.AttemptNo, ct);
+        PreparedExecutionWorkspace? workspace;
+
+        try
+        {
+            workspace = await _workspace.PrepareAsync(
+                execution.Id,
+                start.RepositoryId, preflight, task.TaskKey.Value, execution.AttemptNo, ct);
+        }
+        catch (ExecutionPolicyRefusedException refused)
+        {
+            // A policy the port measured and found unmet. Distinct from a workspace that could not
+            // be prepared: nothing was wrong with the repository, and recording this as a failure
+            // would lose the only fact worth keeping - that the run was refused rather than broken.
+            await FinishStepAsync(
+                execution.Id, ExecutionStepKind.PrepareWorkspace, StepFate.Failed, refused.Message, ct);
+
+            return await CompleteAsync(
+                execution, task, ExecutionOutcome.RuntimePolicyViolation, refused.Message, null, ct);
+        }
 
         if (workspace is null)
         {
