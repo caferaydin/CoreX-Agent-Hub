@@ -129,7 +129,7 @@ public sealed class CodexCompositionTests
 
         // The pinned build lives outside the repository. A provider binary is not source.
         Assert.False(
-            declared.ExecutablePath.Contains("CoreX Agent Hub", StringComparison.OrdinalIgnoreCase),
+            declared.ExecutablePath.Contains("Core X Agent Hub", StringComparison.OrdinalIgnoreCase),
             "the pinned provider binary must not live inside the repository");
 
         var organization = Assert.Single(config.Organizations, o => o.Slug == "core-x-logic");

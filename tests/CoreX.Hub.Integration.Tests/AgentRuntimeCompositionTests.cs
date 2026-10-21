@@ -192,7 +192,7 @@ public sealed class AgentRuntimeCompositionTests
         // disposable snapshot of the commit being measured. Asserting they matched made the
         // shipped configuration look broken every time it was actually being verified.
         Assert.True(Path.IsPathFullyQualified(repository.LocalPath));
-        Assert.Equal("CoreX Agent Hub", new DirectoryInfo(repository.LocalPath.TrimEnd('\\')).Name);
+        Assert.Equal("Core X Agent Hub", new DirectoryInfo(repository.LocalPath.TrimEnd('\\')).Name);
 
         // The organization root has to contain the repository, or nothing can be prepared.
         Assert.StartsWith(organization.FilesystemRoot, repository.LocalPath, StringComparison.OrdinalIgnoreCase);

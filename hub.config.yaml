@@ -137,7 +137,7 @@ organizations:
         repositories:
           - slug: corex-agent-hub
             name: corex-agent-hub
-            localPath: 'D:\Private\Cafer AYDIN\CoreX Agent Hub'
+            localPath: 'D:\Private\Cafer AYDIN\CorexLogic\Projeler\Core X Agent Hub'
             defaultBranch: main
             protectedBranches:
               - main
@@ -217,6 +217,10 @@ organizations:
                     resultParser: none
 
   # --- Geliştirme / Loop Zero fixture organizasyonu -------------------------
+  # Yalnızca katalog örneğidir. Loop Zero ve e2e takımları kendi geçici config'lerini ve
+  # fixture repolarını üretir; bu makinede 'D:\cx\_fixtures' altında bir repo YOKTUR ve
+  # 'scripted' runtimeKey'i agents.scriptedRuntimes altında bildirilmemiştir. Bu organizasyonda
+  # 'hub run' için ikisinin de kurulması gerekir.
   - slug: hub-dev
     name: CoreX Agent Hub Development
     filesystemRoot: 'D:\cx\_fixtures\hub-dev'
@@ -292,6 +296,8 @@ organizations:
 
   # --- Sert izolasyon kapısı fixture'ı (ADR-0017 davranışını görünür kılar) --
   # Gerçek bir şirket DEĞİLDİR. Yalnızca kapı davranışının CLI'da gözlemlenmesi içindir.
+  # Repository yolu bu makinede yoktur ve kullanılmaz: organizasyon Blocked yüklenir, hiçbir
+  # execution başlatamaz.
   - slug: isolation-gate-fixture
     name: Hard Isolation Gate Fixture
     filesystemRoot: 'D:\cx\_fixtures\isolation-gate-fixture'
