@@ -5,15 +5,19 @@ Faz 10B-2: **Windows Job Object kaynak limitleri**.
 Faz 10C-1: **sert izolasyon hazırlığı ve topoloji kapısı** (WSL'de görev çalıştırma YOK).
 Faz 10C-2: **WSL2 sert süreç yürütme düzlemi** (systemd transient unit + cgroup çevrelemesi).
 Faz 10C-3A: **sert workspace sınırı** (sabitlenmiş kaynak → Linux-native git worktree).
+Faz 10C-3B1: **organizasyon başına kanıt deposu ve sağlayıcı oturumu sınırı**.
+Faz 10C-3B2: **ağ sınırı** (güvenilen paylaşılan kök + organizasyon başına açık netns).
+Faz 10C-4: **paylaşılan WSL yüzeyleri, tam Hard yönlendirme, iki aşamalı sınır kapısı**.
 
-Bu belge Faz 10'un sertleştirme işini kaydeder. Şu an 10B-1, 10B-2, 10C-1, 10C-2 ve 10C-3A
-uygulanmıştır; geri kalan dilimler (10C-3B ve sonrası) aşağıda ayrıca işaretlenmiştir ve
-**uygulanmamıştır**.
+Bu belge Faz 10'un sertleştirme işini kaydeder. 10B-1'den 10C-4'e kadar bütün dilimler
+**kod olarak** uygulanmıştır. Her bölüm kendi diliminin o anki durumunu anlatır; sonraki bir dilimin
+kapattığı bir engel, eski bölümde "açık" olarak kalmış olabilir — güncel durum §15'tedir.
 
-**Tam Hard görev kabulü 10C-3A'dan sonra da REDDEDİLMEKTEDİR** — sebebi §11.12 ve §12.20'dedir.
+**G-K1 … G-K5 açıktır ve Kronos BLOKE'dir** (§15.5). Kod yolunun var olması kabul değildir: kabul,
+bu makinede tek kullanımlık Hard ortamlarla ölçülen davranıştır.
 
-> **Sert workspace vardır ≠ Sert görev kullanılabilir.** Kaynak artık sınırın içindedir; context,
-> evidence, sağlayıcı kimlik doğrulaması ve ağ hâlâ host tarafındadır.
+> **Sert yol vardır ≠ Kronos onboarding'i açıktır.** Core X Logic `Logical` izolasyonla çalışır ve bu
+> belgedeki hiçbir açık kapıdan etkilenmez.
 
 ## 1. Kapatılan yarış
 
@@ -1975,9 +1979,135 @@ temizlendi):
 - **canonical karşılaştırma gerçek `nft list table` çıktısıyla uyuşur** (3B2B'nin açık kusuru kapandı)
 - son ek bırakıldığında tablolar silinir, `ip_forward` geri alınır, veth kalmaz
 
-#### 14.17.9 Hâlâ açık
+#### 14.17.9 Hâlâ açık (10C-3B2 kapanışında)
 
 - `/mnt/wsl` ve `/mnt/wslg` paylaşılmaya devam ediyor ve agent netns'in içinden bile yazabiliyor.
   Ağ dokusu bunu değiştirmez. `peer.filesystem.unreachable` **Fail**, **G-K2 açık**.
 - Tam Hard iş akışı yönlendirmesi yok; `IHardExecutionPlane` **kullanılamaz**.
 - G-K1..G-K5 **AÇIK**. Kronos **BLOCKED**.
+
+İlk iki madde 10C-4'te kod olarak kapatıldı (§15.1, §15.2); üçüncüsü geçerlidir.
+
+## 15. Faz 10C-4 — paylaşılan yüzeyler, tam yönlendirme, iki aşamalı sınır kapısı
+
+Üç parçadır: `b3841ad` (paylaşılan WSL dosya sistemi yüzeyleri), `5c8192c` (tam Hard iş akışı
+yönlendirmesi) ve `5c8192c`'nin bıraktığı döngüsel bağımlılığı kapatan iki aşamalı sınır kapısı.
+
+### 15.1 Paylaşılan WSL yüzeyleri (`b3841ad`)
+
+`/mnt/wsl`, makinedeki her WSL2 dağıtımında aynı kernel aygıtından bağlanan bir tmpfs'tir. İki
+tek-kullanımlık ortam, birinin oraya yazdığını diğerinin okuduğunu ölçtü; agent hesabı oraya
+yazabiliyordu. Bu host'a açılan bir pencere değil, **organizasyonlar arası bir kanaldır** ve açık
+bir netns onu kapatmaz: ağda kusursuz ayrılmış iki organizasyon birbirine dosya verebilir.
+
+- Her Hard iş yükü kendi mount namespace'inde başlar; bu yüzeylerin üstüne exec'ten **önce**
+  bağlanır (overmount). Hiçbir şey unmount edilmez: ortam bağlarını korur, güvenilen servis kimliği
+  onları görmeye devam eder ve namespace birimle birlikte yok olur — uzlaştırılacak makine durumu
+  kalmaz.
+- Ret, onsuz çalışan her yazımla da ölçüldü: traversal, agent'ın kendi workspace'inde yarattığı
+  symlink, `realpath`, `/proc/self/root` ve komşu bir sürecin `/proc/<pid>/root`'u. Çocuk bir user
+  namespace yine başlar — aksini söylemek yanlış olurdu — ama maskeli görünümü miras alır ve ne
+  yüzeyi ne de üst mount namespace'ini geri alabilir.
+- `/mnt/wslg` bu build'de ortam başınadır (iki fixture'da farklı kernel aygıtı); kanal o değildir.
+  Yine de reddedilir, aynı tmpfs'ten bağlanan `/run/user` ve `/tmp/.X11-unix` ile birlikte.
+- `peer.filesystem.unreachable` artık ortamın mount tablosunu ayrıştırmaz — o yalnızca `/mnt/wsl`'in
+  var olduğunu söyleyebilirdi, bu da her dağıtımda doğrudur ve kontrol hiçbir operatörün
+  kapatamayacağı bir koşul için kalıcı olarak düşerdi. Bunun yerine agent'ın kendi hesabıyla,
+  gönderilen sınırı taşıyan tek bir transient unit başlatır ve **sorar**. Yanına iki kontrol eklendi:
+  her paylaşılan yüzeyin erişilemezliği ve workspace'in sınırın içinde hâlâ çalıştığı. Her şeyi
+  reddetmek her reddi karşılardı ve işe yaramazdı.
+- `PrivateTmp=yes` kullanılmadı: özel bir `/var/tmp` da verdiği için onun altındaki bir execution kökü
+  iş yükü başlar başlamaz yok oluyor, her koşu ilk talimatından önce `chdir` hatasıyla ölüyordu. Soket
+  dizini adıyla reddedilir. Var olması gereken ama olmayan bir yüzey başlatmayı reddeder (listede bir
+  yazım hatası sessiz bir delik değil, başarısız bir koşu olur); makinenin çalıştırmıyor olabileceği
+  bir servise ait yüzey isteğe bağlıdır.
+
+### 15.2 Tam Hard yönlendirme (`5c8192c`)
+
+Hard bir organizasyonun execution'ı artık bir aşamada değil, **her aşamada** sınırın içinde çalışır.
+
+- Yönlendirme execution başına **tek karardır** ve `ExecutionComposition`'da yalnızca güvenilen
+  durumdan alınır: beyan edilen izolasyon seviyesi, operatörün yapılandırması, bu makinenin yürütme
+  düzlemi ve seçilen runtime'ın kendi yeteneği.
+- Beş port — workspace, evidence, agent, verification, review — `ExecutionPortSet` üzerinden
+  **birlikte** seçilir; karışık bir küme ifade edilemez. Agent'ı içeride, doğrulamayı Windows'ta
+  çalıştırmak sorunu repository'nin kendi test süitini çalıştıran adıma taşımak olurdu; reviewer'ı
+  dışarıda bırakmak bir adım daha ileri.
+- Beşi tek bir `HardExecutionEnvironmentResolver` paylaşır. Resolver boş kurulur ve kabulden sonra,
+  ilk kullanımda dayanıklı `Execution.Id`'yi **bir kez** benimser. `Guid.Empty` ve ikinci bir kimlik
+  reddedilir: aynı kompozisyonu paylaşan iki execution, birinin diğerinin sınırında çalışması ve
+  ikisinin de izole görünmesi demek olurdu.
+- Hard doğrulama araçları `hardIsolation.verificationExecutables`'tan çözülür; varlıkları ortamın
+  **içinde**, güvenilen servis kimliğiyle ölçülür. Host haritasına düşüş ve yol çevirisi yoktur.
+  Fiziksel olarak execution kökü, kanıt kökü veya scratch altına düşen bir araç reddedilir: agent'ın
+  yazabildiği bir ikili agent'ı ölçemez.
+- Raporlar dondurulmuş 8 MiB okuma tavanıyla geri okunur, önce metinsel sonra fiziksel olarak
+  kapsanır — workspace dışına giden bir symlink izlenmez, reddedilir — ve mevcut ayrıştırıcılara
+  verilir. Bir koşunun ne anlama geldiğinin sahibi hâlâ tek `VerificationEngine`'dir.
+- Bağlarken bulunan kusur: `HardExecutionLease` ağ dokusunu doğrudan çağırıyordu. Ek organizasyon
+  başına olduğundan, iki eşten önce biten diğerinin namespace'ini altından sökebilirdi. Lease artık
+  tek bir `Execution.Id` talebi tutar ve bir guard dokuyu erişim dışında tutar.
+
+### 15.3 İki aşamalı sınır kapısı
+
+`5c8192c`'nin bıraktığı döngü: kabul canlı ağ dokusunu (Hub tablosu, organizasyon netns'i, ek)
+istiyordu; o dokuyu ise kabulden **sonra** alınan `HardExecutionLease` kurar. Bir kapı, yaratılmasını
+kapıladığı şeyi isteyemez — ilk Hard execution her zaman reddediliyordu. Çözüm daha az istemek
+değil, **doğru anda** sormaktır.
+
+| Küme | Kontroller | Ne zaman |
+|---|---|---|
+| `PreAcquireRequired` | Ortam, kimlikler, kökler, kernel olanakları, host ayrımı, beyan edilen tavanlar | Kabulde (Kapı A) |
+| `PostAcquireRequired` | `global-network-fabric.ready`, `org-network-namespace.ready`, `org-network-attachment.ready`, host loopback kapalı, `control-plane.unreachable` | Lease kurulduktan sonra, repository kontrollü hiçbir şey çalışmadan önce (Kapı B) |
+| `ConditionalOnPeer` | `peer.network.unreachable` | Kapı B'de, yalnızca birden fazla Hard organizasyon yapılandırılmışsa |
+
+- **Kapı A.** `HardIsolationAdmissionService` yalnızca `IsAdmissionEligible` ister. Bu, Hub'ın
+  sınırı kurmayı **denemesinin** güvenli olduğunu söyler; sınırın var olduğunu söylemez.
+- **Kapı B.** `PostAcquireHardBoundary` / `MeasuredHardBoundaryGate`: lease alındıktan sonra
+  `fabric.VerifyAsync` çağrılır, ardından ölçüm agent olarak ve execution'ın **kendi** lease'inin
+  içinden — kendi netns'i ve mount sandbox'ı (`LeasedProbePlacement`) — yapılır. Sınır sağlam değilse
+  lease bırakılır ve `HardLeaseRefusal("boundary")` kaydedilir.
+- **Ret yolu.** `HardWorkspaceGateway` `EnsureBoundaryAsync` çağırır ve sınır sağlam değilse
+  `ExecutionPolicyRefusedException` fırlatır; pipeline bunu `PrepareWorkspace`'te yakalar ve
+  `ExecutionOutcome.RuntimePolicyViolation` yazar.
+- **Peer koşullu, isteğe bağlı değil.** Tek organizasyonlu bir kurulumda ulaşılamayacak bir komşu
+  yoktur ve "komşu yok", "komşuya ulaşıldı" demek değildir. İkinci bir Hard ortam yapılandırıldığı
+  anda kontrol zorunlu olur ve davranışsal ölçülür.
+- **Unknown asla geçiş değildir** (`IsReadyFor`): kimsenin yapamadığı bir kontrol hiçbir şey kurmamıştır.
+- `hub doctor isolation` canlı sınır kontrollerini boşta bir organizasyon için `inactive` gösterir:
+  execution yokken namespace, ek ve erişilecek bir şey yoktur; FAIL basmak operatörü Hub'ın her
+  execution için kendisi kurduğu şeyi elle kurmaya gönderirdi. Kontroller gizlenmez.
+- Ağ dokusu yüklü ruleset'i **root** olarak okur: ruleset okumak `CAP_NET_ADMIN` ister ve servis
+  kimliğiyle sorulan kontrol, düzlem kusursuz kurulmuş olsa da her makinede geçilemezdi. Agent
+  politikayı ne uygular ne okur; mimari guard bunu kilitler.
+- Doğrulama snapshot'ları agent'a aittir (`chown -R`, mod `1770`, `.git` `0640`).
+- Scripted runtime'a `fixtureLocation` (`Host` | `Isolated`) eklendi (README, "Agent runtime
+  ayarları"). Hard bir organizasyonun agent ve reviewer runtime'ı `Isolated` olmak zorundadır;
+  `Logical` bir organizasyon `Isolated` bir runtime kullanamaz.
+
+### 15.4 Bu dilimde ölçülen ve ölçülmeyen
+
+**Ölçülen** — gerçek WSL olmadan, test ikizleriyle:
+
+- Kapı A / Kapı B ayrımı ve ret yolu: `HardBoundaryGateTests` (8).
+- `fixtureLocation` kuralları: `ScriptedFixtureLocationTests` (5).
+- Beş portun birlikte yönlendirilmesi: `HardExecutionRoutingTests` (12).
+- Yedi yeni mimari guard (`IsolationInvariantTests`), aralarında agent'ın politikayı ne uyguladığı ne
+  okuduğu ve yüklü ruleset'in root olarak okunduğu.
+- Tam çözüm regresyonu, 2026-10-21: 2.428 test, 0 başarısız, 0 atlanan, 0 uyarı.
+
+`COREX_HARD_TEST_ENV` verilmediğinde gerçek WSL testleri bilerek etkisiz kalır (`313be37`); bu koşuda
+verilmedi.
+
+**Ölçülmeyen:** Kapı B'nin gerçek bir Hard ortamda, gerçek bir execution'ın kendi lease'inin içinden
+geçtiği. Bu G-K kabulünün parçasıdır ve iki tek-kullanımlık ortam ister; bu makinede yalnızca
+`corex-hard-a-acceptance` kayıtlıdır.
+
+### 15.5 Hâlâ açık
+
+- **G-K1 … G-K5 AÇIK. Kronos BLOKE.** Kod yolu tamamdır; G-K kabulü, tek-kullanımlık iki Hard
+  ortamda gerçek bir execution üzerinden ölçülmedikçe kapanmaz.
+- **Gerçek sağlayıcı Hard bir ortamda çalışamaz.** `Isolated` olabilen tek runtime ailesi
+  scripted'dır. Claude Code ve Codex için ortam içi kurulum, kimlik doğrulama ayrımı (G-K3) ve sürüm
+  sabitlemesi (ADR-0024) yoktur.
+- Hub API kimlik doğrulaması kapsam dışıdır (§14.10); tam uzlaştırıcı yoktur (§12.16).

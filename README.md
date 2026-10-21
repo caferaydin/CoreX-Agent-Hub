@@ -5,7 +5,7 @@ Ticari bir ürün değildir; tek geliştirici iş istasyonunda, tek kullanıcı 
 
 Otoriter mimari doküman: [`docs/architecture/CoreX-Agent-Hub-Mimari-Plan-v1.1.1.md`](docs/architecture/CoreX-Agent-Hub-Mimari-Plan-v1.1.1.md)
 (durum: **ARCHITECTURE ACCEPTED — DISCOVERY CLOSED**).
-Kabul edilmiş kararlar: [`docs/adr/`](docs/adr/) (ADR-0001 … ADR-0023).
+Kabul edilmiş kararlar: [`docs/adr/`](docs/adr/) (ADR-0001 … ADR-0027).
 
 Bağımsız review: [`docs/phase-7-review.md`](docs/phase-7-review.md).
 
@@ -31,22 +31,27 @@ Bağımsız review: [`docs/phase-7-review.md`](docs/phase-7-review.md).
 | Faz 9C | Operatör eylemleri: create / ready / run / cancel | **TAMAM** |
 | Faz 9D | İnsan yönetişimi arayüzü: accept / review override / request-changes / reject | **TAMAM** |
 | Faz 9E | Production SPA barındırma + kalıcı karar geri okuması + gerçek tarayıcı kabulü | **TAMAM** |
-| Faz 10 | Sertleştirme + WSL2 sert izolasyon + Kronos kapısı | uygulanmadı |
+| Faz 10B-1 / 10B-2 | Yarışsız Windows süreç başlatma + Job Object kaynak limitleri | **TAMAM** |
+| Faz 10C-1 | Sert izolasyon hazırlığı + topoloji kapısı + `hub doctor isolation` | **TAMAM** |
+| Faz 10C-2 | WSL2 süreç düzlemi (systemd transient unit + cgroup) | **TAMAM** |
+| Faz 10C-3A | Sert workspace sınırı (Linux-native worktree) | **TAMAM** |
+| Faz 10C-3B1 / 10C-3B2 | Organizasyon başına kanıt/sağlayıcı oturumu sınırı + ağ dokusu | **TAMAM** |
+| Faz 10C-4 | Paylaşılan WSL yüzeyleri, tam Hard yönlendirme, iki aşamalı sınır kapısı | **KOD TAMAM** — G-K kabulü açık |
+| Kronos onboarding | G-K1 … G-K5 (mimari § L.4, ADR-0017) | **BLOKE** |
 
-Faz 1 kataloğu, görev modelini, Ready kapısını, kalıcılığı ve CLI'ı kurar.
-
-Faz 2 **yerel çalıştırma ilkellerini** ekler: tek süreç başlatma sınırı (`ProcessRunner`)
-ve yönetilen dosya sistemi güven sınırı (`FileSystemGuard`).
-
-Faz 3 **git/worktree izolasyonunu** ekler: repository ön kontrolü, base-commit sabitleme,
-izole agent worktree'si, worktree'ye özgü sertleştirme, kanıt toplama ve güvenli
-release/reconcile. Hâlâ agent çalıştırılmaz, doğrulama komutu yürütülmez, Context Pack
-üretilmez ve orchestration pipeline yoktur.
+Ayrıntı: Faz 1–9 bu belgenin aşağıdaki bölümlerinde, Faz 10
+[`docs/phase-10-hardening.md`](docs/phase-10-hardening.md)'dedir. Core X Logic organizasyonu
+`Logical` izolasyonla çalışır ve Faz 10'un açık kapılarından etkilenmez; açık kapılar
+yalnızca Kronos onboarding'ini bloklar.
 
 ## Gereksinimler
 
 - .NET SDK 10 (`global.json` ile 10.0.301 sabitlenmiştir)
-- Git (yalnızca bu deponun kendi geliştirmesi için; Hub henüz git çağırmaz)
+- Git — Hub worktree, kanıt ve sonuç commit'i için git'i kendisi çağırır (Faz 3)
+- Claude Code CLI — implementer/reviewer profilleri için (Faz 6); mutlak yolu `hub.config.yaml`'dadır
+- Codex CLI **0.130.0** — reviewer profili için sabitlenmiş sürüm (Faz 8, ADR-0024)
+- Node.js + npm — yalnızca operatör arayüzünü derlemek için (Faz 9)
+- WSL2 — yalnızca `isolationLevel: Hard` bir organizasyon için (Faz 10C)
 
 ## Derleme
 
@@ -236,7 +241,7 @@ olduğunu yapılandırma söyler. Kataloğa değil yapılandırmaya ait olması 
 agents:
   scriptedRuntimes:
     - key: scripted
-      fixturePath: 'D:\cx	ools\corex-fixture.exe'
+      fixturePath: 'D:\cx\tools\corex-fixture.exe'
       mode: apply-patch
 
   claudeCodeRuntimes:
@@ -255,6 +260,14 @@ fallback ve keşif yoktur.
 
 `mode`, fixture'ın kendi fiillerinin yazıldığı gibi yazılır (`apply-patch`,
 `out-of-scope-write`, `hang`, ...).
+
+`fixtureLocation` (`Host` varsayılan · `Isolated`) `fixturePath`'in **hangi dosya sisteminde**
+olduğunu beyan eder; tahmin edilmez. `Host` yolu bu makinede doğrulanır ve `Logical` bir
+organizasyonun çalıştırdığıdır. `Isolated` yolu Hard bir organizasyonun **kendi ortamındaki**
+mutlak Linux yoludur ve host'ta varlığı sorulmaz. Yönlendirme ikisini karıştırmaz: Hard bir
+organizasyonun agent veya reviewer runtime'ı `Isolated` değilse, `Logical` bir organizasyonunki
+`Isolated` ise execution reddedilir. Bugün `Isolated` olabilen tek aile scripted runtime'dır;
+Claude Code ve Codex Hard bir organizasyonda henüz çalıştırılamaz (`docs/phase-10-hardening.md` §15).
 
 `claudeCodeRuntimes` **yalnızca** kurulu çalıştırılabilirin mutlak yolunu taşır. Orada
 anahtar, token, uç nokta, hesap veya faturalandırma ayarı **yoktur**: kimlik doğrulama bant
