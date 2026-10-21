@@ -160,6 +160,36 @@ public sealed class HardBoundaryGateTests : IDisposable
     }
 
     /// <summary>
+    /// A measurement that throws releases what was built and is not retried.
+    ///
+    /// Cancellation or a broken probe must not leave the boundary running with nobody owning it, and
+    /// must not let a later step take a second lease halfway through the run: the failure is the
+    /// answer for the whole execution, exactly as an unsound result is.
+    /// </summary>
+    [Fact]
+    public async Task A_measurement_that_throws_releases_and_is_remembered()
+    {
+        var gate = new SoundBoundaryGate { Throws = new OperationCanceledException() };
+        var resolver = Resolver(gate, out var fabric);
+        var executionId = Guid.CreateVersion7();
+
+        await Assert.ThrowsAsync<OperationCanceledException>(
+            () => resolver.EnsureBoundaryAsync(executionId, CancellationToken.None));
+
+        Assert.Equal(1, fabric.Prepared);
+        Assert.Equal(1, fabric.Released);
+        Assert.False(resolver.HasLiveEnvironment);
+
+        gate.Throws = null;
+        var refusal = await resolver.EnsureBoundaryAsync(executionId, CancellationToken.None);
+
+        Assert.NotNull(refusal);
+        Assert.Contains("could not be measured", refusal!, StringComparison.Ordinal);
+        Assert.Equal(1, gate.Measured);
+        Assert.Equal(1, fabric.Prepared);
+    }
+
+    /// <summary>
     /// A live check nobody could answer fails closed.
     ///
     /// The case that matters most, because it is the one an optimistic implementation gets wrong:

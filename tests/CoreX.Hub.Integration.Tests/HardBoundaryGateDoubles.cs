@@ -17,6 +17,9 @@ internal sealed class SoundBoundaryGate : IHardBoundaryGate
     /// <summary>What the gate concluded. Null is sound; anything else refuses the execution.</summary>
     public string? Unsound { get; set; }
 
+    /// <summary>A measurement that does not finish: thrown instead of concluding anything.</summary>
+    public Exception? Throws { get; set; }
+
     /// <summary>How many times a boundary was actually measured.</summary>
     public int Measured { get; private set; }
 
@@ -28,6 +31,6 @@ internal sealed class SoundBoundaryGate : IHardBoundaryGate
     {
         Measured++;
 
-        return Task.FromResult(Unsound);
+        return Throws is { } failure ? Task.FromException<string?>(failure) : Task.FromResult(Unsound);
     }
 }

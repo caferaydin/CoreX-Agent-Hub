@@ -113,7 +113,25 @@ public sealed class HardExecutionEnvironment : IAsyncDisposable
             //
             // Before the lease is handed to anything, so every hard port inherits one invariant: a
             // usable environment is a measured one.
-            if (await _boundary.MeasureAsync(lease, _profile, _organizationSlug, ct) is { } unsound)
+            string? unsound;
+
+            try
+            {
+                unsound = await _boundary.MeasureAsync(lease, _profile, _organizationSlug, ct);
+            }
+            catch
+            {
+                // A measurement that did not finish established nothing. The boundary is released
+                // rather than left running unowned, and the refusal is remembered like any other, so
+                // a later step cannot take a second lease halfway through the run.
+                await lease.DisposeAsync();
+
+                _refusal = new HardLeaseRefusal("boundary", "the boundary could not be measured.");
+
+                throw;
+            }
+
+            if (unsound is not null)
             {
                 // Released rather than kept. A boundary that did not hold is not something to leave
                 // running while an execution is refused.
