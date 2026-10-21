@@ -798,6 +798,7 @@ describe('Human governance', () => {
     expect(decision.getByText('Accept')).toBeInTheDocument();
     expect(decision.getByText('hub:operator:ui')).toBeInTheDocument();
     expect(decision.getByText('No')).toBeInTheDocument();
+    expect(decision.getByText('Person')).toBeInTheDocument();
     expect(decision.getByRole('time')).toHaveAttribute(
       'title',
       expect.stringContaining('2026'),
@@ -809,6 +810,37 @@ describe('Human governance', () => {
       decision.getByText('The document contains the requested semantic content.'),
     ).toBeInTheDocument();
     expect(decision.getByText('read it and it is fine')).toBeInTheDocument();
+  });
+
+  it('says when the repository’s autopilot took the decision, not a person', async () => {
+    // ADR-0028. An autopilot acceptance must never read as a person's: the panel is named for
+    // who decided, and the badge says it again for anyone who skims past the title.
+    stubFetch(
+      routes(
+        taskDetail({
+          summary: taskSummary({ state: 'Accepted' }),
+          acceptance: acceptanceState({
+            taskState: 'Accepted',
+            existingDecision: recordedDecision({
+              actor: 'hub:autopilot',
+              source: 'Policy',
+              humanVerdicts: [],
+              reason: 'autopilot: all 1 machine criteria met (test), review clean, no human criteria',
+            }),
+          }),
+        }),
+      ),
+    );
+
+    show();
+
+    const decision = within(await screen.findByRole('region', { name: 'Autopilot decision' }));
+
+    expect(screen.queryByRole('region', { name: 'Human decision' })).not.toBeInTheDocument();
+    expect(decision.getByText('Autopilot')).toBeInTheDocument();
+    expect(decision.getByText('hub:autopilot')).toBeInTheDocument();
+    expect(decision.getByText(/all 1 machine criteria met/)).toBeInTheDocument();
+    expect(decision.queryAllByRole('button')).toHaveLength(0);
   });
 
   it('shows an override reason from the persisted decision, not from component state', async () => {

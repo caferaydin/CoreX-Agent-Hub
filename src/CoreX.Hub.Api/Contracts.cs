@@ -309,6 +309,9 @@ public sealed record RecordedDecisionDto
     public string? Reason { get; init; }
 
     public IReadOnlyList<RecordedVerdictDto> HumanVerdicts { get; init; } = [];
+
+    /// <summary>"Person" or "Policy" (ADR-0028): who took the decision, as the row records it.</summary>
+    public required string Source { get; init; }
 }
 
 /// <summary>One human verdict as it was recorded, with the criterion it answered.</summary>
@@ -515,3 +518,51 @@ public sealed record AgentProfileDto
     /// <summary>Whether the installation declares a runtime under this profile's key.</summary>
     public required bool RuntimeDeclared { get; init; }
 }
+
+// --- Autopilot (ADR-0028) -----------------------------------------------------------------
+
+/// <summary>
+/// What the autopilot saw and did on its last pass.
+///
+/// A report, not a control: nothing here can be posted back. The autopilot is switched on and
+/// off in the configuration file, one repository at a time.
+/// </summary>
+public sealed record AutopilotDto
+{
+    /// <summary>Whether this host runs the autopilot at all.</summary>
+    public required bool Running { get; init; }
+
+    /// <summary>When the last pass finished. Null before the first one.</summary>
+    public DateTimeOffset? LastPassUtc { get; init; }
+
+    public string? Problem { get; init; }
+
+    public IReadOnlyList<string> Actions { get; init; } = [];
+
+    public IReadOnlyList<AutopilotRepositoryDto> Repositories { get; init; } = [];
+}
+
+public sealed record AutopilotRepositoryDto
+{
+    public required string OrganizationSlug { get; init; }
+
+    public required string ProjectSlug { get; init; }
+
+    public required string RepositorySlug { get; init; }
+
+    public required bool RunQueue { get; init; }
+
+    public required bool AcceptWhenClean { get; init; }
+
+    /// <summary>Off, Unavailable, Idle, Working, Waiting or Paused.</summary>
+    public required string State { get; init; }
+
+    public required string Detail { get; init; }
+
+    public IReadOnlyList<string> Queue { get; init; } = [];
+
+    public IReadOnlyList<AutopilotAttentionDto> Attention { get; init; } = [];
+}
+
+/// <summary>One reason a repository's queue waits, with what a person can do about it.</summary>
+public sealed record AutopilotAttentionDto(string TaskKey, string Kind, string Detail, string? Hint);

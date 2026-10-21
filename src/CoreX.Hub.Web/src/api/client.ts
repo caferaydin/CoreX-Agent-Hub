@@ -1,6 +1,7 @@
 import type {
   AcceptanceStateDto,
   AgentProfileDto,
+  AutopilotDto,
   AcceptanceResultDto,
   AcceptRequest,
   ApiErrorEnvelope,
@@ -253,6 +254,8 @@ export const api = {
     request<RepositoryDto>(`/repositories/${id}`, signal),
 
   agentProfiles: (signal?: AbortSignal) => request<AgentProfileDto[]>('/agent-profiles', signal),
+
+  autopilot: (signal?: AbortSignal) => request<AutopilotDto>('/autopilot', signal),
 
   tasks: (options: { state?: string; offset?: number; limit?: number }, signal?: AbortSignal) =>
     request<TaskPageDto>(`/tasks${query({ ...options })}`, signal),

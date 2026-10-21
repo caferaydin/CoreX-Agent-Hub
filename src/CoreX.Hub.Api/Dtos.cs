@@ -227,6 +227,7 @@ public static class Dtos
                     .. d.HumanVerdicts.Select(v =>
                         new RecordedVerdictDto(v.CriterionId, v.Verdict.ToString(), v.Note)),
                 ],
+                Source = d.Source.ToString(),
             };
 
     public static MachineCriterionDto MachineCriterion(MachineCriterionResult m) => new()

@@ -345,5 +345,6 @@ export const recordedDecision = (
   overrideUsed: false,
   reason: null,
   humanVerdicts: [{ criterionId: 'c2', verdict: 'Met', note: 'read it and it is fine' }],
+  source: 'Person',
   ...over,
 });

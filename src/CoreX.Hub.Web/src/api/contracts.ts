@@ -306,6 +306,9 @@ export interface RecordedDecisionDto {
   /** Mandatory for an override, optional otherwise. Never invented by either side. */
   readonly reason: string | null;
   readonly humanVerdicts: readonly RecordedVerdictDto[];
+
+  /** "Person" or "Policy" (ADR-0028): who took the decision, as the row records it. */
+  readonly source: string;
 }
 
 /** One human verdict as it was recorded, with the criterion it answered. */
@@ -485,4 +488,38 @@ export interface AcceptanceResultDto {
   readonly executionOutcome: ExecutionOutcome | null;
   readonly reason: string | null;
   readonly workspaceCleanup: string;
+}
+
+// --- Autopilot (ADR-0028) ------------------------------------------------------------------
+
+/** Where a repository's queue stands. The UI branches on it, so it is a union. */
+export type AutopilotState = 'Off' | 'Unavailable' | 'Idle' | 'Working' | 'Waiting' | 'Paused';
+
+/** One reason a repository's queue waits, with what a person can do about it. */
+export interface AutopilotAttentionDto {
+  readonly taskKey: string;
+  readonly kind: string;
+  readonly detail: string;
+  readonly hint: string | null;
+}
+
+export interface AutopilotRepositoryDto {
+  readonly organizationSlug: string;
+  readonly projectSlug: string;
+  readonly repositorySlug: string;
+  readonly runQueue: boolean;
+  readonly acceptWhenClean: boolean;
+  readonly state: AutopilotState;
+  readonly detail: string;
+  readonly queue: readonly string[];
+  readonly attention: readonly AutopilotAttentionDto[];
+}
+
+/** A report of the autopilot's last pass. Nothing here can be posted back. */
+export interface AutopilotDto {
+  readonly running: boolean;
+  readonly lastPassUtc: string | null;
+  readonly problem: string | null;
+  readonly actions: readonly string[];
+  readonly repositories: readonly AutopilotRepositoryDto[];
 }

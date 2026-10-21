@@ -230,6 +230,14 @@ organizations:
             protectedBranches:
               - main
             reviewerProfile: codex-reviewer
+            # Otopilot (ADR-0028). YALNIZCA bu pilotta acik; onemli repolara bu blok
+            # yazilmaz. runQueue: hic denenmemis Ready gorevleri sirayla baslatir.
+            # acceptWhenClean: insan kriteri olmayan, her makine kriteri Met ve Codex
+            # incelemesi temiz isi otomatik kabul eder. Ana dala ekleme operatorde kalir:
+            # kabul edilen is main'e alinana kadar sira durur. Kapatmak icin blogu silin.
+            autopilot:
+              runQueue: true
+              acceptWhenClean: true
             verificationProfiles:
               - name: dotnet-release
                 isDefault: true

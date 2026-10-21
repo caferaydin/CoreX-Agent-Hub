@@ -4,6 +4,7 @@ import { PageHeader } from '../App';
 import { api } from '../api/client';
 import { useQuery } from '../api/useQuery';
 import type { TaskSummaryDto } from '../api/contracts';
+import { AutopilotPanel } from '../components/AutopilotPanel';
 import { Badge, Empty, Failed, Loading, Panel } from '../components/primitives';
 import { exactTime, formatRelative } from '../lib/format';
 import { lookOfOutcome, lookOfTaskState } from '../lib/status';
@@ -38,6 +39,7 @@ export function TasksPage(): ReactNode {
       />
       <div className="content">
         <div className="page">
+          <AutopilotPanel onActivity={refetch} />
           <Panel
             title="All tasks"
             hint={state.status === 'ready' && state.refreshing ? 'Refreshing…' : undefined}

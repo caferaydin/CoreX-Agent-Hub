@@ -5,7 +5,7 @@ Ticari bir ürün değildir; tek geliştirici iş istasyonunda, tek kullanıcı 
 
 Otoriter mimari doküman: [`docs/architecture/CoreX-Agent-Hub-Mimari-Plan-v1.1.1.md`](docs/architecture/CoreX-Agent-Hub-Mimari-Plan-v1.1.1.md)
 (durum: **ARCHITECTURE ACCEPTED — DISCOVERY CLOSED**).
-Kabul edilmiş kararlar: [`docs/adr/`](docs/adr/) (ADR-0001 … ADR-0027).
+Kabul edilmiş kararlar: [`docs/adr/`](docs/adr/) (ADR-0001 … ADR-0028).
 
 Bağımsız review: [`docs/phase-7-review.md`](docs/phase-7-review.md).
 
@@ -38,11 +38,13 @@ Bağımsız review: [`docs/phase-7-review.md`](docs/phase-7-review.md).
 | Faz 10C-3B1 / 10C-3B2 | Organizasyon başına kanıt/sağlayıcı oturumu sınırı + ağ dokusu | **TAMAM** |
 | Faz 10C-4 | Paylaşılan WSL yüzeyleri, tam Hard yönlendirme, iki aşamalı sınır kapısı | **KOD TAMAM** — G-K kabulü açık |
 | Kronos onboarding | G-K1 … G-K5 (mimari § L.4, ADR-0017) | **BLOKE** |
+| Faz 11A | Kanıtla sınırlı otopilot: sıra + politika kabulü (ADR-0028), yalnızca `talep-takip` pilotunda açık | **TAMAM** |
 
 Ayrıntı: Faz 1–9 bu belgenin aşağıdaki bölümlerinde, Faz 10
 [`docs/phase-10-hardening.md`](docs/phase-10-hardening.md)'dedir. Core X Logic organizasyonu
 `Logical` izolasyonla çalışır ve Faz 10'un açık kapılarından etkilenmez; açık kapılar
-yalnızca Kronos onboarding'ini bloklar.
+yalnızca Kronos onboarding'ini bloklar. Faz 11 (agent space)
+[`docs/phase-11-agent-space.md`](docs/phase-11-agent-space.md)'dedir.
 
 ## Gereksinimler
 

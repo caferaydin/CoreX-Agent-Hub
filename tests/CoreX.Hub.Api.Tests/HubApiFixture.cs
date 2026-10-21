@@ -47,13 +47,14 @@ public sealed class HubApiFixture : IAsyncDisposable
     public static async Task<HubApiFixture> CreateAsync(
         bool allowExecutionLaunch = false,
         string? webRoot = null,
-        bool serveOperatorUi = false)
+        bool serveOperatorUi = false,
+        string? autopilot = null)
     {
         var root = Path.Combine(Path.GetTempPath(), "corex-api-tests", Guid.CreateVersion7().ToString("N"));
         Directory.CreateDirectory(root);
 
         var configPath = Path.Combine(root, "hub.config.yaml");
-        File.WriteAllText(configPath, Configuration(root), new UTF8Encoding(false));
+        File.WriteAllText(configPath, Configuration(root, autopilot), new UTF8Encoding(false));
 
         var app = HubApi.Build(new HubApiOptions
         {
@@ -71,6 +72,10 @@ public sealed class HubApiFixture : IAsyncDisposable
             // binaries would quietly change what an unmapped route answers.
             ServeOperatorUi = serveOperatorUi || webRoot is not null,
             WebRoot = webRoot,
+
+            // Off always. A background pass deciding something while a test decides it too
+            // would make both answers meaningless; autopilot tests drive passes themselves.
+            RunAutopilot = false,
         });
 
         await app.StartAsync();
@@ -266,7 +271,10 @@ public sealed class HubApiFixture : IAsyncDisposable
         return execution;
     }
 
-    public async Task<HubTask> SeedTaskAsync(string taskKey, TaskState state = TaskState.Ready)
+    public async Task<HubTask> SeedTaskAsync(
+        string taskKey,
+        TaskState state = TaskState.Ready,
+        bool withHumanCriterion = true)
     {
         await using var scope = Runtime.OpenScope();
 
@@ -284,11 +292,13 @@ public sealed class HubApiFixture : IAsyncDisposable
                 Objective = "an objective the fixture supplied",
                 TaskKey = taskKey,
                 AllowedScope = ["docs/**"],
-                Criteria =
-                [
-                    new Application.Tasks.CriterionInput(VerificationKind.Machine, "it builds", "build"),
-                    new Application.Tasks.CriterionInput(VerificationKind.Human, "it reads well"),
-                ],
+                Criteria = withHumanCriterion
+                    ?
+                    [
+                        new Application.Tasks.CriterionInput(VerificationKind.Machine, "it builds", "build"),
+                        new Application.Tasks.CriterionInput(VerificationKind.Human, "it reads well"),
+                    ]
+                    : [new Application.Tasks.CriterionInput(VerificationKind.Machine, "it builds", "build")],
                 Actor = "fixture",
             },
             DateTimeOffset.UtcNow,
@@ -330,7 +340,7 @@ public sealed class HubApiFixture : IAsyncDisposable
     /// A one-organization installation with a deterministic runtime, so nothing here can
     /// reach a real provider even if a test asked it to.
     /// </summary>
-    private static string Configuration(string root) =>
+    private static string Configuration(string root, string? autopilot) =>
         $"""
          workspace:
            root: '{Path.Combine(root, "cx").Replace("\\", "\\\\")}'
@@ -368,6 +378,7 @@ public sealed class HubApiFixture : IAsyncDisposable
                      defaultBranch: main
                      protectedBranches:
                        - main
+         {Indent(autopilot)}
                      verificationProfiles:
                        - name: fixture-verify
                          isDefault: true
@@ -380,6 +391,18 @@ public sealed class HubApiFixture : IAsyncDisposable
                              required: true
                              resultParser: none
          """;
+
+    /// <summary>
+    /// The repository's autopilot block moved to sit among the repository's own keys, or
+    /// nothing. Callers write it as if it started at the left margin.
+    /// </summary>
+    private static string Indent(string? autopilot) =>
+        autopilot is null
+            ? string.Empty
+            : string.Join(
+                "\n",
+                autopilot.Split('\n', StringSplitOptions.RemoveEmptyEntries)
+                    .Select(line => new string(' ', 12) + line.TrimEnd('\r')));
 
     public async ValueTask DisposeAsync()
     {

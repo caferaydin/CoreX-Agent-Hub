@@ -85,4 +85,13 @@ public sealed record HubApiOptions
     /// misrouted request can never launch a real agent.
     /// </summary>
     public bool AllowExecutionLaunch { get; init; } = true;
+
+    /// <summary>
+    /// Whether this host runs the autopilot's passes (ADR-0028).
+    ///
+    /// True in normal use, and still inert unless a repository's configuration switches an
+    /// autopilot on. Tests turn it off so a background pass can never decide something a test
+    /// is about to decide itself.
+    /// </summary>
+    public bool RunAutopilot { get; init; } = true;
 }

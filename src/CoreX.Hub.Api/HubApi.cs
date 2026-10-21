@@ -1,6 +1,7 @@
 using System.Runtime.Versioning;
 using System.Text.Json.Serialization;
 using CoreX.Hub.Composition;
+using CoreX.Hub.Composition.Autopilot;
 
 namespace CoreX.Hub.Api;
 
@@ -63,6 +64,19 @@ public static class HubApi
         builder.Services.AddSingleton<ExecutionLauncher>();
         builder.Services.AddHostedService(sp => sp.GetRequiredService<ExecutionLauncher>());
 
+        // ADR-0028. After the launcher, so it is stopped before the launcher drains.
+        builder.Services.AddSingleton(sp =>
+        {
+            var runtime = sp.GetRequiredService<HubRuntime>();
+
+            return new AutopilotCoordinator(
+                runtime,
+                new LauncherRunStarter(sp.GetRequiredService<ExecutionLauncher>()),
+                new SessionBranchLineage(runtime.DataDirectory, runtime.ConfigPath),
+                TimeProvider.System);
+        });
+        builder.Services.AddHostedService<AutopilotHost>();
+
         if (options.DevelopmentCorsOrigins.Count > 0)
         {
             builder.Services.AddCors(cors => cors.AddPolicy(
@@ -107,6 +121,7 @@ public static class HubApi
         ExecutionEndpoints.Map(api);
         AcceptanceEndpoints.Map(api);
         DiagnosticsEndpoints.Map(api);
+        AutopilotEndpoints.Map(api);
 
         return app;
     }

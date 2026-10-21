@@ -189,9 +189,13 @@ public sealed class DecisionReadbackTests
             .Select(p => p.Name)
             .ToArray();
 
+        // "source" (ADR-0028) says who decided - a person or a repository's autopilot - which
+        // is a fact about the decision, not about the execution.
         Assert.Equal(
-            ["actor", "decidedAtUtc", "decision", "humanVerdicts", "overrideUsed", "reason"],
+            ["actor", "decidedAtUtc", "decision", "humanVerdicts", "overrideUsed", "reason", "source"],
             names.Order(StringComparer.Ordinal));
+
+        Assert.Equal("Person", acceptance.GetProperty("existingDecision").GetProperty("source").GetString());
     }
 
     private static async Task<IReadOnlyList<Guid>> HumanCriteriaAsync(HubApiFixture hub, string taskKey)

@@ -111,10 +111,20 @@ function RecordedDecision({
     return null;
   }
 
+  // ADR-0028: a repository's autopilot may accept work its evidence fully answered. The row
+  // says so, and so does this panel - an autopilot decision must never read as a person's.
+  const byPolicy = decision.source === 'Policy';
+
   return (
     <Panel
-      title="Human decision"
-      hint={decision.overrideUsed ? 'Recorded with a review override' : 'Recorded'}
+      title={byPolicy ? 'Autopilot decision' : 'Human decision'}
+      hint={
+        decision.overrideUsed
+          ? 'Recorded with a review override'
+          : byPolicy
+            ? 'Accepted by the repository’s autopilot'
+            : 'Recorded'
+      }
     >
       <div className="fields">
         <Field label="Decision">
@@ -123,8 +133,30 @@ function RecordedDecision({
               label: decision.decision,
               tone: decision.decision === 'Reject' ? 'bad' : 'good',
               shape: 'solid',
-              meaning: 'The decision a person recorded against this attempt.',
+              meaning: byPolicy
+                ? 'The decision the repository’s autopilot recorded against this attempt.'
+                : 'The decision a person recorded against this attempt.',
             }}
+          />
+        </Field>
+        <Field label="Decided by">
+          <Badge
+            look={
+              byPolicy
+                ? {
+                    label: 'Autopilot',
+                    tone: 'info',
+                    shape: 'striped',
+                    meaning:
+                      'Accepted by policy: no human criteria, every machine criterion met, review clean.',
+                  }
+                : {
+                    label: 'Person',
+                    tone: 'neutral',
+                    shape: 'outline',
+                    meaning: 'A person recorded this decision.',
+                  }
+            }
           />
         </Field>
         <Field label="Task">

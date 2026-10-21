@@ -789,6 +789,46 @@ public sealed partial class WorkspaceManager
         return new ReconcileReport(entries);
     }
 
+    /// <summary>
+    /// Whether <paramref name="branch"/> already contains <paramref name="commitSha"/>.
+    ///
+    /// Read-only (ADR-0028): the autopilot asks it so it never builds the next task on a base
+    /// that lacks the last accepted result. Moving the branch is the operator's job, and
+    /// nothing here does it. Null means the question could not be answered - an unknown
+    /// commit, a refused path - which is never the same as "no".
+    /// </summary>
+    public async Task<bool?> BranchContainsAsync(
+        string repositoryPath,
+        string repositoryTrustRoot,
+        string branch,
+        string commitSha,
+        CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(branch);
+        ArgumentException.ThrowIfNullOrWhiteSpace(commitSha);
+
+        var decision = _paths.Validate(repositoryTrustRoot, repositoryPath, mustExist: true);
+        if (!decision.IsAllowed)
+        {
+            return null;
+        }
+
+        var ancestry = await GitAsync(
+            decision.CanonicalPath!,
+            ["merge-base", "--is-ancestor", commitSha, "refs/heads/" + branch],
+            cancellationToken);
+
+        // git's own contract: 0 is an ancestor, 1 is not, anything else is an error.
+        return !ancestry.Started
+            ? null
+            : ancestry.ExitCode switch
+            {
+                0 => true,
+                1 => false,
+                _ => null,
+            };
+    }
+
     private Dictionary<string, string> BuildEnvironment() =>
         GitEnvironment.WithHardenedConfig(_hooks.EmptyGlobalConfigPath, _hooks.HooksDirectory);
 

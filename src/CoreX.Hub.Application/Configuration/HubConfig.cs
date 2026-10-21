@@ -331,7 +331,34 @@ public sealed class RepositoryConfig
     /// </summary>
     public string? ReviewerProfile { get; set; }
 
+    /// <summary>
+    /// What this repository's autopilot may do on its own (ADR-0028). Absent means nothing.
+    ///
+    /// Configuration only, like <see cref="ReviewerProfile"/>: never seeded, re-read on every
+    /// autopilot pass, so deleting the block switches it off without a migration or a restart.
+    /// There is deliberately no organization or project wide switch - each repository that
+    /// runs on its own says so in its own line.
+    /// </summary>
+    public AutopilotConfig? Autopilot { get; set; }
+
     public List<VerificationProfileConfig> VerificationProfiles { get; set; } = [];
+}
+
+/// <summary>The two things an autopilot may do, each switched on separately (ADR-0028).</summary>
+public sealed class AutopilotConfig
+{
+    /// <summary>
+    /// Start Ready tasks that have never been attempted, one at a time, oldest first - the same
+    /// start the operator's Run performs. Never a retry.
+    /// </summary>
+    public bool RunQueue { get; set; }
+
+    /// <summary>
+    /// Accept a passing execution whose evidence answers every criterion: no Human criterion,
+    /// every Machine criterion Met, and an independent review that ran and found nothing
+    /// blocking. Everything else waits for a person.
+    /// </summary>
+    public bool AcceptWhenClean { get; set; }
 }
 
 public sealed class VerificationProfileConfig
