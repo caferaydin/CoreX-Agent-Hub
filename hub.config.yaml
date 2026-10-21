@@ -4,7 +4,7 @@
 # VerificationProfile / AgentProfile). Sonraki fazlara ait runtime ayarları burada YOKTUR.
 #
 # Bu dosya yerel geliştirme/fixture değerleri ile Hub'ın KENDİ repository'sini içerir.
-#   - Core X Logic organizasyonu YALNIZCA agent-hub projesini içerir (G6-3)
+#   - Core X Logic organizasyonu agent-hub projesini (G6-3) ve talep-takip pilotunu içerir
 #   - Başka gerçek Core X Logic ürün repository'si YOK (Nakliye360 / Kariora YOK)
 #   - Gerçek Kronos verisi YOK  (bkz. ADR-0017)
 #   - Sır / token / kimlik bilgisi YOK
@@ -49,8 +49,8 @@ agents:
 organizations:
 
   # --- Core X Logic: Hub'ın kendi repository'si (G6-3) ----------------------
-  # Gerçek katalog girdisidir. Faz 6 gerçek agent kabulünün hedefi budur ve
-  # ŞU AN İÇİN tek gerçek repository'dir.
+  # Gerçek katalog girdisidir. Faz 6 gerçek agent kabulünün hedefi budur; yanında
+  # yalnızca talep-takip pilotu vardır.
   - slug: core-x-logic
     name: Core X Logic
     filesystemRoot: 'D:\Private\Cafer AYDIN'
@@ -215,6 +215,63 @@ organizations:
                     timeoutSeconds: 600
                     required: true
                     resultParser: none
+
+      # Pilot: agent'larla sifirdan gelistirilen deneme projesi. Onemli urun
+      # repolarina (ERP, Nakliye, Teknik Servis) gecmeden once calisma bicimi burada
+      # denenir. Gercek sirket/musteri verisi icermez.
+      - slug: talep-takip
+        name: Core X Talep Takip
+        taskKeyPrefix: TT
+        repositories:
+          - slug: talep-takip
+            name: talep-takip
+            localPath: 'D:\Private\Cafer AYDIN\CorexLogic\Projeler\Core X Talep Takip'
+            defaultBranch: main
+            protectedBranches:
+              - main
+            reviewerProfile: codex-reviewer
+            verificationProfiles:
+              - name: dotnet-release
+                isDefault: true
+                workingDirectory: '.'
+                steps:
+                  - name: restore
+                    executable: dotnet
+                    args: ['restore', 'TalepTakip.slnx']
+                    timeoutSeconds: 600
+                    required: true
+                    resultParser: none
+                  - name: build
+                    executable: dotnet
+                    args:
+                      - 'build'
+                      - 'TalepTakip.slnx'
+                      - '-c'
+                      - 'Release'
+                      - '--no-restore'
+                      - '-warnaserror'
+                    timeoutSeconds: 900
+                    required: true
+                    resultParser: none
+
+                  # Tek test projesi, tek TRX: sayaclar bu yuzden dogrudur. Ikinci bir
+                  # test projesi eklenirse ona ayri bir adim gerekir (bkz. hub-release-full).
+                  - name: test
+                    executable: dotnet
+                    args:
+                      - 'test'
+                      - 'tests/TalepTakip.Tests/TalepTakip.Tests.csproj'
+                      - '-c'
+                      - 'Release'
+                      - '--no-build'
+                      - '--logger'
+                      - 'trx;LogFileName=results.trx'
+                      - '--results-directory'
+                      - 'results'
+                    timeoutSeconds: 1200
+                    required: true
+                    resultParser: trx
+                    resultPath: 'results/results.trx'
 
   # --- Geliştirme / Loop Zero fixture organizasyonu -------------------------
   # Yalnızca katalog örneğidir. Loop Zero ve e2e takımları kendi geçici config'lerini ve
