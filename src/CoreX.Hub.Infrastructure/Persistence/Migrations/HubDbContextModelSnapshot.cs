@@ -404,6 +404,11 @@ namespace CoreX.Hub.Infrastructure.Persistence.Migrations
                         .HasMaxLength(2000)
                         .HasColumnType("TEXT");
 
+                    b.Property<string>("Source")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("TEXT");
+
                     b.Property<string>("_humanCriterionVerdicts")
                         .IsRequired()
                         .HasColumnType("TEXT")

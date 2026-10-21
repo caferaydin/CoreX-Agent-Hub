@@ -168,6 +168,24 @@ public enum AcceptanceDecisionKind
     Reject = 2,
 }
 
+/// <summary>
+/// Who took a decision (ADR-0028).
+///
+/// A person, or a policy the operator switched on for one repository. Stored on the row
+/// rather than inferred from the actor string, because "was this a human" is a question an
+/// audit has to be able to answer without trusting a naming convention.
+/// </summary>
+public enum AcceptanceDecisionSource
+{
+    Person = 0,
+
+    /// <summary>
+    /// The repository's autopilot accepted work its evidence fully covered. Only ever an
+    /// Accept, never an override, and never with a human verdict - a policy has none to give.
+    /// </summary>
+    Policy = 1,
+}
+
 public enum HumanCriterionVerdict
 {
     Met = 0,

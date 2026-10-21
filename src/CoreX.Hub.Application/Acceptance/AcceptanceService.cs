@@ -92,6 +92,7 @@ public sealed partial class AcceptanceService
                 OverrideUsed = decision.OverrideUsed,
                 Reason = decision.Reason,
                 HumanVerdicts = decision.HumanCriterionVerdicts,
+                Source = decision.Source,
             };
 
     /// <summary>
@@ -117,9 +118,17 @@ public sealed partial class AcceptanceService
 
         var verdicts = ValidateHumanVerdicts(target.Task, request.HumanVerdicts);
 
-        var reason = request.UseOverride
-            ? await ValidateOverrideAsync(target, request, ct)
-            : ValidatePlainAcceptance(target, request);
+        string? reason;
+
+        if (request.UseOverride)
+        {
+            reason = await ValidateOverrideAsync(target, request, ct);
+        }
+        else
+        {
+            ValidatePlainAcceptance(target);
+            reason = request.Reason;
+        }
 
         // One transaction, nothing external inside it.
         if (request.UseOverride)
@@ -155,6 +164,68 @@ public sealed partial class AcceptanceService
 
         // The decision is now recorded. Everything below is housekeeping, and nothing it
         // does can take that back.
+        var cleanup = await ReleaseWorkspaceAsync(target, decision, nowUtc, ct);
+
+        return ResultFor(target, decision, machine.Results, cleanup);
+    }
+
+    /// <summary>
+    /// A repository's autopilot accepting work its evidence fully answered (ADR-0028).
+    ///
+    /// Not a third route around the gates but the ordinary one with every judgement call
+    /// taken out of it: the same plain acceptance rules, plus the conditions under which
+    /// there is nothing left for a person to judge. The task carries no Human criterion,
+    /// every Machine criterion is Met - not merely the required ones - and an independent
+    /// review really ran and found nothing blocking. Anything short of that is refused and
+    /// left for a person, which is the policy working rather than failing.
+    ///
+    /// The decision row says it was a policy, so nobody reading it later has to infer that
+    /// from an actor name.
+    /// </summary>
+    public async Task<AcceptanceResult> AcceptByPolicyAsync(
+        PolicyAcceptanceRequest request,
+        DateTimeOffset nowUtc,
+        CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+
+        var target = await ResolveAsync(request.TaskKey, request.AttemptNo, request.OrganizationSlug, ct);
+
+        await EnsureUndecidedAsync(target.Execution, ct);
+
+        var machine = await ReadMachineTruthAsync(target.Task, target.Execution, ct);
+        EnsureMachineTruthEstablished(machine);
+
+        ValidatePlainAcceptance(target);
+        await ValidatePolicyAcceptanceAsync(target, machine, ct);
+
+        var reason = PolicyReason(machine);
+
+        target.Task.Accept(nowUtc);
+
+        var decision = new AcceptanceDecision(
+            Guid.CreateVersion7(),
+            target.Task.OrganizationId,
+            target.Execution.Id,
+            AcceptanceDecisionKind.Accept,
+            request.Actor,
+            reason,
+            overrideUsed: false,
+            [],
+            nowUtc,
+            AcceptanceDecisionSource.Policy);
+
+        _store.AddAcceptanceDecision(decision);
+
+        _store.AddAuditEvent(AuditFor(
+            target,
+            "AcceptanceAcceptedByPolicy",
+            request.Actor,
+            Summarise(target, AcceptanceDecisionKind.Accept, overrideUsed: false, reason, []) + "; by policy",
+            nowUtc));
+
+        await _store.SaveChangesAsync(ct);
+
         var cleanup = await ReleaseWorkspaceAsync(target, decision, nowUtc, ct);
 
         return ResultFor(target, decision, machine.Results, cleanup);
@@ -246,6 +317,7 @@ public sealed partial class AcceptanceService
         AttemptNo = target.Execution.AttemptNo,
         Decision = decision.Decision,
         OverrideUsed = decision.OverrideUsed,
+        Source = decision.Source,
         TaskState = target.Task.State,
         ExecutionState = target.Execution.State,
         ExecutionOutcome = target.Execution.Outcome,

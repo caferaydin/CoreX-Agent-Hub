@@ -133,6 +133,9 @@ internal static class ExecutionModel
             e.Property(x => x.Actor).HasMaxLength(200).IsRequired();
             e.Property(x => x.Reason).HasMaxLength(2000);
             e.Property(x => x.OverrideUsed).IsRequired();
+
+            // ADR-0028: a person, or a repository's autopilot.
+            e.Property(x => x.Source).HasConversion<string>().HasMaxLength(20).IsRequired();
             e.Property<List<HumanCriterionVerdictRecord>>("_humanCriterionVerdicts")
                 .HasColumnName("HumanCriterionVerdicts")
                 .HasConversion(HubValueConverters.HumanVerdicts, HubValueConverters.HumanVerdictsComparer)

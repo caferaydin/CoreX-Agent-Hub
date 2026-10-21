@@ -23,13 +23,15 @@ public sealed class PersistenceTests
 
         Assert.True(File.Exists(hub.DatabasePath));
 
-        // The second migration made verification step truth durable. It added columns to an
-        // existing table and no table of its own, which is what this count is here to catch.
+        // The second migration made verification step truth durable and the third recorded who
+        // took a decision (ADR-0028). Both added columns to an existing table and no table of
+        // their own, which is what this count is here to catch.
         var applied = (await db.Database.GetAppliedMigrationsAsync()).ToList();
 
-        Assert.Equal(2, applied.Count);
+        Assert.Equal(3, applied.Count);
         Assert.EndsWith("InitialCreate", applied[0], StringComparison.Ordinal);
         Assert.EndsWith("PersistVerificationCommandTruth", applied[1], StringComparison.Ordinal);
+        Assert.EndsWith("RecordAcceptanceDecisionSource", applied[2], StringComparison.Ordinal);
 
         var tables = await ReadUserTablesAsync(db);
 

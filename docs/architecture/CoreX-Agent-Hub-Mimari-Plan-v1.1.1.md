@@ -167,6 +167,8 @@ Doğrulama maliyeti işin kendisinden pahalı · tekrar üretilebilirlik yok · 
 
 Sohbet uygulaması değil · sanal çalışan simülasyonu değil · otonom yazılım fabrikası değil · SaaS değil · genel amaçlı workflow motoru değil · RAG platformu değil.
 
+> **Değişiklik (ADR-0028, 2026-10-22):** "otonom yazılım fabrikası değil" geçerliliğini korur. Repository kapsamlı, varsayılanı kapalı bir otopilot eklendi: yalnızca hiç denenmemiş `Ready` görevleri sırayla başlatır ve yalnızca kanıtın her kriteri cevapladığı (insan kriteri olmayan, her makine kriteri `Met`, review gerçekten çalışmış ve temiz) işi politika kararı olarak kabul eder. Ana dala ekleme, yeniden deneme ve override insanda kalır.
+
 ### A.4 İlk değerli sonuç
 
 > **45 dakikalık bir kod incelemesini, 5 dakikalık bir kanıt incelemesine indirmek.**
@@ -1332,7 +1334,7 @@ Faz 1'in tek ön koşulu **Faz 0 çıktısıdır**: ADR-0001…0017'nin kaydı.
 7. **Bağlam sistemini bilgi tabanına çevirmek.** *Uyarı:* Bağlam = markdown + git.
 8. **Kanıt modelini aşırı normalleştirmek.** *Uyarı:* Blob + hash + küçük meta.
 9. **UI'ı erken başlatmak.** *Uyarı:* Faz 9'dan önce tek satır React yok.
-10. **Otonomi eklemek.** *Uyarı:* Kanıtı ve determinizmi öldürür.
+10. **Otonomi eklemek.** *Uyarı:* Kanıtı ve determinizmi öldürür. *ADR-0028:* kanıtı ve determinizmi değiştirmeyen dar biçimi (sıra + kanıtla sınırlı politika kabulü) eklendi; uyarı onarım döngüsü, agent beyanına dayalı karar ve otomatik entegrasyon için aynen geçerlidir.
 11. **Çok kullanıcılı / yetkilendirme mimarisi.** *Uyarı:* `Actor` bir string.
 12. **Event sourcing / CQRS.** *Uyarı:* Append-only `AuditEvent` yeter.
 13. **Genel amaçlı plugin sistemi.** *Uyarı:* İki runtime, ikisi de derlenmiş projede.

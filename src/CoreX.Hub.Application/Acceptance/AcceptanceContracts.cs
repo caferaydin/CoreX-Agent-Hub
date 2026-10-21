@@ -129,6 +129,9 @@ public sealed record RecordedDecision
 
     /// <summary>What the person answered, exactly as it was recorded.</summary>
     public IReadOnlyList<HumanCriterionVerdictRecord> HumanVerdicts { get; init; } = [];
+
+    /// <summary>A person, or a repository's autopilot (ADR-0028).</summary>
+    public required AcceptanceDecisionSource Source { get; init; }
 }
 
 /// <summary>
@@ -154,6 +157,25 @@ public sealed record AcceptanceRequest
     public string? Reason { get; init; }
 
     public IReadOnlyList<HumanCriterionVerdictRecord> HumanVerdicts { get; init; } = [];
+}
+
+/// <summary>
+/// A repository's autopilot accepting an execution (ADR-0028).
+///
+/// Deliberately smaller than <see cref="AcceptanceRequest"/>: no override, no reason, no
+/// human verdicts. A policy has nothing to add to the evidence - it can only notice that the
+/// evidence already answered every criterion, and the service decides whether it did.
+/// </summary>
+public sealed record PolicyAcceptanceRequest
+{
+    public required string TaskKey { get; init; }
+
+    public required int AttemptNo { get; init; }
+
+    public string? OrganizationSlug { get; init; }
+
+    /// <summary>The policy's own name, for example <c>hub:autopilot</c>. Never a person's.</summary>
+    public required string Actor { get; init; }
 }
 
 /// <summary>A human sending the work back, or ending it. Neither is an acceptance route.</summary>
@@ -182,6 +204,9 @@ public sealed record AcceptanceResult
     public required AcceptanceDecisionKind Decision { get; init; }
 
     public required bool OverrideUsed { get; init; }
+
+    /// <summary>A person, or a repository's autopilot (ADR-0028).</summary>
+    public required AcceptanceDecisionSource Source { get; init; }
 
     public required TaskState TaskState { get; init; }
 

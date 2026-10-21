@@ -140,6 +140,65 @@ public sealed class TaskStateRuleTests
     }
 
     [Fact]
+    public void A_decision_is_a_persons_unless_it_says_otherwise()
+    {
+        var decision = Decision(AcceptanceDecisionKind.Accept, overrideUsed: false, reason: null, verdicts: []);
+
+        Assert.Equal(AcceptanceDecisionSource.Person, decision.Source);
+    }
+
+    [Fact]
+    public void A_policy_may_only_say_yes_to_what_the_evidence_said()
+    {
+        // ADR-0028: the narrowest decision there is.
+        var accepted = Decision(
+            AcceptanceDecisionKind.Accept, overrideUsed: false, "autopilot", [], AcceptanceDecisionSource.Policy);
+
+        Assert.Equal(AcceptanceDecisionSource.Policy, accepted.Source);
+
+        foreach (var kind in new[] { AcceptanceDecisionKind.Reject, AcceptanceDecisionKind.RequestChanges })
+        {
+            Assert.Throws<DomainException>(() =>
+                Decision(kind, overrideUsed: false, "autopilot", [], AcceptanceDecisionSource.Policy));
+        }
+
+        Assert.Throws<DomainException>(() =>
+            Decision(AcceptanceDecisionKind.Accept, overrideUsed: true, "autopilot", [], AcceptanceDecisionSource.Policy));
+
+        Assert.Throws<DomainException>(() => Decision(
+            AcceptanceDecisionKind.Accept,
+            overrideUsed: false,
+            "autopilot",
+            [new HumanCriterionVerdictRecord(Guid.CreateVersion7(), HumanCriterionVerdict.Met, null)],
+            AcceptanceDecisionSource.Policy));
+    }
+
+    [Fact]
+    public void An_unknown_decision_source_is_refused()
+    {
+        Assert.Throws<DomainException>(() => Decision(
+            AcceptanceDecisionKind.Accept, overrideUsed: false, null, [], (AcceptanceDecisionSource)7));
+    }
+
+    private static AcceptanceDecision Decision(
+        AcceptanceDecisionKind kind,
+        bool overrideUsed,
+        string? reason,
+        HumanCriterionVerdictRecord[] verdicts,
+        AcceptanceDecisionSource source = AcceptanceDecisionSource.Person) =>
+        new(
+            Guid.CreateVersion7(),
+            Guid.CreateVersion7(),
+            Guid.CreateVersion7(),
+            kind,
+            "hub:autopilot",
+            reason,
+            overrideUsed,
+            verdicts,
+            DomainFixtures.Now,
+            source);
+
+    [Fact]
     public void There_is_no_failed_task_state()
     {
         Assert.DoesNotContain(

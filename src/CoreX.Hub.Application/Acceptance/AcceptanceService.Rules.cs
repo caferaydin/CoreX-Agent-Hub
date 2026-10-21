@@ -101,7 +101,7 @@ public sealed partial class AcceptanceService
     /// I-A1: the ordinary route. The automatic gate has already decided the work is good;
     /// what remains is a person saying so.
     /// </summary>
-    private static string? ValidatePlainAcceptance(DecisionTarget target, AcceptanceRequest request)
+    private static void ValidatePlainAcceptance(DecisionTarget target)
     {
         if (target.Task.State != TaskState.AwaitingAcceptance)
         {
@@ -125,8 +125,6 @@ public sealed partial class AcceptanceService
                 $"Attempt {target.Execution.AttemptNo} ended as "
                 + $"{target.Execution.Outcome?.ToString() ?? "no outcome"}, which plain acceptance does not cover.");
         }
-
-        return request.Reason;
     }
 
     /// <summary>

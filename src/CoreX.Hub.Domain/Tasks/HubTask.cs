@@ -192,11 +192,13 @@ public sealed class HubTask
     }
 
     /// <summary>
-    /// A person accepted the work after an execution passed.
+    /// The work was accepted after an execution passed.
     ///
-    /// The only edge into <see cref="TaskState.Accepted"/> that a passing run can take, and
-    /// it is still a person taking it: nothing automatic reaches this method, and acceptance
-    /// means a decision was recorded, never that anything was merged, pushed or released.
+    /// The only edge into <see cref="TaskState.Accepted"/> that a passing run can take. A
+    /// person takes it, or - since ADR-0028 - a repository's autopilot does, and only
+    /// through the acceptance service, for work whose evidence answers every criterion. The
+    /// orchestrator never reaches this method, and acceptance itself means a decision was
+    /// recorded, never that anything was merged, pushed or released.
     /// </summary>
     public void Accept(DateTimeOffset nowUtc)
     {
