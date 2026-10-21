@@ -21,3 +21,6 @@ hub.config.local.yaml
 node_modules/
 dist/
 *.tsbuildinfo
+
+# IDE-generated launch profiles (the API binds 127.0.0.1:5177 in code)
+**/Properties/launchSettings.json
